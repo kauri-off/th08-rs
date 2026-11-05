@@ -1,0 +1,29 @@
+[package]
+name = "th08-repack"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+th08-audio = { path = "../th08-audio" }
+th08-core = { path = "../th08-core" }
+th08-formats = { path = "../th08-formats" }
+lewton = "0.10"
+sha2 = "0.10"
+thiserror = "2"
+# C encoders: the repack tool and the Android import (NDK clang builds them).
+zstd = { version = "0.13", optional = true }
+vorbis_rs = { version = "0.5.6", default-features = false, optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+zstd = ["dep:zstd"]
+# The Android import: picked files → filesDir/game, zstd content + libvorbis BGM, JSON job bridge.
+device = ["zstd", "dep:vorbis_rs", "dep:serde_json"]
+
+[dev-dependencies]
+th08-repack = { path = ".", features = ["device"] }

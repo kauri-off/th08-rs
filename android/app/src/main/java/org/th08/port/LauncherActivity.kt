@@ -43,7 +43,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private lateinit var schema: Schema
     private lateinit var rows: List<Setting>
     private val devKeys by lazy { schema.entries.filter { it.developer }.map { it.key } }
-    private var data by mutableStateOf<GameData>(GameData.Unavailable)
+    private var data by mutableStateOf<GameData>(GameData.Missing)
+    private val importer = GameImporter(this)
     private var picking: Setting? = null
     private var packs by mutableStateOf(PackState())
     private var saves by mutableStateOf(SaveState())
@@ -62,6 +63,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             Setting(e, saved ?: e.default)
         }
         Thread { copyBundledPacks(); runOnUiThread { packCall("status") } }.start()
+        // A job started before a configuration change keeps running in this process.
+        importer.poll()
         setContent {
             Th08Theme {
                 LifecycleResumeEffect(Unit) {
@@ -84,6 +87,19 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                         packs = withContext(Dispatchers.Default) { PackState.parse(Packs.call(request("status"))) }
                     }
                 }
+                LaunchedEffect(importer.state.busy) {
+                    if (!importer.state.busy) return@LaunchedEffect
+                    while (importer.state.busy) {
+                        delay(250)
+                        withContext(Dispatchers.Default) { importer.poll() }
+                    }
+                    importer.logOutcome()
+                    data = checkData()
+                }
+                val pickGame = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                    importer.start(uris)
+                }
+                openGamePicker = { pickGame.launch(arrayOf("*/*")) }
                 val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     val r = picking ?: return@rememberLauncherForActivityResult
                     picking = null
@@ -95,7 +111,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 val lang = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
                 val res = remember(lang) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
-                    LocalSaves provides saves) {
+                    LocalSaves provides saves, LocalImport provides importer.state) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -103,14 +119,16 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     }
 
     private var pickFile: (Setting) -> Unit = {}
+    private var openGamePicker: () -> Unit = {}
 
-    // Bundled assets win, as in android_main; else <external files>/game (adb push target).
+    // As android_main: imported files, then bundled assets, then the old <external files>/game (adb push target).
     private fun checkData(): GameData {
+        val game = importDir(this)
+        if (hasFile(game, "th08.pak", "th08.dat")) return GameData.Imported(game, hasFile(game, "thbgm.pak", "thbgm.dat"))
         if (assets.list("")?.any { it == "th08.pak" || it == "th08.dat" } == true) return GameData.Bundled
-        val dir = getExternalFilesDir(null)?.let { File(it, "game") } ?: return GameData.Unavailable
-        dir.mkdirs()
-        val found = dir.listFiles()?.any { f -> f.isFile && listOf("th08.pak", "th08.dat").any { f.name.equals(it, ignoreCase = true) } } == true
-        return GameData.Folder(dir, found)
+        val old = getExternalFilesDir(null)?.let { File(it, "game") }
+        if (old != null && hasFile(old, "th08.pak", "th08.dat")) return GameData.Folder(old)
+        return GameData.Missing
     }
 
     // A picked document copied to filesDir/picked/<name>, a path the native game can open.
@@ -220,11 +238,20 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     override fun pick(r: Setting) = pickFile(r)
 
+    override fun importGame() = openGamePicker()
+
+    override fun cancelImport() = importer.cancel()
+
+    override fun removeGame() {
+        importer.remove()
+        data = checkData()
+    }
+
     private fun request(op: String, code: String = ""): String = JSONObject().apply {
         put("op", op)
         put("config", filesDir.path)
         put("code", code)
-        (data as? GameData.Folder)?.let { put("dir", it.dir.path) }
+        data.folder()?.let { put("dir", it.path) }
     }.toString()
 
     private fun packCall(op: String, code: String = "", extra: (JSONObject) -> Unit = {}) {

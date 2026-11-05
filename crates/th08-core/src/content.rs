@@ -21,18 +21,7 @@ impl Fingerprint {
     // Rule for a pack: vanilla iff its Logic entries are exactly the vanilla table (name and
     // sha256); otherwise sha256 over the sorted differing names, each with its pack hash (none when missing).
     fn of_pack(pack: &Pack) -> Self {
-        let mut diff: Vec<(&str, Option<&[u8; 32]>)> = Vec::new();
-        for (name, hex) in crate::vanilla::LOGIC_SHA256 {
-            match pack.entry(name) {
-                Some(e) if e.layer == Layer::Logic && hex_eq(hex, &e.sha256) => {}
-                e => diff.push((name, e.map(|e| &e.sha256))),
-            }
-        }
-        for e in pack.entries().iter().filter(|e| e.layer == Layer::Logic) {
-            if !crate::vanilla::LOGIC_SHA256.iter().any(|v| v.0 == e.name) {
-                diff.push((&e.name, Some(&e.sha256)));
-            }
-        }
+        let mut diff = logic_diff(pack);
         if diff.is_empty() {
             return Self::default();
         }
@@ -45,6 +34,31 @@ impl Fingerprint {
         }
         Self(th08_formats::pack::sha256(&buf).to_vec())
     }
+}
+
+// Logic entries that differ from the vanilla table (missing, changed or extra), each with its pack hash.
+fn logic_diff(pack: &Pack) -> Vec<(&str, Option<&[u8; 32]>)> {
+    let mut diff: Vec<(&str, Option<&[u8; 32]>)> = Vec::new();
+    for (name, hex) in crate::vanilla::LOGIC_SHA256 {
+        match pack.entry(name) {
+            Some(e) if e.layer == Layer::Logic && hex_eq(hex, &e.sha256) => {}
+            e => diff.push((name, e.map(|e| &e.sha256))),
+        }
+    }
+    for e in pack.entries().iter().filter(|e| e.layer == Layer::Logic) {
+        if !crate::vanilla::LOGIC_SHA256.iter().any(|v| v.0 == e.name) {
+            diff.push((&e.name, Some(&e.sha256)));
+        }
+    }
+    diff
+}
+
+// Names of the pack's Logic entries that are not the vanilla th08.dat ones (empty = this game version).
+pub fn vanilla_mismatch(pack: &Pack) -> Vec<String> {
+    logic_diff(pack)
+        .into_iter()
+        .map(|(n, _)| n.to_owned())
+        .collect()
 }
 
 fn hex_eq(hex: &str, h: &[u8; 32]) -> bool {

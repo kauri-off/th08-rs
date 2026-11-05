@@ -191,8 +191,10 @@ fn raw(data: &Path) -> Result<Game> {
 const PACKS: [&str; 2] = ["th08.pak", "thbgm.pak"];
 
 // Sources whose change can change the pack bytes (repack is deterministic).
-const REPACK_SOURCES: [&str; 3] = [
+const REPACK_SOURCES: [&str; 5] = [
     "crates/th08-tools/src/bin/repack.rs",
+    "crates/th08-repack/src/content.rs",
+    "crates/th08-repack/src/bgm.rs",
     "crates/th08-formats/src/pack.rs",
     "crates/th08-audio/src/bgm.rs",
 ];

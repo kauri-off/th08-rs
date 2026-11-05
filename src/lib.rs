@@ -1,6 +1,8 @@
 //! th08 app: game window, launcher, settings, platform services, data sources, input and pacer; wasm / Android entries.
 
 pub mod app;
+#[cfg(target_os = "android")]
+pub mod gameimport;
 pub mod i18n;
 pub mod joystick;
 pub mod launcher;
@@ -39,8 +41,8 @@ pub fn start(files: js_sys::Array) {
     }
 }
 
-// Android entry: logcat logger, panics to logcat, config + saves in the app's internal storage. Game files: the
-// APK's bundled assets if it has th08.dat, else `<external files dir>/game` (adb push target).
+// Android entry: logcat logger, panics to logcat, config + saves in the app's internal storage. Game files, first
+// found: `<internal>/game` (the launcher's import), the APK's bundled assets, `<external files dir>/game` (old installs).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
@@ -51,6 +53,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     );
     std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
     let data = app.internal_data_path();
+    let imported = data.as_ref().map(|d| d.join("game"));
     let dirs = settings::PlatformDirs {
         config: data.clone(),
         save: data,
@@ -58,19 +61,24 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     };
     let mut s = settings::Settings::game_environment(dirs);
     launch_once(&mut s);
-    if let Some(apk) = sources::ApkAssetSource::new(app.asset_manager()) {
-        log::info!("game files bundled in the APK: {:?}", apk.names_list());
-        app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
-        // Saves are written before the event loop exits; a second android_main in this process would make winit
-        // fail (RecreationAttempt), so the :game process ends here and the next Play starts a fresh one.
-        std::process::exit(0);
-    }
-    match app.external_data_path() {
-        Some(ext) => {
-            let game = ext.join("game");
-            let _ = std::fs::create_dir_all(&game);
+    let legacy = app.external_data_path().map(|e| e.join("game"));
+    let game = match imported.iter().find(|d| launcher::is_game_dir(d)) {
+        Some(d) => Some(d.clone()),
+        None => {
+            if let Some(apk) = sources::ApkAssetSource::new(app.asset_manager()) {
+                log::info!("game files bundled in the APK: {:?}", apk.names_list());
+                app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
+                // Saves are written before the event loop exits; a second android_main in this process would make
+                // winit fail (RecreationAttempt), so the :game process ends here and the next Play starts a fresh one.
+                std::process::exit(0);
+            }
+            legacy.filter(|d| launcher::is_game_dir(d)).or(imported)
+        }
+    };
+    match game {
+        Some(game) => {
             log::info!(
-                "game folder {} (th08.dat {})",
+                "game folder {} (th08 content {})",
                 game.display(),
                 if launcher::is_game_dir(&game) {
                     "found"
@@ -86,7 +94,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             )
             .expect("game_dir accepts any path");
         }
-        None => log::error!("no external files dir: game folder unavailable"),
+        None => log::error!("no internal files dir: game folder unavailable"),
     }
     app::run_android(app, None, s);
     std::process::exit(0);

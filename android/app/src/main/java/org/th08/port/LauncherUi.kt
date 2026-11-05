@@ -106,13 +106,17 @@ class Setting(val e: Entry, initial: String) {
     fun ok(): Boolean = (e.kind as? Kind.IntRange)?.let { intOk(it, value) } ?: true
 }
 
+// First found wins, as in lib.rs `android_main`: imported files, bundled assets, the old external folder.
 sealed interface GameData {
+    data class Imported(val dir: File, val music: Boolean) : GameData
     data object Bundled : GameData
-    data class Folder(val dir: File, val found: Boolean) : GameData
-    data object Unavailable : GameData
+    data class Folder(val dir: File) : GameData
+    data object Missing : GameData
 }
 
-private fun GameData.ok() = this == GameData.Bundled || (this as? GameData.Folder)?.found == true
+private fun GameData.ok() = this != GameData.Missing
+
+fun GameData.folder(): File? = (this as? GameData.Imported)?.dir ?: (this as? GameData.Folder)?.dir
 
 interface LauncherActions {
     fun change(r: Setting, v: String)
@@ -125,6 +129,9 @@ interface LauncherActions {
     fun packRemove(code: String) {}
     fun saveExport() {}
     fun saveImport(portCfg: Boolean) {}
+    fun importGame() {}
+    fun cancelImport() {}
+    fun removeGame() {}
 }
 
 // Save export / import state (Saves.kt).
@@ -149,7 +156,7 @@ private fun VersionLine() = Text("${BuildConfig.VERSION_NAME} (${BuildConfig.CHA
     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
-private fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
+internal fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
 
 @Composable
 private fun Entry.t() = text(LocalLang.current)
@@ -334,7 +341,7 @@ private fun Block(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ShellRow(
+internal fun ShellRow(
     title: String,
     summary: String?,
     modifier: Modifier = Modifier,
@@ -376,10 +383,11 @@ private fun ShellRow(
 private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, String) -> Unit) {
     val ok = d.ok()
     val (summary, detail) = when (d) {
+        is GameData.Imported if d.music -> str(R.string.data_imported) to str(R.string.data_imported_detail, d.dir.path)
+        is GameData.Imported -> str(R.string.data_imported_no_music) to str(R.string.data_imported_detail, d.dir.path)
         GameData.Bundled -> str(R.string.data_bundled) to str(R.string.data_bundled_detail)
-        is GameData.Folder if d.found -> str(R.string.data_found) to str(R.string.data_found_detail, d.dir.path)
-        is GameData.Folder -> str(R.string.data_missing) to str(R.string.data_missing_detail, d.dir.path)
-        GameData.Unavailable -> str(R.string.data_unavailable) to str(R.string.data_unavailable_detail)
+        is GameData.Folder -> str(R.string.data_found) to str(R.string.data_found_detail, d.dir.path)
+        GameData.Missing -> str(R.string.data_missing) to str(R.string.data_missing_detail)
     }
     val title = str(R.string.game_data)
     Row(
@@ -397,6 +405,7 @@ private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, Stri
         }
         if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again)) }
     }
+    if (d !is GameData.Bundled) ImportRows(d, act)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

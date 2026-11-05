@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-tools", "xtask"]
+members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "xtask"]
 resolver = "3"
 
 # Lint subset: worth fixing in a bit-exact port (casts that keep the bits, readability, long fns);
@@ -95,6 +95,8 @@ android_logger = "0.15.1"
 # Safe-area insets from the NativeActivity's WindowInsets (platform/safearea.rs).
 jni = "0.22.4"
 ndk-context = "0.1.1"
+# Import of picked game files into <internal>/game (gameimport.rs).
+th08-repack = { path = "crates/th08-repack", features = ["device"] }
 winit = { version = "0.30", features = ["android-native-activity"] }
 
 [target.'cfg(windows)'.dependencies]

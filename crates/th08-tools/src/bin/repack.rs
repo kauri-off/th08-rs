@@ -1,11 +1,11 @@
 //! Builds th08.pak from th08.dat (checked entry by entry; `--table` writes core's vanilla sha256 table) and thbgm.pak.
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, bail};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Instant;
 use th08_formats::archive::Archive;
-use th08_formats::pack::{self, Kind, Layer, Pack};
+use th08_formats::pack::{self, Layer};
 
 struct Args {
     game: PathBuf,
@@ -60,15 +60,6 @@ fn args() -> anyhow::Result<Args> {
     })
 }
 
-// zstd frame of `raw`; window covers a whole frame so solid frames match across files.
-fn compress(raw: &[u8], level: i32) -> anyhow::Result<Vec<u8>> {
-    let mut c = zstd::bulk::Compressor::new(level)?;
-    let wlog = (usize::BITS - raw.len().max(1 << 10).leading_zeros()).clamp(10, 27);
-    c.set_parameter(zstd::zstd_safe::CParameter::WindowLog(wlog))?;
-    c.include_checksum(true)?;
-    Ok(c.compress(raw)?)
-}
-
 // `crates/th08-core/src/vanilla.rs`: Logic entries of the original th08.dat, sha256 of `Archive::read` bytes.
 fn table_source(ar: &Archive) -> anyhow::Result<String> {
     let mut s = String::from(
@@ -106,60 +97,41 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn content(a: &Args, ar: &Archive, dat_len: usize) -> anyhow::Result<()> {
-    let t = Instant::now();
-    let data: Vec<(String, Vec<u8>)> = ar
-        .names()
-        .iter()
-        .map(|n| Ok((n.clone(), ar.read(n)?)))
-        .collect::<anyhow::Result<_>>()?;
-    let t_dat = t.elapsed();
-    let files: Vec<(&str, &[u8])> = data
-        .iter()
-        .map(|(n, b)| (n.as_str(), b.as_slice()))
-        .collect();
-    let t = Instant::now();
-    let mut err = None;
-    let bytes = pack::write(
-        Kind::Content,
-        &files,
+    let level = a.level;
+    let built = th08_repack::content::build(
+        ar,
         a.frame_mb << 20,
-        &mut |b: &[u8]| {
-            compress(b, a.level).unwrap_or_else(|e| {
-                err.get_or_insert(e);
-                b.to_vec()
-            })
-        },
-    );
-    if let Some(e) = err {
-        return Err(e);
-    }
-    let t_enc = t.elapsed();
+        &mut |b| th08_repack::content::zstd_frame(b, level),
+        th08_repack::Ctl::default(),
+    )?;
     let out = a.out.join("th08.pak");
-    std::fs::write(&out, &bytes)?;
+    std::fs::write(&out, &built.bytes)?;
 
     // Self-verify from the written file: same names in order, every entry = Archive::read, hashes match.
     let t = Instant::now();
-    let p = Pack::from_bytes(std::fs::read(&out)?)?;
-    ensure!(p.names() == ar.names(), "entry names / order differ");
-    for (e, (n, b)) in p.entries().iter().zip(&data) {
-        ensure!(e.sha256 == pack::sha256(b), "{n}: manifest hash");
-        ensure!(&p.read(n)? == b, "{n}: decoded bytes differ");
-    }
+    let p = th08_repack::content::verify(&std::fs::read(&out)?, &built.data)?;
     let t_pack = t.elapsed();
-    let unpacked: usize = data.iter().map(|d| d.1.len()).sum();
     let max_frame = p.frames().iter().map(|f| f.size).max().unwrap_or(0);
     println!(
-        "{}: {} entries, {} frames (largest {max_frame} B decoded), {} B (th08.dat {dat_len} B, unpacked {unpacked} B)",
+        "{}: {} entries, {} frames (largest {max_frame} B decoded), {} B (th08.dat {dat_len} B, unpacked {} B)",
         out.display(),
         p.entries().len(),
         p.frames().len(),
-        bytes.len()
+        built.bytes.len(),
+        built.unpacked()
     );
+    let diff = th08_core::content::vanilla_mismatch(&p);
+    if !diff.is_empty() {
+        println!(
+            "not the vanilla th08.dat: {} Logic entries differ",
+            diff.len()
+        );
+    }
     println!(
         "verify ok; read all entries: th08.dat {:.3} s, th08.pak {:.3} s (incl. sha256); encode {:.1} s",
-        t_dat.as_secs_f64(),
+        built.t_dat.as_secs_f64(),
         t_pack.as_secs_f64(),
-        t_enc.as_secs_f64()
+        built.t_enc.as_secs_f64()
     );
     if let Some(path) = &a.table {
         std::fs::write(path, table_source(ar)?)?;
@@ -168,44 +140,20 @@ fn content(a: &Args, ar: &Archive, dat_len: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-// thbgm.pak: per track the PCM `[0, loop_end)` plus 1 s of loop continuation encoded to Ogg Vorbis (ffmpeg, deterministic),
-// decode cut to `loop_end`. Self-check per track: length ≥ loop_end, lag 0 in ±64 frames, junction RMS ≤ 1.5× global
-// RMS error (seam SNR only reported); then every track is read back through the game's `BgmSource`.
+// thbgm.pak through `th08_repack::bgm` with ffmpeg's libvorbis (deterministic), its per-track self-check printed;
+// then every track is read back through the game's `BgmSource`.
 mod bgm {
     use super::Args;
     use anyhow::{Context, bail, ensure};
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
-    use th08_audio::bgm::{BgmSource, Frame, decode_vorbis, fit, pcm_frames};
+    use th08_audio::bgm::BgmSource;
     use th08_formats::archive::Archive;
-    use th08_formats::pack::{self, BgmInfo, BgmTrack, Kind, Pack};
-    use th08_formats::thbgm::{Track, parse_fmt};
+    use th08_formats::pack::{Kind, Pack};
+    use th08_formats::thbgm::parse_fmt;
 
-    // Encoder look-ahead past loop_end: the musical continuation, 1 s.
-    const PAD: usize = 44100;
-    // Lag search range and windows (frames), seam half-width and junction half-width.
-    const LAG: i64 = 64;
-    const LAG_WIN: usize = 65536;
-    const SEAM: usize = 4096;
-    const JUNCTION: usize = 32;
-
-    struct Done {
-        ogg: Vec<u8>,
-        dec: Vec<Frame>,
-        dec_len: usize,
-        lag: i64,
-        snr: f64,
-        seam_snr: f64,
-        local_snr: f64,
-        junction: f64,
-        step: (i32, i32),
-        secs: f64,
-    }
-
-    fn encode(a: &Args, input: &[u8]) -> anyhow::Result<Vec<u8>> {
+    fn encode(a: &Args, input: &[u8]) -> std::io::Result<Vec<u8>> {
         let mut child = Command::new(&a.ffmpeg)
             .args([
                 "-hide_banner",
@@ -240,149 +188,53 @@ mod bgm {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .with_context(|| format!("{} (needs libvorbis)", a.ffmpeg.display()))?;
-        let mut stdin = child.stdin.take().context("ffmpeg stdin")?;
-        let mut stdout = child.stdout.take().context("ffmpeg stdout")?;
+            .map_err(|e| {
+                std::io::Error::other(format!("{} (needs libvorbis): {e}", a.ffmpeg.display()))
+            })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("ffmpeg stdin"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("ffmpeg stdout"))?;
         let mut ogg = Vec::new();
         std::thread::scope(|s| {
             let w = s.spawn(move || stdin.write_all(input));
             let r = stdout.read_to_end(&mut ogg);
             w.join()
-                .map_err(|_| anyhow::anyhow!("ffmpeg writer panicked"))??;
+                .map_err(|_| std::io::Error::other("ffmpeg writer panicked"))??;
             r?;
-            anyhow::Ok(())
+            std::io::Result::Ok(())
         })?;
-        ensure!(child.wait()?.success(), "ffmpeg failed");
-        Ok(ogg)
-    }
-
-    fn sq(f: Frame) -> f64 {
-        f64::from(f[0]).powi(2) + f64::from(f[1]).powi(2)
-    }
-
-    fn err(a: Frame, b: Frame) -> f64 {
-        (f64::from(a[0]) - f64::from(b[0])).powi(2) + (f64::from(a[1]) - f64::from(b[1])).powi(2)
-    }
-
-    fn snr(o: &[Frame], d: &[Frame]) -> f64 {
-        let s: f64 = o.iter().map(|&f| sq(f)).sum();
-        let e: f64 = o.iter().zip(d).map(|(&a, &b)| err(a, b)).sum();
-        10.0 * (s / e.max(1e-9)).log10()
-    }
-
-    // Cross-correlation peak of `d` against `o` over three windows; 0 = sample-aligned.
-    #[expect(clippy::cast_sign_loss, reason = "start ≥ LAG keeps i + l ≥ 0")]
-    fn lag(o: &[Frame], d: &[Frame]) -> i64 {
-        let n = o.len();
-        let mut best = (i128::MIN, 0);
-        for l in -LAG..=LAG {
-            let mut acc: i128 = 0;
-            for w in [n / 4, n / 2, 3 * n / 4] {
-                let start = w.max(LAG as usize);
-                let end = (start + LAG_WIN).min(n.saturating_sub(LAG as usize));
-                for (i, oi) in o.iter().enumerate().take(end).skip(start) {
-                    let j = (th08_tools::int(i) + l) as usize;
-                    acc += i128::from(i32::from(oi[0]) * i32::from(d[j][0]))
-                        + i128::from(i32::from(oi[1]) * i32::from(d[j][1]));
-                }
-            }
-            if acc > best.0 {
-                best = (acc, l);
-            }
+        if !child.wait()?.success() {
+            return Err(std::io::Error::other("ffmpeg failed"));
         }
-        best.1
-    }
-
-    fn check(a: &Args, t: &Track, dat: &[u8]) -> anyhow::Result<Done> {
-        let clock = Instant::now();
-        let (le, ls) = (t.length, t.loop_start);
-        ensure!(ls < le, "{}: loop_start {ls} ≥ loop_end {le}", t.name);
-        let at = |f: usize| t.offset as usize + 4 * f;
-        let pcm = dat.get(at(0)..at(le)).context("track past thbgm.dat end")?;
-        let mut input = pcm.to_vec();
-        input.extend_from_slice(&dat[at(ls)..at((ls + PAD).min(le))]);
-        let ogg = encode(a, &input)?;
-        let mut dec = decode_vorbis(&ogg, usize::MAX)?;
-        let dec_len = dec.len();
-        ensure!(
-            dec_len >= le,
-            "{}: decoded {dec_len} < loop_end {le} frames",
-            t.name
-        );
-        fit(&mut dec, le);
-        let o = pcm_frames(pcm);
-        let splice = |s: &[Frame], w: usize| -> Vec<Frame> {
-            let mut v = s[le - w.min(le)..].to_vec();
-            v.extend_from_slice(&s[ls..(ls + w).min(le)]);
-            v
-        };
-        let (os, ds) = (splice(&o, SEAM), splice(&dec, SEAM));
-        let j = SEAM.min(le);
-        let rms = |o: &[Frame], d: &[Frame]| {
-            (o.iter().zip(d).map(|(&a, &b)| err(a, b)).sum::<f64>() / o.len().max(1) as f64).sqrt()
-        };
-        let jr = j.saturating_sub(JUNCTION)..(j + JUNCTION).min(os.len());
-        let junction = rms(&os[jr.clone()], &ds[jr]) / rms(&o, &dec).max(1e-9);
-        let step = |s: &[Frame]| (i32::from(s[le - 1][0]) - i32::from(s[ls][0])).abs();
-        Ok(Done {
-            lag: lag(&o, &dec),
-            snr: snr(&o, &dec),
-            seam_snr: snr(&os, &ds),
-            local_snr: snr(&splice(&o, 8 * SEAM), &splice(&dec, 8 * SEAM)),
-            junction,
-            step: (step(&o), step(&dec)),
-            ogg,
-            dec,
-            dec_len,
-            secs: clock.elapsed().as_secs_f64(),
-        })
+        Ok(ogg)
     }
 
     pub fn run(a: &Args, ar: &Archive) -> anyhow::Result<()> {
         let tracks = parse_fmt(&ar.read("thbgm.fmt")?);
         let path = th08::sources::find_file(&a.game, "thbgm.dat");
-        let dat = std::fs::read(&path).with_context(|| path.display().to_string())?;
-        ensure!(dat.len() >= 16, "thbgm.dat too short");
-        let info = BgmInfo {
-            header: dat[..16].try_into()?,
-            dat_len: dat.len() as u64,
-            dat_sha256: pack::sha256(&dat),
-        };
-        let clock = Instant::now();
+        let file = std::fs::File::open(&path).with_context(|| path.display().to_string())?;
         let jobs = std::thread::available_parallelism()
             .map_or(4, |n| n.get() / 2)
             .clamp(1, 8);
-        let next = AtomicUsize::new(0);
-        let done: Mutex<Vec<Option<anyhow::Result<Done>>>> =
-            Mutex::new((0..tracks.len()).map(|_| None).collect());
-        std::thread::scope(|s| {
-            for _ in 0..jobs {
-                s.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(t) = tracks.get(i) else { break };
-                        let r = check(a, t, &dat);
-                        done.lock().unwrap()[i] = Some(r);
-                    }
-                });
-            }
-        });
-        let t_enc = clock.elapsed();
-        let done: Vec<Done> = done
-            .into_inner()
-            .unwrap()
-            .into_iter()
-            .zip(&tracks)
-            .map(|(d, t)| {
-                d.with_context(|| t.name.clone())?
-                    .with_context(|| t.name.clone())
-            })
-            .collect::<anyhow::Result<_>>()?;
+        let built = th08_repack::bgm::build(
+            &tracks,
+            &mut std::io::BufReader::new(file),
+            &|pcm: &[u8]| encode(a, pcm),
+            jobs,
+            true,
+            th08_repack::Ctl::default(),
+        )
+        .with_context(|| path.display().to_string())?;
+        let done = &built.tracks;
         println!(
             "track      loop_start  loop_end  decoded  lag  SNR dB  seam dB  local dB  junction  step orig/dec  ogg B  secs"
         );
-        let mut bad = Vec::new();
-        for (t, d) in tracks.iter().zip(&done) {
+        for (t, d) in tracks.iter().zip(done) {
             println!(
                 "{:<10} {:>10} {:>9} {:>+8} {:>4} {:>7.2} {:>8.2} {:>9.2} {:>9.2} {:>6}/{:<6} {:>8} {:>5.2}",
                 t.name.trim_end_matches(".wav"),
@@ -399,52 +251,34 @@ mod bgm {
                 d.ogg.len(),
                 d.secs
             );
-            if d.lag != 0 || d.junction > 1.5 {
-                bad.push(t.name.clone());
-            }
         }
-        let snrs: Vec<f64> = done.iter().map(|d| d.snr).collect();
         println!(
             "SNR min {:.2} dB; seam SNR min {:.2} dB; junction max {:.2}; encode+check {:.1} s ({jobs} jobs)",
-            snrs.iter().copied().fold(f64::INFINITY, f64::min),
+            done.iter().map(|d| d.snr).fold(f64::INFINITY, f64::min),
             done.iter()
                 .map(|d| d.seam_snr)
                 .fold(f64::INFINITY, f64::min),
             done.iter().map(|d| d.junction).fold(0.0, f64::max),
-            t_enc.as_secs_f64()
+            built.secs
         );
+        let bad = built.loop_failures(&tracks);
         if !bad.is_empty() {
             bail!("loop self-check failed: {bad:?}");
         }
-
-        let entries: Vec<BgmTrack> = tracks
-            .iter()
-            .zip(&done)
-            .map(|(t, d)| {
-                let at = t.offset as usize;
-                BgmTrack {
-                    name: &t.name,
-                    ogg: &d.ogg,
-                    decoded_size: d.dec_len as u64 * 4,
-                    pcm_size: t.length as u64 * 4,
-                    pcm_sha256: pack::sha256(&dat[at..at + 4 * t.length]),
-                }
-            })
-            .collect();
-        let bytes = pack::write_bgm(&entries, &info);
+        let info = &built.info;
         let out = a.out.join(th08_core::content::BGM_PACK);
-        std::fs::write(&out, &bytes)?;
+        std::fs::write(&out, &built.bytes)?;
 
         // Read back from the written file through the game's own path (Source → BgmSource, header probe).
         let p = Pack::from_bytes(std::fs::read(&out)?)?;
         ensure!(
-            p.kind() == Kind::Bgm && p.index().bgm.as_ref() == Some(&info),
+            p.kind() == Kind::Bgm && p.index().bgm.as_ref() == Some(info),
             "pack trailer"
         );
         let source = th08::sources::native(a.out.clone());
         let header = pollster::block_on(th08_core::content::bgm_header(&source));
         ensure!(
-            header.as_deref() == Some(&dat[..16]),
+            header.as_deref() == Some(&info.header[..]),
             "header probe differs"
         );
         let bgm = pollster::block_on(BgmSource::resolve(&source));
@@ -455,7 +289,7 @@ mod bgm {
         );
         let clock = Instant::now();
         let mut worst = (0.0, String::new());
-        for (t, d) in tracks.iter().zip(&done) {
+        for (t, d) in tracks.iter().zip(done) {
             let one = Instant::now();
             let s = pollster::block_on(bgm.read(&source, t))?;
             let secs = one.elapsed().as_secs_f64();
@@ -473,9 +307,9 @@ mod bgm {
             "{}: {} tracks, {} B (thbgm.dat {} B, {:.1}×)",
             out.display(),
             tracks.len(),
-            bytes.len(),
-            dat.len(),
-            dat.len() as f64 / bytes.len() as f64
+            built.bytes.len(),
+            info.dat_len,
+            info.dat_len as f64 / built.bytes.len() as f64
         );
         println!(
             "verify ok: header probe, every track read back = checked decode; decode all {:.2} s (1 thread), \
