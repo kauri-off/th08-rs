@@ -35,21 +35,10 @@ Nothing to copy. On the first start the launcher asks for the game folder: pick 
 
 ### Android
 
-Today the app reads the game files from its own folder on the shared storage:
-
-```
-/storage/emulated/0/Android/data/org.th08.port/files/game/
-```
-
-The app creates this folder on its first start. Copy `th08.dat` and `thbgm.dat` into it, then tap **Check again**
-in the launcher's Game data row. Two ways:
-
-- **From a computer** (USB debugging on):
-  `adb push th08.dat thbgm.dat /storage/emulated/0/Android/data/org.th08.port/files/game/`
-- **With a file manager on the phone:** many file managers on Android 11 and newer cannot open `Android/data`; use
-  one that can, or adb.
-
-The launcher's Game data row shows the exact folder and whether the files were found.
+In the launcher's Game data row, tap **Import game files** and pick `th08.dat` and `thbgm.dat` (or `.pak` files)
+wherever they are: Downloads, a USB drive, cloud storage. The app checks them, converts them into its own format
+and keeps them in its private storage; the picked files are not changed and can be deleted afterwards. Import
+arrives in 0.1.2; 0.1.0 and 0.1.1 cannot load game data on Android without developer tools.
 
 ## Saves, replays and settings
 

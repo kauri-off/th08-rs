@@ -17,8 +17,8 @@ the game: the port reads `th08.dat` and `thbgm.dat` from it.
    them). The port contains no game data: you must own Touhou 8.
 3. **Put them where the port looks:**
    - Windows / Linux: nothing to copy; pick your game folder in the launcher on the first start.
-   - Android (for now): copy them with a file manager or adb into
-     `/storage/emulated/0/Android/data/org.th08.port/files/game/`, then tap **Check again**.
+   - Android: in the launcher, tap **Import game files** and pick `th08.dat` and `thbgm.dat`; the app converts them
+     into its own storage. This arrives in 0.1.2.
 4. **Saves, replays and `port.cfg`** live in `%APPDATA%\th08\` (Windows), `~/.config/th08/` (Linux) or the app's
    private storage (Android: uninstalling deletes them).
 5. **Translations:** the **Translations** panel in the launcher downloads one from Touhou Patch Center and builds the
