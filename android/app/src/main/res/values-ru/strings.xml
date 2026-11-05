@@ -54,4 +54,18 @@
   <string name="tr_removed">%s удалён</string>
   <string name="tr_failed">%1$s: %2$s</string>
   <string name="tr_attribution">Переводы: Touhou Patch Center (thpatch.net) и его участники, CC BY-SA 4.0; текст игры — Team Shanghai Alice. Пакеты собираются на этом устройстве из ваших данных игры, для личного использования.</string>
+  <string name="saves_title">Сохранения</string>
+  <string name="saves_export">Экспорт сохранений</string>
+  <string name="saves_export_summary">Рекорды, реплеи, настройки игры и порта в одном zip</string>
+  <string name="saves_import">Импорт сохранений</string>
+  <string name="saves_import_summary">Заменяет их из zip; текущие файлы сначала сохраняются в резервный zip</string>
+  <string name="saves_port_cfg">Импортировать и настройки</string>
+  <string name="saves_port_cfg_summary">По умолчанию выключено: пути к папкам в них могут не подойти этому устройству</string>
+  <string name="saves_working">Выполняется…</string>
+  <string name="saves_game_running">Игра ещё запущена: сначала выйдите из неё</string>
+  <string name="saves_exported">Файлов экспортировано: %d</string>
+  <string name="saves_imported">Файлов импортировано: %d</string>
+  <string name="saves_imported_backup">Файлов импортировано: %d; прежние файлы — в резервном zip в памяти приложения</string>
+  <string name="saves_export_failed">Экспорт не удался: %s</string>
+  <string name="saves_import_failed">Импорт не удался, ничего не изменено: %s</string>
 </resources>

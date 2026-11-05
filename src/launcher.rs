@@ -358,7 +358,19 @@ pub struct Model {
     pub dev: bool,
     // The game folder row holds this build's bundled data: never saved to port.cfg.
     bundled: bool,
+    #[cfg(not(target_os = "android"))]
+    saves: SavesUi,
     pub view: View,
+}
+
+// Save export / import on the settings screen: the port.cfg box and the last outcome (Ok / Err message).
+#[cfg(not(target_os = "android"))]
+#[derive(Default)]
+struct SavesUi {
+    port_cfg: bool,
+    status: Option<Result<String, String>>,
+    #[cfg(target_arch = "wasm32")]
+    picker: crate::saves::Picker,
 }
 
 impl Model {
@@ -389,6 +401,8 @@ impl Model {
             },
             dev,
             bundled: s.origin("game_dir") == Origin::Bundled,
+            #[cfg(not(target_os = "android"))]
+            saves: SavesUi::default(),
             view: View::Settings,
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -633,6 +647,10 @@ impl Model {
                 }
                 for g in Group::ALL {
                     self.group_ui(ui, g, lang);
+                    #[cfg(not(target_os = "android"))]
+                    if g == Group::GameData {
+                        self.saves_ui(ui, lang);
+                    }
                 }
             });
         });
@@ -757,6 +775,159 @@ impl Model {
                     self.translations_ui(ui, lang);
                 }
             });
+    }
+
+    // Export / Import of score.dat, th08.cfg, replays and the player rows of port.cfg (saves.rs); shown on the settings
+    // screen only, so never while the game runs.
+    #[cfg(not(target_os = "android"))]
+    fn saves_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(r) = self.saves.picker.take() {
+            self.saves.status = Some(r.and_then(|d| self.import_saves(&d, lang)));
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.saves.picker.waiting() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        egui::CollapsingHeader::new(egui::RichText::new(i18n::ui(lang, "saves_title")).strong())
+            .id_salt("saves")
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(i18n::ui(lang, "saves_hint")).weak());
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(i18n::ui(lang, "saves_export")).clicked() {
+                        self.saves.status = self.export_saves(lang);
+                    }
+                    if ui.button(i18n::ui(lang, "saves_import")).clicked() {
+                        self.saves.status = self.pick_import(lang);
+                    }
+                    ui.checkbox(&mut self.saves.port_cfg, i18n::ui(lang, "saves_port_cfg"))
+                        .on_hover_text(i18n::ui(lang, "saves_port_cfg_hint"));
+                });
+                match &self.saves.status {
+                    Some(Ok(m)) => {
+                        ui.label(m);
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
+                    None => {}
+                }
+            });
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn save_store(&self) -> Result<crate::saves::DirStore, String> {
+        let save = self.settings().storage_dir().ok_or("no save folder")?;
+        Ok(crate::saves::DirStore {
+            save,
+            dirs: self.dirs.clone(),
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn save_store(&self) -> Result<crate::saves::WebStore, String> {
+        Ok(crate::saves::WebStore {
+            storage: self.settings().storage(),
+            dirs: self.dirs.clone(),
+        })
+    }
+
+    // None = the file dialog was cancelled.
+    #[cfg(not(target_os = "android"))]
+    fn export_saves(&self, lang: Lang) -> Option<Result<String, String>> {
+        let fail = |e: String| i18n::ui_fmt(lang, "saves_export_failed", &[("err", &e)]);
+        let t = crate::platform::Clock::default().local_time();
+        let out = match self
+            .save_store()
+            .and_then(|st| crate::saves::export(&st, &t))
+        {
+            Ok(o) => o,
+            Err(e) => return Some(Err(fail(e))),
+        };
+        let name = crate::saves::export_name(&t);
+        #[cfg(not(target_arch = "wasm32"))]
+        let r = {
+            let path = rfd::FileDialog::new()
+                .set_title(i18n::ui(lang, "saves_export"))
+                .set_file_name(&name)
+                .add_filter("zip", &["zip"])
+                .save_file()?;
+            crate::platform::write_atomic(&path, &out.zip)
+                .map(|()| path.display().to_string())
+                .map_err(|e| format!("{}: {e}", path.display()))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let r = crate::saves::download(&name, &out.zip).map(|()| name);
+        let n = out.files.to_string();
+        Some(
+            r.map(|p| i18n::ui_fmt(lang, "saves_exported", &[("n", &n), ("path", &p)]))
+                .map_err(fail),
+        )
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn pick_import(&mut self, lang: Lang) -> Option<Result<String, String>> {
+        let path = rfd::FileDialog::new()
+            .set_title(i18n::ui(lang, "saves_import"))
+            .add_filter("zip", &["zip"])
+            .pick_file()?;
+        let fail = |e: String| i18n::ui_fmt(lang, "saves_import_failed", &[("err", &e)]);
+        let data = std::fs::metadata(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|m| {
+                if m.len() > crate::saves::MAX_ZIP {
+                    Err(format!("larger than {} MiB", crate::saves::MAX_ZIP >> 20))
+                } else {
+                    std::fs::read(&path).map_err(|e| e.to_string())
+                }
+            });
+        Some(data.map_err(fail).and_then(|d| self.import_saves(&d, lang)))
+    }
+
+    // The zip arrives later through the picker (polled in `saves_ui`).
+    #[cfg(target_arch = "wasm32")]
+    fn pick_import(&mut self, lang: Lang) -> Option<Result<String, String>> {
+        self.saves
+            .picker
+            .open()
+            .err()
+            .map(|e| Err(i18n::ui_fmt(lang, "saves_import_failed", &[("err", &e)])))
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn import_saves(&mut self, data: &[u8], lang: Lang) -> Result<String, String> {
+        let t = crate::platform::Clock::default().local_time();
+        let r = self
+            .save_store()
+            .and_then(|mut st| crate::saves::import(&mut st, data, self.saves.port_cfg, &t))
+            .map_err(|e| i18n::ui_fmt(lang, "saves_import_failed", &[("err", &e)]))?;
+        if r.port_cfg {
+            self.reload_port_cfg();
+        }
+        let n = r.files.to_string();
+        Ok(match &r.backup {
+            Some(b) => i18n::ui_fmt(lang, "saves_imported_backup", &[("n", &n), ("backup", b)]),
+            None => i18n::ui_fmt(lang, "saves_imported", &[("n", &n)]),
+        })
+    }
+
+    // Rows not edited on screen and not set above port.cfg take the values of a port.cfg just imported.
+    #[cfg(not(target_os = "android"))]
+    fn reload_port_cfg(&mut self) {
+        let s = Settings::game_environment(self.dirs.clone());
+        let bundled = self.bundled;
+        for r in self.rows.iter_mut().filter(|r| {
+            !r.dirty
+                && r.e.persist
+                && r.origin <= Origin::PortCfg
+                && !(bundled && r.e.key == "game_dir")
+        }) {
+            let o = s.origin(r.e.key);
+            if o <= Origin::PortCfg {
+                *r = Row::new(r.e, s.value(r.e.key).unwrap_or(r.e.default), o);
+            }
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

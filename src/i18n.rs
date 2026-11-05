@@ -194,8 +194,34 @@ pub const UI: &[(&str, &str)] = &[
     ("touch_ok", "OK"),
     ("touch_back", "BACK"),
     ("touch_next", "NEXT"),
+    ("replay_paused", "Paused"),
+    ("replay_rate", "{rate}×"),
     ("cancel", "Cancel"),
     ("save", "Save"),
+    ("saves_title", "Saves"),
+    (
+        "saves_hint",
+        "Scores, replays and game options in one zip, with your settings; an import keeps a zip of the current \
+         files first.",
+    ),
+    ("saves_export", "Export saves…"),
+    ("saves_import", "Import saves…"),
+    ("saves_port_cfg", "Also import the settings"),
+    (
+        "saves_port_cfg_hint",
+        "port.cfg rows from the zip; off by default, as folder paths in it may not fit this device",
+    ),
+    ("saves_exported", "{n} files saved to {path}"),
+    ("saves_imported", "{n} files imported"),
+    (
+        "saves_imported_backup",
+        "{n} files imported; the previous files are in {backup}",
+    ),
+    ("saves_export_failed", "Export failed: {err}"),
+    (
+        "saves_import_failed",
+        "Import failed, nothing changed: {err}",
+    ),
     ("tr_title", "Translations"),
     ("tr_installed", "Installed:"),
     (

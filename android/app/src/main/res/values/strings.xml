@@ -55,4 +55,18 @@
   <string name="tr_removed">%s removed</string>
   <string name="tr_failed">%1$s: %2$s</string>
   <string name="tr_attribution">Translations by Touhou Patch Center (thpatch.net) and its contributors, CC BY-SA 4.0; the game text is by Team Shanghai Alice. Packs are built on this device from your game data, for personal use.</string>
+  <string name="saves_title">Saves</string>
+  <string name="saves_export">Export saves</string>
+  <string name="saves_export_summary">Scores, replays, game options and settings in one zip</string>
+  <string name="saves_import">Import saves</string>
+  <string name="saves_import_summary">Replaces them from a zip; the current files are kept in a backup zip first</string>
+  <string name="saves_port_cfg">Also import the settings</string>
+  <string name="saves_port_cfg_summary">Off by default: folder paths in them may not fit this device</string>
+  <string name="saves_working">Working…</string>
+  <string name="saves_game_running">The game is still running: quit it first</string>
+  <string name="saves_exported">%d files exported</string>
+  <string name="saves_imported">%d files imported</string>
+  <string name="saves_imported_backup">%d files imported; the previous files are in a backup zip in the app\'s storage</string>
+  <string name="saves_export_failed">Export failed: %s</string>
+  <string name="saves_import_failed">Import failed, nothing changed: %s</string>
 </resources>

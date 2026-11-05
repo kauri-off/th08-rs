@@ -222,6 +222,7 @@ pub trait Overlay {
 }
 
 // What an overlay draws with: the device and the window-sized target (surface or the scaled `--shot` texture).
+#[derive(Clone, Copy)]
 pub struct OverlayTarget<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
@@ -403,6 +404,8 @@ pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
     // Touch overlay (app), painted after `blit`.
     pub overlay: Option<Box<dyn Overlay>>,
+    // Port labels and strips (app), painted after `overlay`.
+    pub hud: Option<Box<dyn Overlay>>,
     // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
     pub safe: SafeArea,
     pub blit_options: BlitOptions,
@@ -988,6 +991,7 @@ impl Gfx {
             window: None,
             surface,
             overlay: None,
+            hud: None,
             safe: SafeArea::default(),
             blit_options: BlitOptions::default(),
             instance,
@@ -1073,7 +1077,7 @@ impl Gfx {
         self.reconfigure();
         self.reupload();
         self.generation += 1;
-        if let Some(o) = self.overlay.as_mut() {
+        for o in [&mut self.overlay, &mut self.hud].into_iter().flatten() {
             o.device_rebuilt();
         }
         Ok(())
@@ -1847,13 +1851,25 @@ impl Gfx {
         true
     }
 
+    // `present_last` with this device's own overlays (held replay frame).
+    pub fn present_held(&mut self) -> bool {
+        let (mut a, mut b) = (self.overlay.take(), self.hud.take());
+        let shown = self.present_last(|t, enc| {
+            for o in [&mut a, &mut b].into_iter().flatten() {
+                o.paint(t, enc);
+            }
+        });
+        (self.overlay, self.hud) = (a, b);
+        shown
+    }
+
     fn paint_overlay(
         &mut self,
         enc: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         size: (u32, u32),
     ) {
-        if let Some(o) = self.overlay.as_mut() {
+        for o in [&mut self.overlay, &mut self.hud].into_iter().flatten() {
             let t = OverlayTarget {
                 device: &self.device,
                 queue: &self.queue,

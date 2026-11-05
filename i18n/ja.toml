@@ -56,8 +56,22 @@ touch_menu = "メニュー"
 touch_ok = "決定"
 touch_back = "戻る"
 touch_next = "次へ"
+replay_paused = "一時停止"
+replay_rate = "{rate}×"
 cancel = "やめる"
 save = "保存"
+
+saves_title = "セーブデータ"
+saves_hint = "スコア、リプレイ、ゲーム設定を設定ファイルと一緒に一つの zip にまとめます。インポートの前に、今のファイルを zip に保存します。"
+saves_export = "セーブデータを書き出す…"
+saves_import = "セーブデータを読み込む…"
+saves_port_cfg = "設定も読み込む"
+saves_port_cfg_hint = "zip 内の port.cfg の項目。フォルダのパスがこの環境に合わないことがあるため、既定ではオフです"
+saves_exported = "{n} 個のファイルを {path} に保存しました"
+saves_imported = "{n} 個のファイルを読み込みました"
+saves_imported_backup = "{n} 個のファイルを読み込みました。以前のファイルは {backup} にあります"
+saves_export_failed = "書き出しに失敗しました: {err}"
+saves_import_failed = "読み込みに失敗しました。何も変更していません: {err}"
 
 tr_title = "翻訳"
 tr_installed = "インストール済み:"
@@ -416,6 +430,19 @@ help = "リプレイの再生速度"
 0 = "通常"
 1 = "スロー"
 2 = "早送り"
+
+[entry.replay_rate]
+label = "リプレイ再生倍率"
+summary = "リプレイを始める時の再生倍率"
+help = "ポートのリプレイ再生倍率の初期値（再生中は F7 / F8 で変更）"
+
+[entry.replay_rate.words]
+"1/4" = "¼×"
+"1/2" = "½×"
+"1" = "1×"
+"2" = "2×"
+"4" = "4×"
+"8" = "8×"
 
 [entry.replay_save]
 label = "リプレイ保存スロット"

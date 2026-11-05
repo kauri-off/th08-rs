@@ -224,14 +224,21 @@ impl Storage {
     }
 
     pub fn write(&self, name: &str, data: &[u8]) {
+        if let Err(e) = self.try_write(name, data) {
+            log::warn!("{e}");
+        }
+    }
+
+    pub fn try_write(&self, name: &str, data: &[u8]) -> Result<(), String> {
         use std::fmt::Write;
         let mut s = String::with_capacity(data.len() * 2);
         for b in data {
             let _ = write!(s, "{b:02x}");
         }
-        if let Some(ls) = local_storage() {
-            let _ = ls.set_item(&format!("th08:{name}"), &s);
-        }
+        local_storage()
+            .ok_or("no localStorage")?
+            .set_item(&format!("th08:{name}"), &s)
+            .map_err(|_| format!("localStorage: {name} not saved (storage full?)"))
     }
 
     pub fn mkdir(&self, _: &str) {}
@@ -249,16 +256,23 @@ impl Storage {
     }
 }
 
-// Wall clock and monotonic clock of the platform (web_time / js Date on the web).
+// Wall clock and monotonic clock of the platform (web_time / js Date on the web). While the replay transport is off
+// 1× (paused, slow, fast) `ticks_ms` is virtual: 1000/60 ms per logic frame, so the game's timings stay as at 1×.
 #[derive(Clone, Debug)]
 pub struct Clock {
     epoch: web_time::Instant,
+    // Added to the real reading, so leaving virtual time carries on from the virtual value.
+    shift_ms: i64,
+    // Virtual time: (ms at its start, logic frames since).
+    virt: Option<(u64, u64)>,
 }
 
 impl Default for Clock {
     fn default() -> Self {
         Self {
             epoch: web_time::Instant::now(),
+            shift_ms: 0,
+            virt: None,
         }
     }
 }
@@ -278,8 +292,36 @@ impl Clock {
         ms as u32
     }
 
+    fn real_ms(&self) -> u64 {
+        (self.epoch.elapsed().as_millis() as i64 + self.shift_ms)
+            .max(0)
+            .cast_unsigned()
+    }
+
     pub fn ticks_ms(&self) -> u64 {
-        self.epoch.elapsed().as_millis() as u64
+        match self.virt {
+            Some((start, frames)) => start + frames * 50 / 3,
+            None => self.real_ms(),
+        }
+    }
+
+    pub fn set_virtual(&mut self, on: bool) {
+        match (on, self.virt) {
+            (true, None) => self.virt = Some((self.real_ms(), 0)),
+            (false, Some(_)) => {
+                let v = self.ticks_ms();
+                self.virt = None;
+                self.shift_ms += v.cast_signed() - self.real_ms().cast_signed();
+            }
+            _ => {}
+        }
+    }
+
+    // One logic frame ran (virtual time only).
+    pub fn frame(&mut self) {
+        if let Some((_, n)) = &mut self.virt {
+            *n += 1;
+        }
     }
 
     pub fn local_time(&self) -> LocalTime {
@@ -464,6 +506,24 @@ pub fn tool_host(ctx: &mut th08_core::game::Ctx) -> &mut ToolHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Virtual time: 1000/60 ms per logic frame from where real time stood; back to real time without a jump back.
+    #[test]
+    fn virtual_clock() {
+        let mut c = Clock::default();
+        c.frame();
+        let t = c.ticks_ms();
+        c.set_virtual(true);
+        let start = c.ticks_ms();
+        assert!(start >= t);
+        for _ in 0..60 {
+            c.frame();
+        }
+        assert_eq!(c.ticks_ms(), start + 1000);
+        c.set_virtual(false);
+        assert!(c.ticks_ms() >= start + 1000);
+        assert!(c.ticks_ms() < start + 1100);
+    }
 
     // DIK table: keypad directions and diagonals, both Shift/Ctrl, Home/P; keypad Enter unmapped.
     #[test]

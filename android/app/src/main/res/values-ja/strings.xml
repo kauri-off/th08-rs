@@ -54,4 +54,18 @@
   <string name="tr_removed">%s を削除しました</string>
   <string name="tr_failed">%1$s: %2$s</string>
   <string name="tr_attribution">翻訳: Touhou Patch Center (thpatch.net) とその協力者、CC BY-SA 4.0。ゲームのテキストは上海アリス幻樂団によるものです。パックはこの端末でゲームデータから作成され、個人利用に限ります。</string>
+  <string name="saves_title">セーブデータ</string>
+  <string name="saves_export">セーブデータを書き出す</string>
+  <string name="saves_export_summary">スコア、リプレイ、ゲーム設定、設定を一つの zip に</string>
+  <string name="saves_import">セーブデータを読み込む</string>
+  <string name="saves_import_summary">zip から置き換えます。先に今のファイルをバックアップ zip に保存します</string>
+  <string name="saves_port_cfg">設定も読み込む</string>
+  <string name="saves_port_cfg_summary">既定ではオフ: フォルダのパスがこの端末に合わないことがあります</string>
+  <string name="saves_working">処理中…</string>
+  <string name="saves_game_running">ゲームがまだ動いています。先に終了してください</string>
+  <string name="saves_exported">%d 個のファイルを書き出しました</string>
+  <string name="saves_imported">%d 個のファイルを読み込みました</string>
+  <string name="saves_imported_backup">%d 個のファイルを読み込みました。以前のファイルはアプリ内のバックアップ zip にあります</string>
+  <string name="saves_export_failed">書き出しに失敗しました: %s</string>
+  <string name="saves_import_failed">読み込みに失敗しました。何も変更していません: %s</string>
 </resources>

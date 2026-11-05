@@ -3,6 +3,7 @@
 use crate::launcher::{Action, Folder, Screen, View};
 use crate::pacer::{Pacer, Tick};
 use crate::settings::Settings;
+use crate::transport::{Action as Transp, Transport};
 use std::sync::Arc;
 use th08_core::assets::Source;
 use th08_core::game::Ctx;
@@ -25,6 +26,21 @@ struct Running {
     settings: Settings,
     // The touch overlay while a gamepad is in use; back on the next touch.
     hidden_overlay: Option<Box<dyn th08_render::gfx::Overlay>>,
+    replay: ReplayTransport,
+}
+
+// Replay transport state of a running game (transport.rs); inert while no replay plays.
+#[derive(Default)]
+struct ReplayTransport {
+    t: Transport,
+    // A replay played at the last frame.
+    playing: bool,
+    // Score at the last frame of playback, logged when it ends.
+    score: i64,
+    label_until: Option<Instant>,
+    // The touch strip (window px) while a replay plays with the touch overlay on; the last mouse position.
+    strip: Option<[(Transp, [f32; 4]); 4]>,
+    cursor: (f32, f32),
 }
 
 // An egui screen on a device of its own (launcher, error, loading frame).
@@ -147,6 +163,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         pacer: Pacer::new(s.turbo),
         settings: s,
         hidden_overlay: None,
+        replay: ReplayTransport::default(),
     }))
 }
 
@@ -210,6 +227,11 @@ impl ApplicationHandler<UserEvent> for App {
                             r.settings.font.clone(),
                         )));
                 }
+                gfx(&mut r.ctx).hud =
+                    Some(Box::new(crate::platform::overlay::TransportOverlay::new(
+                        crate::i18n::resolve(r.settings.language),
+                        r.settings.font.clone(),
+                    )));
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
                 gfx(&mut r.ctx).blit_options = r.settings.blit;
@@ -811,6 +833,13 @@ impl App {
                     self.open_port_menu();
                 }
             }
+            // Port-only replay transport keys (F5–F8): never in the input word; inert while no replay plays.
+            WindowEvent::KeyboardInput { event, .. } if transport_key(&event).is_some() => {
+                let a = transport_key(&event).expect("transport key");
+                if event.state == ElementState::Pressed && (!event.repeat || a == Transp::Step) {
+                    transport_act(r, a);
+                }
+            }
             // Android Back (button, gesture, a pad's Back key): one X pulse in menus, one Esc pulse in play and in the
             // pause menu, through the touch source so replays record it like a key.
             WindowEvent::KeyboardInput { event, .. } if is_back(&event) => {
@@ -852,6 +881,13 @@ impl App {
                 {
                     gfx(&mut r.ctx).overlay = Some(o);
                 }
+                let (x, y) = (t.location.x as f32, t.location.y as f32);
+                if t.phase == winit::event::TouchPhase::Started
+                    && let Some(a) = strip_hit(r, x, y)
+                {
+                    transport_act(r, a);
+                    return;
+                }
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
                     && h.input.touch.cfg.active()
                 {
@@ -861,6 +897,7 @@ impl App {
             }
             // Dev `touch_mouse`: the left mouse button is a finger.
             WindowEvent::CursorMoved { position, .. } => {
+                r.replay.cursor = (position.x as f32, position.y as f32);
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
                     && h.input.touch.cfg.mouse
                 {
@@ -874,6 +911,18 @@ impl App {
                 button: winit::event::MouseButton::Left,
                 ..
             } => {
+                let (x, y) = r.replay.cursor;
+                let mouse = r
+                    .ctx
+                    .host_as::<crate::platform::AppHost>()
+                    .is_some_and(|h| h.input.touch.cfg.mouse);
+                if mouse
+                    && state == ElementState::Pressed
+                    && let Some(a) = strip_hit(r, x, y)
+                {
+                    transport_act(r, a);
+                    return;
+                }
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
                     && h.input.touch.cfg.mouse
                 {
@@ -968,12 +1017,19 @@ fn close(r: &mut Running, el: &ActiveEventLoop) {
 
 // One redraw of the running game: Frame_Run timing (00 §2, pacer.rs), the logic frames, draw and Present.
 fn frame(r: &mut Running, window: &Window) -> Frame {
-    // Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
-    let turbo = r.pacer.turbo();
+    let now = Instant::now();
+    follow_replay(r, now);
     let shot = r.settings.shot;
-    let frames = match r.pacer.poll(Instant::now()) {
-        Tick::Run(n) => n,
+    let (per_draw, draws) = match r.pacer.poll(now) {
+        Tick::Run { per_draw, draws } => (per_draw, draws),
         Tick::Suspended => return Frame::Continue,
+        Tick::Held => {
+            update_hud(r, window, now);
+            gfx(&mut r.ctx).present_held();
+            window.request_redraw();
+            return Frame::Continue;
+        }
+        // Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
         #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
         Tick::Wait(left) => {
             #[cfg(not(target_arch = "wasm32"))]
@@ -994,41 +1050,15 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
             .touch
             .set_window(w, hgt, window.scale_factor(), safe);
     }
-    // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no frame pacing.
-    for _ in 0..frames {
-        if shot.is_some_and(|f| r.ctx.w.frame >= f) && turbo > 0 {
-            break;
-        }
-        // Touch drag steers towards the player's position of this frame (a read between frames).
-        if touch {
-            let scene = crate::platform::touch::TouchScene::of(&r.ctx.w);
-            if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
-                h.input.touch.set_scene(scene);
-            }
-        }
-        match if frozen { Flow::Continue } else { r.ctx.calc() } {
-            Flow::Continue => {}
-            // Frame_Run returns after the calc chain and Sound_Update: no draw, no Present (15 §2.2, 00 §2).
-            Flow::Quit => {
-                r.ctx.exit_save();
-                return Frame::Exit;
-            }
-            // Result 2 (00 §2): the program restarts in the live config's mode; this frame has no draw and no
-            // Present. Port: window mode +0x22 is applied as the port's fullscreen setting.
-            Flow::Error => {
-                if let Err(e) = r.ctx.restart() {
-                    log::error!("restart failed: {e:#}");
-                    return Frame::Exit;
-                }
-                return Frame::Restarted(r.ctx.w.game.cfg.windowed == 0);
-            }
-        }
+    if let Some(f) = run_batch(r, per_draw, draws, frozen, touch) {
+        return f;
     }
     let size = window.inner_size();
     gfx(&mut r.ctx).resize(size.width, size.height);
     if touch {
         update_overlay(&mut r.ctx);
     }
+    update_hud(r, window, now);
     let excl = if touch {
         r.ctx
             .host_as::<crate::platform::AppHost>()
@@ -1054,6 +1084,173 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     window.request_redraw();
     Frame::Continue
 }
+
+// Replay transport above 1×: `draws` × (`per_draw` logic frames, draw); every draw but the last runs with emit off
+// (draw-phase steps only), the last is the caller's, recorded and presented. Fewer when playback ends inside.
+fn run_batch(
+    r: &mut Running,
+    per_draw: u32,
+    draws: u32,
+    frozen: bool,
+    touch: bool,
+) -> Option<Frame> {
+    for d in 0..draws {
+        if let Some(f) = logic_frames(r, per_draw, frozen, touch) {
+            return Some(f);
+        }
+        if !replay_active(&r.ctx) {
+            break;
+        }
+        if let Some(p) = r.ctx.w.player.as_deref() {
+            r.replay.score = p.stats.score10 * 10;
+        }
+        if d + 1 == draws {
+            break;
+        }
+        r.ctx.set_emit(false);
+        r.ctx.draw();
+        r.ctx.set_emit(true);
+    }
+    None
+}
+
+// `n` logic frames before one draw (n > 1: debug `TH08_TURBO=<n>`, no frame pacing); Some: the frame ends here.
+fn logic_frames(r: &mut Running, n: u32, frozen: bool, touch: bool) -> Option<Frame> {
+    let shot = r.settings.shot;
+    for _ in 0..n {
+        if shot.is_some_and(|f| r.ctx.w.frame >= f) && r.pacer.turbo() > 0 {
+            break;
+        }
+        // Touch drag steers towards the player's position of this frame (a read between frames).
+        if touch {
+            let scene = crate::platform::touch::TouchScene::of(&r.ctx.w);
+            if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                h.input.touch.set_scene(scene);
+            }
+        }
+        let flow = if frozen { Flow::Continue } else { r.ctx.calc() };
+        if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+            h.clock.frame();
+        }
+        match flow {
+            Flow::Continue => {}
+            // Frame_Run returns after the calc chain and Sound_Update: no draw, no Present (15 §2.2, 00 §2).
+            Flow::Quit => {
+                r.ctx.exit_save();
+                return Some(Frame::Exit);
+            }
+            // Result 2 (00 §2): the program restarts in the live config's mode; this frame has no draw and no
+            // Present. Port: window mode +0x22 is applied as the port's fullscreen setting.
+            Flow::Error => {
+                if let Err(e) = r.ctx.restart() {
+                    log::error!("restart failed: {e:#}");
+                    return Some(Frame::Exit);
+                }
+                return Some(Frame::Restarted(r.ctx.w.game.cfg.windowed == 0));
+            }
+        }
+    }
+    None
+}
+
+// A replay (not an attract demo) is playing.
+fn replay_active(ctx: &Ctx) -> bool {
+    let g = &ctx.w.game;
+    g.replay() && g.rpy.is_some() && !g.has(th08_core::gamemgr::GameFlags::DEMO)
+}
+
+// Playback started: the transport starts at the `replay_rate` setting; ended: back to 1× and the final score logged.
+fn follow_replay(r: &mut Running, now: Instant) {
+    let on = replay_active(&r.ctx);
+    if on && !r.replay.playing {
+        r.replay.t = Transport {
+            rate: r.settings.replay_rate,
+            paused: false,
+        };
+        if r.replay.t != Transport::default() {
+            r.replay.label_until = Some(now + LABEL);
+        }
+        apply_transport(r, now);
+    } else if !on && r.replay.playing {
+        log::info!("replay: playback ended, score {}", r.replay.score);
+        r.replay.t = Transport::default();
+        r.replay.label_until = None;
+        apply_transport(r, now);
+    }
+    r.replay.playing = on;
+}
+
+fn apply_transport(r: &mut Running, now: Instant) {
+    let t = r.replay.t;
+    if r.pacer.rate() != t.ratio() {
+        r.pacer.set_rate(t.ratio(), now);
+    }
+    if r.pacer.is_held() != t.paused {
+        r.pacer.hold(t.paused, now);
+    }
+    // Off 1× the game's clock is virtual from this moment, so time spent paused or slowed never reaches it.
+    let virt = !r.pacer.is_original();
+    if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+        h.clock.set_virtual(virt);
+    }
+}
+
+fn transport_act(r: &mut Running, a: Transp) {
+    if !r.replay.playing {
+        return;
+    }
+    let now = Instant::now();
+    r.replay.t.act(a);
+    apply_transport(r, now);
+    if a == Transp::Step {
+        r.pacer.step();
+    }
+    r.replay.label_until = Some(now + LABEL);
+    log::info!(
+        "replay transport: {}",
+        r.replay.t.label(crate::i18n::Lang::En)
+    );
+}
+
+fn transport_key(e: &winit::event::KeyEvent) -> Option<Transp> {
+    match e.physical_key {
+        PhysicalKey::Code(k) => Transp::of_key(k),
+        PhysicalKey::Unidentified(_) => None,
+    }
+}
+
+fn strip_hit(r: &Running, x: f32, y: f32) -> Option<Transp> {
+    r.replay
+        .strip
+        .as_ref()
+        .and_then(|s| crate::transport::hit(s, x, y))
+}
+
+// The transport HUD: the label while it lasts (always while paused), the strip while a replay plays with touch on.
+fn update_hud(r: &mut Running, window: &Window, now: Instant) {
+    let touch = gfx(&mut r.ctx).overlay.is_some();
+    let size = window.inner_size();
+    r.replay.strip = (r.replay.playing && touch).then(|| {
+        let safe = gfx(&mut r.ctx).safe.rect(size.width, size.height);
+        crate::transport::strip(safe, window.scale_factor() as f32)
+    });
+    let t = r.replay.t;
+    let shown = r.replay.playing && (t.paused || r.replay.label_until.is_some_and(|u| now < u));
+    let label = shown.then(|| t.label(crate::i18n::resolve(r.settings.language)));
+    let strip = r.replay.strip;
+    if let Some(o) = gfx(&mut r.ctx).hud.as_mut().and_then(|o| {
+        o.as_any_mut()
+            .downcast_mut::<crate::platform::overlay::TransportOverlay>()
+    }) {
+        o.view = crate::platform::overlay::TransportView {
+            label,
+            strip,
+            paused: t.paused,
+        };
+    }
+}
+
+const LABEL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 // Hands the touch state to the overlay the renderer draws after the blit.
 fn update_overlay(ctx: &mut Ctx) {
@@ -1224,5 +1421,111 @@ fn open_drawlog(v: &str) -> Option<th08_core::drawfmt::Writer> {
             log::error!("TH08_DRAWLOG={path}: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A `Running` over the game files that plays demo 0's record as an ordinary replay; None without TH08_DIR.
+    fn running() -> Option<Running> {
+        let dir = crate::settings::test_game_dir()?;
+        let src = crate::sources::native(dir);
+        let base = crate::settings::get().clone();
+        let load = |s: &Settings| {
+            let io = s.tool_io(th08_core::drawlist::NullRenderer, &src);
+            pollster::block_on(Ctx::load_with(src.clone(), io, s.core(), false)).unwrap()
+        };
+        let bytes = load(&base).archive.read("demorpy0.rpy").unwrap();
+        let path = std::env::temp_dir().join(format!("th08_transport_{}.rpy", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let mut s = base;
+        s.replay = Some(path.to_string_lossy().into_owned());
+        let ctx = load(&s);
+        Some(Running {
+            ctx,
+            pacer: Pacer::new(0),
+            settings: s,
+            hidden_overlay: None,
+            replay: ReplayTransport::default(),
+        })
+    }
+
+    fn state(r: &Running) -> (u64, i8, [i64; 22]) {
+        let w = &r.ctx.w;
+        (
+            w.frame,
+            w.skip_counter,
+            th08_core::trace::demo_sample(&r.ctx, 0),
+        )
+    }
+
+    // One presented frame as `frame` runs it, without the window.
+    fn present(r: &mut Running, per_draw: u32, draws: u32) {
+        assert!(run_batch(r, per_draw, draws, false, false).is_none());
+        r.ctx.draw();
+        r.ctx.present();
+    }
+
+    // 4×: the same states as 1× at every fourth frame (each logic frame keeps its draw).
+    #[test]
+    fn four_x_matches_one_x() {
+        const N: usize = 1600;
+        let Some(mut a) = running() else {
+            return;
+        };
+        let mut b = running().unwrap();
+        let mut want = Vec::new();
+        for _ in 0..N {
+            present(&mut a, 1, 1);
+            want.push(state(&a));
+        }
+        assert!(replay_active(&a.ctx) && a.ctx.w.game.scene == th08_core::types::SceneId::Game);
+        for k in 0..N / 4 {
+            present(&mut b, 1, 4);
+            assert_eq!(state(&b), want[4 * k + 3], "4× batch {k}");
+        }
+        assert!(want[N - 1].2[0] > 600, "game frames {}", want[N - 1].2[0]);
+    }
+
+    // Paused: no logic frames; a step runs exactly one; resuming runs again.
+    #[test]
+    fn pause_and_step() {
+        let Some(mut r) = running() else {
+            return;
+        };
+        let t0 = Instant::now();
+        r.pacer.start(t0);
+        follow_replay(&mut r, t0);
+        assert!(r.replay.playing);
+        // Polls 20 ms apart: always past the 1/60 s deadline.
+        let mut ms = 0;
+        let mut run = |r: &mut Running| {
+            ms += 20;
+            match r.pacer.poll(t0 + std::time::Duration::from_millis(ms)) {
+                Tick::Run { per_draw, draws } => present(r, per_draw, draws),
+                Tick::Held => {}
+                t => panic!("{t:?}"),
+            }
+        };
+        for _ in 0..5 {
+            run(&mut r);
+        }
+        transport_act(&mut r, Transp::Pause);
+        let f = r.ctx.w.frame;
+        for _ in 0..5 {
+            run(&mut r);
+        }
+        assert_eq!(r.ctx.w.frame, f);
+        transport_act(&mut r, Transp::Step);
+        run(&mut r);
+        assert_eq!(r.ctx.w.frame, f + 1);
+        run(&mut r);
+        assert_eq!(r.ctx.w.frame, f + 1);
+        transport_act(&mut r, Transp::Faster);
+        transport_act(&mut r, Transp::Pause);
+        run(&mut r);
+        assert_eq!(r.ctx.w.frame, f + 3);
     }
 }

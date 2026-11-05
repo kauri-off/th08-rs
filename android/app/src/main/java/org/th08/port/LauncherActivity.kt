@@ -4,6 +4,7 @@
 // Texts follow the `language` row (docs/arch/I18N.md §3.3).
 package org.th08.port
 
+import android.app.ActivityManager
 import android.app.NativeActivity
 import android.content.Intent
 import android.net.Uri
@@ -46,6 +47,10 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private var data by mutableStateOf<GameData>(GameData.Unavailable)
     private var picking: Setting? = null
     private var packs by mutableStateOf(PackState())
+    private var saves by mutableStateOf(SaveState())
+    private var exportDoc: (String) -> Unit = {}
+    private var importDoc: () -> Unit = {}
+    private var importCfg = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -62,8 +67,17 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             Th08Theme {
                 LifecycleResumeEffect(Unit) {
                     data = checkData()
+                    saves = saves.copy(gameRunning = gameRunning())
                     onPauseOrDispose { }
                 }
+                val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+                    uri?.let(::exportTo)
+                }
+                val imp = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    uri?.let(::importFrom)
+                }
+                exportDoc = { name -> exp.launch(name) }
+                importDoc = { imp.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
                 // Poll the Rust job while one runs.
                 LaunchedEffect(packs.busy) {
                     while (packs.busy != null) {
@@ -81,7 +95,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
                 val lang = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
                 val res = remember(lang) { localized(this, lang) }
-                CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs) {
+                CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
+                    LocalSaves provides saves) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -108,6 +123,85 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
         contentResolver.openInputStream(uri)!!.use { i -> out.outputStream().use { i.copyTo(it) } }
         out
     }.getOrNull()
+
+    private fun gameRunning(): Boolean = (getSystemService(ACTIVITY_SERVICE) as ActivityManager)
+        .runningAppProcesses.orEmpty().any { it.processName == "$packageName:game" }
+
+    private fun saveRequest(op: String, zip: File, extra: (JSONObject) -> Unit = {}): String = JSONObject().apply {
+        put("op", op)
+        put("config", filesDir.path)
+        put("zip", zip.path)
+        extra(this)
+    }.toString()
+
+    override fun saveExport() {
+        if (gameRunning()) return run { saves = saves.copy(gameRunning = true) }
+        val name = runCatching { JSONObject(Saves.call(saveRequest("name", cacheDir))).getString("name") }
+            .getOrDefault("th08-saves.zip")
+        exportDoc(name)
+    }
+
+    override fun saveImport(portCfg: Boolean) {
+        if (gameRunning()) return run { saves = saves.copy(gameRunning = true) }
+        importCfg = portCfg
+        importDoc()
+    }
+
+    // The zip is built in the cache, then copied into the picked document.
+    private fun exportTo(uri: Uri) = saveJob(export = true) {
+        val tmp = File(cacheDir, "saves-export.zip")
+        try {
+            val out = parseSaveReply(Saves.call(saveRequest("export", tmp)), export = true)
+            if (out is SaveOutcome.Exported) {
+                contentResolver.openOutputStream(uri, "wt")!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+            }
+            out
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    // The picked document is copied into the cache (at most `Saves.MAX_ZIP` bytes), then validated and imported.
+    private fun importFrom(uri: Uri) = saveJob(export = false) {
+        val tmp = File(cacheDir, "saves-import.zip")
+        try {
+            contentResolver.openInputStream(uri)!!.use { i ->
+                tmp.outputStream().use { o ->
+                    val buf = ByteArray(1 shl 16)
+                    var total = 0L
+                    while (true) {
+                        val n = i.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > Saves.MAX_ZIP) return@saveJob SaveOutcome.Failed(false, "larger than 256 MiB")
+                        o.write(buf, 0, n)
+                    }
+                }
+            }
+            val cfg = importCfg
+            val out = parseSaveReply(Saves.call(saveRequest("import", tmp) { it.put("port_cfg", cfg) }), export = false)
+            if (out is SaveOutcome.Imported && cfg) runOnUiThread(::reloadPortCfg)
+            out
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    private fun saveJob(export: Boolean, job: () -> SaveOutcome) {
+        saves = saves.copy(busy = true, outcome = null)
+        Thread {
+            val out = runCatching(job).getOrElse { SaveOutcome.Failed(export, it.message ?: it.toString()) }
+            runOnUiThread { saves = saves.copy(busy = false, outcome = out) }
+        }.start()
+    }
+
+    // Persisted player rows take the values of a port.cfg just imported.
+    private fun reloadPortCfg() {
+        val cfg = PortCfg.read(cfgFile)
+        rows.filter { it.e.persist && !it.e.developer }.forEach { r ->
+            r.value = cfg[r.e.key]?.let { norm(r.e.kind, it) }?.takeIf { it.isNotEmpty() } ?: r.e.default
+        }
+    }
 
     override fun change(r: Setting, v: String) {
         r.value = v

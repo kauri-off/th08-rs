@@ -315,6 +315,8 @@ pub struct Settings {
     pub ending: Option<Ending>,
     pub replay: Option<String>,
     pub replay_speed: u8,
+    // Index into `transport::RATES`.
+    pub replay_rate: usize,
     pub replay_save: Option<u32>,
     pub input: Option<String>,
     pub invuln: bool,
@@ -390,6 +392,7 @@ impl Settings {
             ending: None,
             replay: None,
             replay_speed: 0,
+            replay_rate: crate::transport::NORMAL,
             replay_save: None,
             input: None,
             invuln: false,
@@ -1328,6 +1331,39 @@ pub const ENTRIES: &[Entry] = &[
         help: "replay playback speed",
         set: |s, v| {
             s.replay_speed = num(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "replay_rate",
+        env: "TH08_REPLAY_RATE",
+        kind: Kind::Enum(&["1/4", "1/2", "1", "2", "4", "8"]),
+        default: "1",
+        group: Group::StartGame,
+        label: "Replay rate",
+        summary: "Port playback rate a replay starts at",
+        unit: "×",
+        words: &[
+            ("1/4", "¼×"),
+            ("1/2", "½×"),
+            ("1", "1×"),
+            ("2", "2×"),
+            ("4", "4×"),
+            ("8", "8×"),
+        ],
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
+        help: "port replay transport rate at the start of playback (F7 / F8 change it while it plays)",
+        set: |s, v| {
+            let r =
+                crate::transport::RATES
+                    .iter()
+                    .position(|&(n, d)| match v.trim().split_once('/') {
+                        Some((a, b)) => a == n.to_string() && b == d.to_string(),
+                        None => d == 1 && v.trim() == n.to_string(),
+                    });
+            s.replay_rate = r.ok_or("expected 1/4, 1/2, 1, 2, 4 or 8")?;
             Ok(())
         },
     },
@@ -2294,6 +2330,8 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
              `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
              Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
              The launcher screen turned off (launcher = off): hold Shift while th08 starts to show it again.\n\
+             Keys: F1 port menu, F11 / Alt+Enter fullscreen. While a replay plays: F5 pause / resume, F6 one frame\n\
+             (pauses), F7 slower, F8 faster (¼× ½× 1× 2× 4× 8×).\n\
              port.cfg: {}{}",
             dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string()),
             if cfg!(debug_assertions) {
@@ -2441,12 +2479,20 @@ pub fn save_port_cfg(dirs: &PlatformDirs, key: &str, value: &str) {
 }
 
 // Sets (Some) or removes (None) port.cfg keys in one write; web: localStorage items.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
-    let Some(path) = dirs.port_cfg() else {
-        log::error!("no config directory; port.cfg not saved");
-        return;
-    };
+    if let Err(e) = try_write_port_cfg(dirs, changes) {
+        log::error!("{e}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn try_write_port_cfg(
+    dirs: &PlatformDirs,
+    changes: &[(&str, Option<&str>)],
+) -> Result<(), String> {
+    let path = dirs
+        .port_cfg()
+        .ok_or("no config directory; port.cfg not saved")?;
     let old = std::fs::read_to_string(&path).unwrap_or_default();
     let mut text = drop_dev_keys(&old);
     for &(key, value) in changes {
@@ -2456,19 +2502,19 @@ pub fn write_port_cfg(dirs: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
         }
     }
     if text == old {
-        return;
+        return Ok(());
     }
-    if let Err(e) = crate::platform::write_atomic(&path, text.as_bytes()) {
-        log::error!("{}: {e}", path.display());
-    }
+    crate::platform::write_atomic(&path, text.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn write_port_cfg(_: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
-    let Some(st) = local_storage() else {
-        log::error!("no localStorage; settings not saved");
-        return;
-    };
+pub fn try_write_port_cfg(
+    _: &PlatformDirs,
+    changes: &[(&str, Option<&str>)],
+) -> Result<(), String> {
+    let st = local_storage().ok_or("no localStorage; settings not saved")?;
+    let mut failed = Vec::new();
     for &(key, value) in changes {
         let Some(e) = find(key) else {
             log::error!("localStorage: unknown key {key} not saved");
@@ -2479,9 +2525,28 @@ pub fn write_port_cfg(_: &PlatformDirs, changes: &[(&str, Option<&str>)]) {
             None => st.remove_item(&storage_key(e.key)),
         };
         if res.is_err() {
-            log::error!("localStorage: {key} not saved");
+            failed.push(key);
         }
     }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("localStorage: {} not saved", failed.join(", ")))
+    }
+}
+
+// The saved player rows (port.cfg, web: localStorage) as `key = value` lines in table order; the last line of a key
+// wins, as when it is read.
+pub fn player_port_cfg(dirs: &PlatformDirs) -> String {
+    let saved = read_port_cfg(dirs);
+    ENTRIES
+        .iter()
+        .filter(|e| e.audience == Audience::Player)
+        .filter_map(|e| {
+            let (_, v) = saved.iter().rev().find(|(k, _)| k == e.key)?;
+            Some(format!("{} = {v}\n", e.key))
+        })
+        .collect()
 }
 
 // A port.cfg path relative to the config dir, as the file may be read from any working directory; CLI and env paths

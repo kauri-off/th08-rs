@@ -123,7 +123,12 @@ interface LauncherActions {
     fun packList() {}
     fun packInstall(code: String) {}
     fun packRemove(code: String) {}
+    fun saveExport() {}
+    fun saveImport(portCfg: Boolean) {}
 }
+
+// Save export / import state (Saves.kt).
+val LocalSaves = compositionLocalOf { SaveState() }
 
 // Translation packs: installed ones, the server list and the running download (Packs.kt).
 val LocalPacks = compositionLocalOf { PackState() }
@@ -274,6 +279,10 @@ private fun SettingsList(
     ) {
         if (status != null) item(key = "status") { Block { status() } }
         groupBlocks(groups, player, act, showInfo)
+        item(key = "saves") {
+            Header(str(R.string.saves_title))
+            SavesBlock(act)
+        }
         if (dev.isNotEmpty()) {
             item(key = "dev") {
                 val changed = dev.count { it.value != it.e.default }
@@ -501,6 +510,42 @@ private fun TranslationsBlock(act: LauncherActions) {
                 .padding(16.dp))
     }
     if (list) ServerDialog(st, act) { list = false }
+}
+
+// Export / import of scores, replays and settings as one zip, through the system file picker.
+@Composable
+private fun SavesBlock(act: LauncherActions) {
+    val st = LocalSaves.current
+    var portCfg by rememberSaveable { mutableStateOf(false) }
+    val enabled = !st.busy && !st.gameRunning
+    Block {
+        ShellRow(str(R.string.saves_export), str(R.string.saves_export_summary),
+            modifier = Modifier.clickable(enabled = enabled) { act.saveExport() })
+        ShellRow(str(R.string.saves_import), str(R.string.saves_import_summary),
+            modifier = Modifier.clickable(enabled = enabled) { act.saveImport(portCfg) })
+        ShellRow(str(R.string.saves_port_cfg), str(R.string.saves_port_cfg_summary),
+            modifier = Modifier.toggleable(portCfg, enabled = enabled, role = Role.Switch) { portCfg = it },
+        ) { Switch(checked = portCfg, onCheckedChange = null, enabled = enabled) }
+        val msg = when {
+            st.gameRunning -> str(R.string.saves_game_running)
+            st.busy -> null
+            else -> when (val o = st.outcome) {
+                is SaveOutcome.Exported -> str(R.string.saves_exported, o.files)
+                is SaveOutcome.Imported -> o.backup?.let { str(R.string.saves_imported_backup, o.files) }
+                    ?: str(R.string.saves_imported, o.files)
+                is SaveOutcome.Failed -> str(if (o.export) R.string.saves_export_failed else R.string.saves_import_failed, o.error)
+                null -> null
+            }
+        }
+        if (st.busy) ShellRow(str(R.string.saves_working), null, below = { LinearProgressIndicator(Modifier.fillMaxWidth()) })
+        if (msg != null) {
+            Text(msg, style = MaterialTheme.typography.bodyMedium,
+                color = if (st.outcome is SaveOutcome.Failed || st.gameRunning) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(16.dp))
+        }
+    }
 }
 
 @Composable
