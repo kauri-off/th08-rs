@@ -239,6 +239,16 @@ help = "画面のガンマ（パーセント、100 = 変更なし。上げると
 [entry.brightness.words]
 100 = "標準"
 
+[entry.hitboxes]
+label = "当たり判定表示"
+summary = "当たり判定の形を表示（リプレイは変わらない）"
+help = "当たり判定ビューア: off、player（自機の当たり判定とグレイズ範囲）、all（弾・レーザー・敵も）。ゲーム中は F3 か移植版メニューで切り替え"
+
+[entry.hitboxes.words]
+off = "オフ"
+player = "自機"
+all = "すべて"
+
 [entry.touch]
 label = "タッチオーバーレイ"
 summary = "タッチ画面用の画面上ボタン"

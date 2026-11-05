@@ -290,6 +290,7 @@ pub struct Settings {
     // Open the port menu when the window / tab loses focus in a stage (desktop, web).
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
+    pub hitboxes: crate::platform::hitbox::Hitboxes,
     pub volume: th08_audio::audio::PortVolume,
     pub mute_unfocused: bool,
     pub audio_buffer: Option<u32>,
@@ -372,6 +373,7 @@ impl Settings {
             launcher: true,
             pause_unfocused: true,
             blit: th08_render::gfx::BlitOptions::default(),
+            hitboxes: crate::platform::hitbox::Hitboxes::Off,
             volume: th08_audio::audio::PortVolume::default(),
             mute_unfocused: true,
             audio_buffer: None,
@@ -869,6 +871,26 @@ pub const ENTRIES: &[Entry] = &[
         set: |s, v| {
             let n: u32 = num(v)?;
             s.blit.gamma = n.clamp(50, 200) as f32 / 100.0;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "hitboxes",
+        env: "TH08_HITBOXES",
+        kind: Kind::Enum(&crate::platform::hitbox::Hitboxes::IDS),
+        default: "off",
+        group: Group::Accessibility,
+        label: "Hitboxes",
+        summary: "Outline the collision shapes (replays stay the same)",
+        unit: "",
+        words: &[("off", "Off"), ("player", "Player"), ("all", "All")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "hitbox viewer: off, player (the player's hit box and graze area) or all (plus bullets, lasers and enemies); F3 or the port menu switches it in the game",
+        set: |s, v| {
+            s.hitboxes =
+                crate::platform::hitbox::Hitboxes::parse(v).ok_or("expected off, player or all")?;
             Ok(())
         },
     },
@@ -2330,8 +2352,8 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
              `key = value` line in port.cfg. Priority: command line > env > port.cfg > default.\n\
              Booleans take 1/0, true/false or on/off; `--switch` alone means on, `--no-switch` off.\n\
              The launcher screen turned off (launcher = off): hold Shift while th08 starts to show it again.\n\
-             Keys: F1 port menu, F11 / Alt+Enter fullscreen. While a replay plays: F5 pause / resume, F6 one frame\n\
-             (pauses), F7 slower, F8 faster (¼× ½× 1× 2× 4× 8×).\n\
+             In the game: F1 port menu, F11 or Alt+Enter fullscreen, F3 hitbox viewer (off → player → all). While a\n\
+             replay plays: F5 pause / resume, F6 one frame (pauses), F7 slower, F8 faster (¼× ½× 1× 2× 4× 8×).\n\
              port.cfg: {}{}",
             dirs.port_cfg().map_or("(no config dir)".into(), |p| p.display().to_string()),
             if cfg!(debug_assertions) {

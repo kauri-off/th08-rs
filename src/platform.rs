@@ -3,6 +3,7 @@
 pub mod back;
 pub mod gamepad;
 pub mod gestures;
+pub mod hitbox;
 pub mod overlay;
 pub mod portmenu;
 pub mod safearea;

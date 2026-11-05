@@ -235,6 +235,7 @@ impl ApplicationHandler<UserEvent> for App {
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
                 gfx(&mut r.ctx).blit_options = r.settings.blit;
+                crate::platform::hitbox::install(gfx(&mut r.ctx), r.settings.hitboxes);
                 if self.suspended {
                     r.pacer.suspend();
                     gfx(&mut r.ctx).detach();
@@ -862,6 +863,14 @@ impl App {
                     transport_act(r, a);
                 }
             }
+            // Port-only hitbox viewer key: the press does not reach the game.
+            WindowEvent::KeyboardInput { event, .. }
+                if event.physical_key == PhysicalKey::Code(crate::platform::hitbox::KEY) =>
+            {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    crate::platform::hitbox::cycle(gfx(&mut r.ctx));
+                }
+            }
             // Android Back (button, gesture, a pad's Back key): one X pulse in menus, one Esc pulse in play and in the
             // pause menu, through the touch source so replays record it like a key.
             WindowEvent::KeyboardInput { event, .. } if is_back(&event) => {
@@ -1092,6 +1101,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
         Vec::new()
     };
     crate::platform::gestures::set_exclusion(&excl);
+    crate::platform::hitbox::update(&mut r.ctx);
     r.ctx.draw();
     // Debug `TH08_SHOT` frame (`TH08_SHOT_SIZE=WxH`: through the window's scaling blit).
     #[cfg(not(target_arch = "wasm32"))]

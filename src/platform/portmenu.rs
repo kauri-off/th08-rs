@@ -119,13 +119,19 @@ impl PortMenu {
         let (edit, touch) = (&mut self.edit, self.touch.is_some());
         let mut open_edit = false;
         let mut done = None;
+        let hitboxes = super::hitbox::mode(gfx);
+        let mut cycle = false;
         let mut out = self.ctx.run_pass(raw, |ctx| {
             if let Some(e) = edit {
                 done = e.ui(ctx, lang, ppp);
             } else {
-                (act, open_edit) = menu_ui(ctx, lang, pad, touch, cheats);
+                (act, open_edit, cycle) = menu_ui(ctx, lang, pad, touch, cheats, hitboxes);
             }
         });
+        if cycle {
+            super::hitbox::cycle(gfx);
+            window.request_redraw();
+        }
         match done {
             Some(EditOut::Save(l)) => {
                 if let Some(t) = &mut self.touch {
@@ -171,16 +177,19 @@ impl PortMenu {
     }
 }
 
-// The menu box; also whether the layout editor was asked for (`touch`: the overlay is on).
+// The menu box; also whether the layout editor was asked for (`touch`: the overlay is on) and whether the hitbox
+// mode is to be cycled.
 fn menu_ui(
     ctx: &egui::Context,
     lang: Lang,
     pad: Option<&str>,
     touch: bool,
     cheats: &[&str],
-) -> (Option<Action>, bool) {
+    hitboxes: super::hitbox::Hitboxes,
+) -> (Option<Action>, bool, bool) {
     let mut act = None;
     let mut edit = false;
+    let mut cycle = false;
     let screen = ctx.content_rect();
     ctx.layer_painter(LayerId::new(Order::Background, Id::unique("dim")))
         .rect_filled(screen, 0.0, Color32::from_black_alpha(150));
@@ -208,6 +217,8 @@ fn menu_ui(
                             edit = ui.button(i18n::ui(lang, "touch_edit")).clicked();
                         }
                         ui.add_space(4.0);
+                        cycle = ui.button(hitboxes_label(lang, hitboxes)).clicked();
+                        ui.add_space(4.0);
                         let keys = if cfg!(target_os = "android") {
                             i18n::ui(lang, "key_back")
                         } else {
@@ -222,7 +233,14 @@ fn menu_ui(
                     });
                 });
         });
-    (act, edit)
+    (act, edit, cycle)
+}
+
+// "Hitboxes: Off", from the settings row's label and words.
+fn hitboxes_label(lang: Lang, m: super::hitbox::Hitboxes) -> String {
+    let e = crate::settings::find("hitboxes").expect("hitboxes row");
+    let word = i18n::word(lang, e, m.id()).unwrap_or(m.id());
+    format!("{}: {word}", i18n::label(lang, e))
 }
 
 fn paint(

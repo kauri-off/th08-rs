@@ -8,7 +8,7 @@ use th08_render::gfx::{Overlay, OverlayTarget};
 
 // An egui painter-only pass: its context and renderer; the renderer is made on the first paint (it needs the target
 // format).
-struct Pass {
+pub(crate) struct Pass {
     lang: Lang,
     // The `font` setting, tried first for the CJK face of Japanese labels.
     font: Option<String>,
@@ -82,7 +82,7 @@ pub(crate) fn button(p: &egui::Painter, centre: Pos2, r: f32, text: &str, a: f32
 }
 
 impl Pass {
-    fn new(lang: Lang, font: Option<String>) -> Self {
+    pub(crate) fn new(lang: Lang, font: Option<String>) -> Self {
         let mut p = Self {
             lang,
             font,
@@ -94,6 +94,11 @@ impl Pass {
         p
     }
 
+    // The renderer belonged to the lost device; the next paint makes a new one and a fresh context.
+    pub(crate) fn device_rebuilt(&mut self) {
+        self.renderer = None;
+    }
+
     fn fresh_context(&mut self) {
         self.ctx = egui::Context::default();
         if self.lang == Lang::Ja {
@@ -102,7 +107,7 @@ impl Pass {
     }
 
     // `shapes` on a foreground painter over the whole target (1 point = 1 px), then rendered onto it.
-    fn paint(
+    pub(crate) fn paint(
         &mut self,
         t: OverlayTarget<'_>,
         enc: &mut wgpu::CommandEncoder,

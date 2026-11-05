@@ -229,6 +229,8 @@ pub struct OverlayTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub format: wgpu::TextureFormat,
     pub size: (u32, u32),
+    // Where `blit` puts the 640×480 frame in the target: `[x, y, w, h]` px (`Gfx::frame_rect`).
+    pub frame: [f32; 4],
 }
 
 // Port-only: physical px of the window kept clear on each edge (Android display cutout, rounded corners, system
@@ -406,6 +408,8 @@ pub struct Gfx {
     pub overlay: Option<Box<dyn Overlay>>,
     // Port labels and strips (app), painted after `overlay`.
     pub hud: Option<Box<dyn Overlay>>,
+    // Read-only game-state overlay (hitbox viewer), painted after `overlay`.
+    pub overlay_top: Option<Box<dyn Overlay>>,
     // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
     pub safe: SafeArea,
     pub blit_options: BlitOptions,
@@ -992,6 +996,7 @@ impl Gfx {
             surface,
             overlay: None,
             hud: None,
+            overlay_top: None,
             safe: SafeArea::default(),
             blit_options: BlitOptions::default(),
             instance,
@@ -1077,7 +1082,10 @@ impl Gfx {
         self.reconfigure();
         self.reupload();
         self.generation += 1;
-        for o in [&mut self.overlay, &mut self.hud].into_iter().flatten() {
+        for o in [&mut self.overlay, &mut self.hud, &mut self.overlay_top]
+            .into_iter()
+            .flatten()
+        {
             o.device_rebuilt();
         }
         Ok(())
@@ -1843,6 +1851,7 @@ impl Gfx {
             view: &target,
             format: self.config.format,
             size,
+            frame: self.frame_rect(size.0, size.1),
         };
         paint(t, &mut enc);
         self.queue.submit([enc.finish()]);
@@ -1869,16 +1878,38 @@ impl Gfx {
         view: &wgpu::TextureView,
         size: (u32, u32),
     ) {
-        for o in [&mut self.overlay, &mut self.hud].into_iter().flatten() {
+        let frame = self.frame_rect(size.0, size.1);
+        for o in [&mut self.overlay, &mut self.hud, &mut self.overlay_top]
+            .into_iter()
+            .flatten()
+        {
             let t = OverlayTarget {
                 device: &self.device,
                 queue: &self.queue,
                 view,
                 format: self.config.format,
                 size,
+                frame,
             };
             o.paint(t, enc);
         }
+    }
+
+    // The letterboxed frame rect `[x, y, w, h]` of a w×h target: the safe rect, scaled (whole steps with
+    // `integer_scale`), centred.
+    pub fn frame_rect(&self, w: u32, h: u32) -> [f32; 4] {
+        let [x, y, w, h] = self.safe.rect(w, h);
+        let mut scale = (w / SCREEN_W).min(h / SCREEN_H);
+        if self.blit_options.integer && scale >= 1.0 {
+            scale = scale.floor();
+        }
+        let (vw, vh) = ((SCREEN_W * scale).round(), (SCREEN_H * scale).round());
+        [
+            x + ((w - vw) / 2.0).floor(),
+            y + ((h - vh) / 2.0).floor(),
+            vw,
+            vh,
+        ]
     }
 
     // Letterboxed, scaled copy of the 640x480 frame into the safe rect of a w×h target.
@@ -1897,20 +1928,8 @@ impl Gfx {
             ..Default::default()
         });
         let o = self.blit_options;
-        let [x, y, w, h] = self.safe.rect(w, h);
-        let mut scale = (w / SCREEN_W).min(h / SCREEN_H);
-        if o.integer && scale >= 1.0 {
-            scale = scale.floor();
-        }
-        let (vw, vh) = ((SCREEN_W * scale).round(), (SCREEN_H * scale).round());
-        pass.set_viewport(
-            x + ((w - vw) / 2.0).floor(),
-            y + ((h - vh) / 2.0).floor(),
-            vw,
-            vh,
-            0.0,
-            1.0,
-        );
+        let [x, y, vw, vh] = self.frame_rect(w, h);
+        pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
         let frame = if o.filter == ScaleFilter::Nearest {
             &self.gpu.frame_near
         } else {
