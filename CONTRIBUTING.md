@@ -41,6 +41,11 @@ agents alike. Parity rules for logic and drawing: [docs/PARITY_POLICY.md](docs/P
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` until it ends.
 - Windowed binaries in automated runs go through `tools/offscreen <cmd>`.
 
+CI (`.github/workflows/check.yml`, on every push to `master` and every pull request) runs `cargo fmt --check`,
+clippy with `-D warnings`, `cargo test --workspace`, the wasm and aarch64 Android `cargo check` and
+`tools/spec_refs.py`. It has no game data, so tests that need `TH08_DIR` skip there, and arch_check, the replay
+batches and the emulator stay local: `tools/check_level` says which of them a change needs.
+
 ## Game data and replays
 
 The repository contains no game data. Everything that runs the game, including the tests with game data and the

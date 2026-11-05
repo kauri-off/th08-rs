@@ -1,5 +1,7 @@
 # th08: 東方永夜抄を Rust でゼロから作り直す
 
+[![Check](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml/badge.svg?branch=master)](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml)
+
 [English](README.md) · [Русский](README.ru.md)
 
 東方永夜抄 ~ Imperishable Night（上海アリス幻樂団、2004年）を Rust で再実装した、非公式のファンプロジェクトです。上海アリス幻樂団とは
@@ -69,7 +71,7 @@ Android 版には 3 つのチャンネルがあります。`release`（`org.th08
 - **ゲームはすべて揃っています。** Extra を含む全ステージ、12 種類すべてのショット、ボムとラストスペル、
   スペルカード、会話、夜の時計、メニュー、オプション、リプレイ、`score.dat`、エンディング、ミュージックルーム、
   BGM。
-- **動作環境は** Windows と Linux（ネイティブ）、そしてブラウザ（WebAssembly、WebGPU または WebGL2）です。
+- **動作環境は** Windows、Linux、Android（ネイティブ）、そしてブラウザ（WebAssembly、WebGPU または WebGL2）です。
 
 ## 現在
 

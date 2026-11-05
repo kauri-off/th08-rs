@@ -1,0 +1,115 @@
+name: Check
+
+# What runs without game data: fmt, clippy, unit tests, the wasm and Android builds, spec citations. arch_check, the
+# replay batches and the emulator need th08.dat and stay local (tools/check_level).
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  spec-refs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Exits 1 on any broken `NN §x.y` citation.
+      - run: python3 tools/spec_refs.py
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # One key per job, saved from master only: PR runs restore master's cache and do not evict it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-clippy
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-test
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      # No TH08_DIR here: tests that need th08.dat skip.
+      - run: cargo test --locked --workspace
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-wasm
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      # The libs pages.yml builds, checked only (no wasm-bindgen, no bundle).
+      - run: cargo check --locked --release --workspace --lib --target wasm32-unknown-unknown
+        env:
+          RUSTFLAGS: -D warnings
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-android
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Android NDK
+        run: |
+          sdkmanager --install "ndk;27.1.12297006" > /dev/null
+          echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+      # android_check exits 0 with "android skipped" when the target or NDK is missing; in CI that is a failure.
+      - name: cargo check aarch64-linux-android
+        run: |
+          out=$(V=1 tools/android_check) || true
+          echo "$out"
+          grep -qx 'android ok' <<< "$out"

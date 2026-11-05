@@ -1,5 +1,7 @@
 # th08: Touhou 8, заново написанный на Rust
 
+[![Check](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml/badge.svg?branch=master)](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml)
+
 [English](README.md) · [日本語](README.ja.md)
 
 Это неофициальная фанатская реимплементация 東方永夜抄 ~ Imperishable Night (Team Shanghai Alice, 2004) на Rust. Проект
@@ -70,7 +72,7 @@
   субпиксельному округлению или к кадру, на котором закончил работу загрузчик.
 - **Игра есть целиком:** все уровни, включая Extra, все 12 типов стрельбы, бомбы и Last Spell, спелл-карты, диалоги,
   ночные часы, меню, настройки, реплеи, `score.dat`, концовки, музыкальная комната и музыка.
-- **Работает** нативно на Windows и Linux и в браузере через WebAssembly (WebGPU или WebGL2).
+- **Работает** нативно на Windows, Linux и Android и в браузере через WebAssembly (WebGPU или WebGL2).
 
 ## Что сейчас
 

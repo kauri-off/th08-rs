@@ -1,5 +1,7 @@
 # th08: Touhou 8 rebuilt from scratch in Rust
 
+[![Check](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml/badge.svg?branch=master)](https://github.com/kauri-off/th08-rs/actions/workflows/check.yml)
+
 [Русский](README.ru.md) · [日本語](README.ja.md)
 
 This is an unofficial fan reimplementation of 東方永夜抄 ~ Imperishable Night (Team Shanghai Alice, 2004), written in
@@ -71,7 +73,7 @@ became a question for the dirty room, never a patch that just made the numbers m
   as sub-pixel floating-point rounding or the frame on which a loader finishes.
 - **The whole game is there:** all stages including Extra, all 12 shot types, bombs and Last Spells, spell cards,
   dialogue, the night clock, menus, options, replays, `score.dat`, endings, the music room and BGM.
-- **It runs** natively on Windows and Linux, and in the browser through WebAssembly with WebGPU or WebGL2.
+- **It runs** natively on Windows, Linux and Android, and in the browser through WebAssembly with WebGPU or WebGL2.
 
 ## Where it is now
 
