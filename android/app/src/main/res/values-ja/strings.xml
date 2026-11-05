@@ -87,4 +87,7 @@
   <string name="last_failed_share">レポートを共有</string>
   <string name="last_failed_dismiss">閉じる</string>
   <string name="last_failed_subject">th08 エラーレポート</string>
+  <string name="update_available">バージョン %1$s が公開されています</string>
+  <string name="update_notes">更新内容</string>
+  <string name="update_download">ダウンロード</string>
 </resources>

@@ -310,6 +310,38 @@ pub mod bridge {
     }
 
     fn start(game: PathBuf, files: Vec<(String, File)>, s: &mut State) -> bool {
+        spawn(s, move |cancel, progress| {
+            let r = fs::create_dir_all(&game)
+                .map_err(Error::from)
+                .and_then(|()| {
+                    run(
+                        files,
+                        &game,
+                        &Options::default(),
+                        Some(cancel.clone()),
+                        Ctl::new(cancel, progress),
+                    )
+                });
+            if r.is_err() {
+                let _ = fs::remove_dir_all(game.join(WORK_DIR));
+            }
+            r
+        })
+    }
+
+    fn lock() -> std::sync::MutexGuard<'static, State> {
+        STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    // Runs `job` on a thread unless one is running; a panic in it ends the job as failed.
+    fn spawn(
+        s: &mut State,
+        job: impl FnOnce(&Arc<AtomicBool>, &(dyn Fn(Stage, u64, u64) + Sync)) -> Result<()>
+        + Send
+        + 'static,
+    ) -> bool {
         if s.busy {
             return false;
         }
@@ -322,37 +354,31 @@ pub mod bridge {
         s.thread = Some(std::thread::spawn(move || {
             let clock = std::time::Instant::now();
             let progress = |st: Stage, done: u64, total: u64| {
-                let mut s = STATE
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut s = lock();
                 (s.stage, s.done, s.total) = (Some(st), done, total);
             };
-            let r = fs::create_dir_all(&game)
-                .map_err(Error::from)
-                .and_then(|()| {
-                    run(
-                        files,
-                        &game,
-                        &Options::default(),
-                        Some(cancel.clone()),
-                        Ctl::new(&cancel, &progress),
-                    )
-                });
-            // An encoder stopped by the flag reports an io error; the flag decides.
-            let r = if cancel.load(Ordering::Relaxed) && r.is_err() {
-                Err(Error::Cancelled)
-            } else {
-                r
+            let r =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&cancel, &progress)));
+            let outcome = match r {
+                Ok(Ok(())) => ("ok", String::new()),
+                // An encoder stopped by the flag reports an io error; the flag decides.
+                Ok(Err(_)) if cancel.load(Ordering::Relaxed) => {
+                    (kind(&Error::Cancelled), Error::Cancelled.to_string())
+                }
+                Ok(Err(e)) => (kind(&e), e.to_string()),
+                Err(p) => {
+                    let m = p
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_owned())
+                        .or_else(|| p.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "panic".into());
+                    ("failed", format!("internal error: {m}"))
+                }
             };
-            let mut s = STATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut s = lock();
             s.busy = false;
             s.secs = clock.elapsed().as_secs_f64();
-            s.outcome = Some(match r {
-                Ok(()) => ("ok", String::new()),
-                Err(e) => (kind(&e), e.to_string()),
-            });
+            s.outcome = Some(outcome);
         }));
         true
     }
@@ -363,9 +389,7 @@ pub mod bridge {
             Err(e) => return json!({"error": format!("bad request: {e}")}).to_string(),
         };
         let game = r["game"].as_str().map(PathBuf::from);
-        let mut s = STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut s = lock();
         let accepted = match r["op"].as_str().unwrap_or("status") {
             "start" => {
                 let files: Vec<(String, File)> = r["files"]
@@ -391,13 +415,18 @@ pub mod bridge {
         v.to_string()
     }
 
+    #[cfg(test)]
+    pub(super) fn spawn_test(
+        job: impl FnOnce(&Arc<AtomicBool>, &(dyn Fn(Stage, u64, u64) + Sync)) -> Result<()>
+        + Send
+        + 'static,
+    ) -> bool {
+        spawn(&mut lock(), job)
+    }
+
     // Blocks until the running job ended (tests and tools).
     pub fn wait() {
-        let t = STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .thread
-            .take();
+        let t = lock().thread.take();
         if let Some(t) = t {
             let _ = t.join();
         }
@@ -622,10 +651,33 @@ mod tests {
         fs::remove_dir_all(&d).unwrap();
     }
 
+    // The bridge's job state is global: its tests take turns.
+    static BRIDGE: Mutex<()> = Mutex::new(());
+
+    // A panicking job ends as failed, not busy, and the next start is accepted.
+    #[test]
+    fn bridge_job_panic() {
+        let _t = BRIDGE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(bridge::spawn_test(|_, _| panic!("boom")));
+        bridge::wait();
+        let v: serde_json::Value =
+            serde_json::from_str(&bridge::handle(r#"{"op": "status"}"#)).unwrap();
+        assert_eq!(v["busy"], false);
+        assert_eq!(v["outcome"]["kind"], "failed", "{v}");
+        assert_eq!(v["outcome"]["message"], "internal error: boom");
+        assert!(bridge::spawn_test(|_, _| Ok(())));
+        bridge::wait();
+    }
+
     #[cfg(unix)]
     #[test]
     fn bridge_job() {
         use std::os::fd::IntoRawFd;
+        let _t = BRIDGE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let d = tmp("bridge");
         let (dat, _) = fixture();
         fs::write(d.join("th08.dat"), &dat).unwrap();

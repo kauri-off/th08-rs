@@ -76,13 +76,15 @@ pub fn server_languages(c: &Client) -> Result<Vec<ServerLang>> {
                 .collect();
             let text: BTreeSet<String> = files.keys().filter(|n| th08_text(n)).cloned().collect();
             let images = files.keys().filter(|n| thpatch::is_image(n)).count();
-            rows.lock().unwrap().insert(
+            crate::lock(&rows).insert(
                 id.clone(),
                 (title.clone(), base, text, images, thpatch::revision(&raw)),
             );
         }
     });
-    let rows = rows.into_inner().unwrap();
+    let rows = rows
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut out = Vec::new();
     for (id, (title, _, own, _, rev)) in &rows {
         // Base chain, nearest first; files of the whole chain count.

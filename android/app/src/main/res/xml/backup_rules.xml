@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup (Android 6–11): the saves only; game data, packs and picked files stay out. -->
+<full-backup-content>
+  <include domain="file" path="score.dat"/>
+  <include domain="file" path="th08.cfg"/>
+  <include domain="file" path="port.cfg"/>
+  <include domain="file" path="replay/"/>
+</full-backup-content>

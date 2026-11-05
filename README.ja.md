@@ -27,6 +27,10 @@
 Android 版には 3 つのチャンネルがあります。`release`（`org.th08.port`）が GitHub で配布しているもので、`dev` と
 `debug` はローカルビルドです。詳細、正確なパス、操作方法：[docs/PLAYING.md](docs/PLAYING.md)（英語）。
 
+アップデート：新しいリリースが出るとランチャーに表示されます（1 日 1 回まで、オフにできます）。Android では
+[Obtainium](https://github.com/ImranR98/Obtainium) で GitHub のリリースを追跡できます。Linux の AppImage は
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) で自動更新できます。
+
 ## 目指したこと
 
 原作に「似ている」移植ではなく、原作と「同じ」移植を作りたいと考えました。基準は厳しく、同じ入力を与えたら、

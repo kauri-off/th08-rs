@@ -40,6 +40,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
@@ -134,10 +135,14 @@ interface LauncherActions {
     fun removeGame() {}
     fun shareError() {}
     fun dismissError() {}
+    fun openUrl(url: String) {}
 }
 
 // The previous run's last_error.txt (written by the game process), null when there is none.
 val LocalLastError = compositionLocalOf<String?> { null }
+
+// A newer release found by the update check (UpdateCheck.kt), null when there is none.
+val LocalUpdate = compositionLocalOf<UpdateInfo?> { null }
 
 // Save export / import state (Saves.kt).
 val LocalSaves = compositionLocalOf { SaveState() }
@@ -202,6 +207,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                         }
                         ResetMenu(act)
                     }
+                    LocalUpdate.current?.let { Block { UpdateRow(it, act) } }
                     LocalLastError.current?.let { Block { LastErrorRow(it, act) } }
                     Block { StatusRow(data, act, showInfo) }
                     PlayButton(canPlay, act)
@@ -247,6 +253,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
             Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.TopCenter) {
                 SettingsList(groups, rows, act, showInfo, PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     status = {
+                        LocalUpdate.current?.let { UpdateRow(it, act) }
                         LocalLastError.current?.let { LastErrorRow(it, act) }
                         StatusRow(data, act, showInfo)
                     })
@@ -393,6 +400,25 @@ private fun headline(report: String): String {
     val body = report.substringAfter("\n\n", report).substringAfter(":\n")
     return listOf("\nbacktrace:\n", "\nlast warnings:\n").map { body.indexOf(it) }.filter { it >= 0 }
         .minOrNull().let { if (it == null) body else body.substring(0, it) }.trim()
+}
+
+@Composable
+private fun UpdateRow(u: UpdateInfo, act: LauncherActions) {
+    Column(
+        Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Spacer(Modifier.width(16.dp))
+            Text(str(R.string.update_available, u.version), style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { act.openUrl(u.page) }) { Text(str(R.string.update_notes)) }
+            TextButton(onClick = { act.openUrl(u.download) }) { Text(str(R.string.update_download)) }
+        }
+    }
 }
 
 @Composable

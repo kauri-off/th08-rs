@@ -22,6 +22,7 @@
   <label class="btn">Select game folder<input id="dir" type="file" webkitdirectory hidden></label>
   <label class="btn">Select files<input id="files" type="file" multiple accept=".dat" hidden></label>
   <div id="cached" hidden><button id="play">Play (files remembered)</button> <button id="forget">Forget files</button></div>
+  <p><small>Saves live in this browser's storage; export them from the launcher's Saves section now and then.</small></p>
   <p id="status"></p>
 </div>
 <pre id="error" hidden></pre>
@@ -35,25 +36,48 @@ async function opfs() {
   try { return await navigator.storage.getDirectory(); } catch { return null; }
 }
 
+// Stored game files, any letter case (older pages kept the picked name, e.g. TH08.DAT).
+async function storedNames(root) {
+  const out = [];
+  try {
+    for await (const n of root.keys()) if (NEEDED.includes(n.toLowerCase())) out.push(n);
+  } catch {}
+  return out;
+}
+
 async function cachedFiles() {
   const root = await opfs();
   if (!root) return [];
-  const out = [];
-  for (const n of NEEDED) {
-    try { out.push(await (await root.getFileHandle(n)).getFile()); } catch {}
+  const byName = new Map();
+  for (const n of await storedNames(root)) {
+    const k = n.toLowerCase();
+    if (byName.has(k) && n !== k) continue;
+    try { byName.set(k, await (await root.getFileHandle(n)).getFile()); } catch {}
   }
-  return out;
+  return [...byName.values()];
 }
 
 async function remember(files) {
   const root = await opfs();
   if (!root) return;
+  const old = await storedNames(root);
   for (const f of files) {
+    const n = f.name.toLowerCase();
     try {
-      const w = await (await root.getFileHandle(f.name, { create: true })).createWritable();
+      const w = await (await root.getFileHandle(n, { create: true })).createWritable();
       await f.stream().pipeTo(w);
+      for (const o of old) if (o !== n && o.toLowerCase() === n) await root.removeEntry(o).catch(() => {});
     } catch (e) { console.warn("could not cache", f.name, e); }
   }
+}
+
+// Saves and game files are best-effort storage; ask the browser to keep them (a no-op where unsupported).
+async function persist() {
+  try {
+    if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) {
+      console.info("persistent storage", await navigator.storage.persist() ? "granted" : "refused");
+    }
+  } catch (e) { console.warn("persistent storage", e); }
 }
 
 async function launch(files) {
@@ -74,8 +98,10 @@ async function launch(files) {
 
 async function picked(list) {
   const files = [...list].filter((f) => NEEDED.includes(f.name.toLowerCase()));
+  const kept = persist();
   status("Saving files in browser storage…");
   await remember(files);
+  await kept;
   const cached = await cachedFiles();
   launch(cached.length >= files.length ? cached : files);
 }
@@ -85,7 +111,7 @@ document.getElementById("files").onchange = (e) => picked(e.target.files);
 document.getElementById("play").onclick = async () => launch(await cachedFiles());
 document.getElementById("forget").onclick = async () => {
   const root = await opfs();
-  for (const n of NEEDED) { try { await root.removeEntry(n); } catch {} }
+  if (root) for (const n of await storedNames(root)) { try { await root.removeEntry(n); } catch {} }
   document.getElementById("cached").hidden = true;
 };
 cachedFiles().then((f) => { if (f.length) document.getElementById("cached").hidden = false; });

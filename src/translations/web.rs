@@ -154,7 +154,7 @@ async fn install(code: &str, r: &Report) -> anyhow::Result<f64> {
     let v = vanilla().await?;
     let c = Client::new();
     let f = rounds(&c, r, || manage::fetch(&c, code, config, &Lines(r))).await?;
-    r.state.lock().unwrap().building = true;
+    super::lock(&r.state).building = true;
     (r.repaint)();
     yield_frame().await;
     let sum = manage::install_fetched(code, &f, &v, config, r)?;
@@ -178,7 +178,7 @@ impl Manager {
         F: Future<Output = Option<Outcome>> + 'static,
     {
         {
-            let mut s = self.state.lock().unwrap();
+            let mut s = super::lock(&self.state);
             if s.busy.is_some() {
                 return false;
             }
@@ -193,7 +193,7 @@ impl Manager {
             let repaint = r.repaint.clone();
             let out = job(r).await;
             let _ = vfs::remove_dir_all(CONFIG);
-            let mut s = state.lock().unwrap();
+            let mut s = super::lock(&state);
             if out.is_some() {
                 s.outcome = out;
             }
@@ -209,7 +209,7 @@ impl Manager {
             let c = Client::new();
             match rounds(&c, &r, || manage::server_languages(&c)).await {
                 Ok(l) => {
-                    r.state.lock().unwrap().server = Some(l);
+                    super::lock(&r.state).server = Some(l);
                     None
                 }
                 Err(e) => Some(Outcome::Failed {
@@ -225,7 +225,7 @@ impl Manager {
         let code = code.to_string();
         self.start(&code.clone(), |r| async move {
             let res = install(&code, &r).await;
-            r.state.lock().unwrap().generation += 1;
+            super::lock(&r.state).generation += 1;
             Some(match res {
                 Ok(percent) => Outcome::Installed {
                     lang: code,
@@ -243,7 +243,7 @@ impl Manager {
         let code = code.to_string();
         self.start(&code.clone(), |r| async move {
             let res = crate::packs::web::delete(&format!("lang_{code}")).await;
-            r.state.lock().unwrap().generation += 1;
+            super::lock(&r.state).generation += 1;
             Some(match res {
                 Ok(()) => Outcome::Removed { lang: code },
                 Err(error) => Outcome::Failed { lang: code, error },

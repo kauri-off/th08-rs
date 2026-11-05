@@ -361,6 +361,16 @@ pub struct Model {
     pub view: View,
     // The previous run's `last_error.txt`, shown until dismissed or Play.
     last_error: Option<String>,
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    update: Update,
+}
+
+// The update check: started on the first settings screen frame, so never when the launcher is skipped.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+enum Update {
+    Off,
+    Pending,
+    Running(crate::update::Background),
 }
 
 // Save export / import on the settings screen: the port.cfg box and the last outcome (Ok / Err message).
@@ -415,6 +425,12 @@ impl Model {
             saves: SavesUi::default(),
             view: View::Settings,
             last_error,
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            update: if crate::update::wanted(s) {
+                Update::Pending
+            } else {
+                Update::Off
+            },
         };
         m.refresh_installed();
         m
@@ -596,6 +612,49 @@ impl Model {
         }
     }
 
+    // "Version X is available" with What is new / Download (update.rs).
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn update_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        if matches!(self.update, Update::Pending) {
+            let on = self.row("update_check").value == Value::Bool(true);
+            self.update = if on {
+                let ctx = ui.ctx().clone();
+                Update::Running(crate::update::Background::start(
+                    self.dirs.config.clone(),
+                    move || ctx.request_repaint(),
+                ))
+            } else {
+                Update::Off
+            };
+        }
+        let Update::Running(bg) = &self.update else {
+            return;
+        };
+        let Some(r) = bg.get() else {
+            return;
+        };
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(i18n::ui_fmt(
+                        lang,
+                        "update_available",
+                        &[("version", &r.version)],
+                    ))
+                    .strong(),
+                );
+                for (key, url) in [("update_notes", &r.page), ("update_download", &r.download)] {
+                    if ui.button(i18n::ui(lang, key)).clicked()
+                        && let Err(e) = open::that_detached(url)
+                    {
+                        log::warn!("{url}: {e}");
+                    }
+                }
+            });
+        });
+        ui.add_space(6.0);
+    }
+
     // Active Cheats rows as edited on screen (keys).
     fn active_cheats(&self) -> Vec<&'static str> {
         self.rows
@@ -693,6 +752,8 @@ impl Model {
         });
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
+                #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+                self.update_ui(ui, lang);
                 self.last_error_ui(ui, lang);
                 if !self.dev {
                     let active: Vec<&str> = self

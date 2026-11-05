@@ -146,6 +146,20 @@ fn db_gain(db: i32) -> f32 {
     }
 }
 
+// The mixer is plain data: a panic elsewhere must not take the game thread's sound commands down with it.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+// The output callback: a panic inside the mixer gives silence for this buffer and drops the synth.
+fn render_guarded(mixer: &Mutex<Mixer>, out: &mut [f32], channels: usize) {
+    let mut m = lock(mixer);
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.render(out, channels))).is_err() {
+        m.drop_synth();
+        out.fill(0.0);
+    }
+}
+
 #[derive(Default)]
 struct Mixer {
     voices: Vec<Voice>,
@@ -188,6 +202,16 @@ impl Mixer {
             self.midi = Some(p);
         }
         self.midi.as_mut()
+    }
+
+    // After a panic inside `render`: MIDI music stops until a new SoundFont load, WAV and SE go on.
+    fn drop_synth(&mut self) {
+        log::error!("audio: the mixer panicked; MIDI synth dropped, this callback is silent");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.midi = None;
+            self.font = None;
+        }
     }
 
     #[expect(clippy::cast_sign_loss, reason = "voice positions are ≥ 0")]
@@ -355,7 +379,7 @@ impl Audio {
         match crate::midi::load_soundfont(&p) {
             Ok(f) => {
                 log::info!("midi: soundfont {}", p.display());
-                self.mixer.lock().unwrap().font = Some(f);
+                lock(&self.mixer).font = Some(f);
                 true
             }
             Err(e) => {
@@ -378,9 +402,9 @@ impl Audio {
             SoundCmd::Wav(c) => match c {
                 WavCmd::Play(t) => self.play_wav(t),
                 WavCmd::Stop => self.stop_wav(),
-                WavCmd::Pause(on) => self.mixer.lock().unwrap().stopped = on,
+                WavCmd::Pause(on) => lock(&self.mixer).stopped = on,
                 WavCmd::Release => self.release_bgm(),
-                WavCmd::Volume(db) => self.mixer.lock().unwrap().volume = db_gain(db),
+                WavCmd::Volume(db) => lock(&self.mixer).volume = db_gain(db),
             },
             SoundCmd::Midi(c) => match c {
                 MidiCmd::Load { slot, name } => self.midi_load_slot(slot, &name),
@@ -404,7 +428,7 @@ impl Audio {
                 }
                 MidiCmd::Fade(ms) => {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(p) = self.mixer.lock().unwrap().midi() {
+                    if let Some(p) = lock(&self.mixer).midi() {
                         p.seq.fade(ms);
                     }
                     #[cfg(target_arch = "wasm32")]
@@ -455,7 +479,7 @@ impl Audio {
             self.midi_open = slot_id(slot);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = self.mixer.lock().unwrap().midi() {
+        if let Some(p) = lock(&self.mixer).midi() {
             p.seq.open(song);
         }
         #[cfg(target_arch = "wasm32")]
@@ -465,7 +489,7 @@ impl Audio {
     // Midi_Play 0x444620: Midi_Rewind, then the 1 ms timer starts; nothing without parsed tracks.
     fn midi_play(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = self.mixer.lock().unwrap().midi()
+        if let Some(p) = lock(&self.mixer).midi()
             && p.seq.has_tracks()
         {
             p.seq.rewind();
@@ -476,7 +500,7 @@ impl Audio {
     // Midi_Stop 0x444680: timer killed, midiOutReset (all notes off), open slot := −1; nothing without parsed tracks.
     fn midi_stop(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = self.mixer.lock().unwrap().midi.as_mut() {
+        if let Some(p) = lock(&self.mixer).midi.as_mut() {
             if !p.seq.has_tracks() {
                 return;
             }
@@ -492,7 +516,7 @@ impl Audio {
 
     // Port: silence the output without holding it (window unfocused); BGM and SE keep playing underneath.
     pub fn set_muted(&mut self, on: bool) {
-        self.mixer.lock().unwrap().muted = on;
+        lock(&self.mixer).muted = on;
     }
 
     // Must be called from a user gesture on the web (AudioContext policy).
@@ -583,7 +607,7 @@ impl Audio {
     // Play command: the stored part of the track (never past loop_end), read in the background.
     fn play_wav(&mut self, t: Track) {
         let generation = {
-            let mut m = self.mixer.lock().unwrap();
+            let mut m = lock(&self.mixer);
             m.generation += 1;
             m.music = None;
             m.stopped = false;
@@ -592,12 +616,12 @@ impl Audio {
         let (source, mixer, cell) = (self.source.clone(), self.mixer.clone(), self.bgm.clone());
         spawn(async move {
             let t0 = web_time::Instant::now();
-            let known = cell.lock().unwrap().clone();
+            let known = lock(&cell).clone();
             let bgm = if let Some(b) = known {
                 b
             } else {
                 let b = Arc::new(BgmSource::resolve(&source).await);
-                cell.lock().unwrap().get_or_insert(b).clone()
+                lock(&cell).get_or_insert(b).clone()
             };
             // Port: the fill stage needs only the first ring, so the Music starts as soon as 4.0 s (or the whole shorter
             // track) are decoded; the rest is appended while it plays. Decoding stops when the track is replaced or released.
@@ -608,9 +632,9 @@ impl Audio {
             let mut w = PcmWriter::with(pcm.clone(), move |p, ready| {
                 if !started {
                     if ready < first {
-                        return m2.lock().unwrap().generation == generation;
+                        return lock(&m2).generation == generation;
                     }
-                    let mut m = m2.lock().unwrap();
+                    let mut m = lock(&m2);
                     if m.generation != generation {
                         return false;
                     }
@@ -628,7 +652,7 @@ impl Audio {
             match bgm.stream(&source, &t, &mut w).await {
                 Ok(()) if pcm.ready() == pcm.len() => {
                     if pcm.is_empty() {
-                        let mut m = mixer.lock().unwrap();
+                        let mut m = lock(&mixer);
                         if m.generation == generation {
                             m.music = Some(Music::new(pcm.clone(), t.loop_start));
                         }
@@ -681,13 +705,13 @@ impl Audio {
                 ..Voice::default()
             });
         }
-        self.mixer.lock().unwrap().voices = voices;
+        lock(&self.mixer).voices = voices;
     }
 
     // Sound_Update per queued id: stop, rewind, set pan/volume (1/100 dB) and play once.
     // Pan uses the DirectSound rule: the opposite channel is attenuated by |pan| (1/100 dB).
     fn play_se(&mut self, id: usize, pan: i32, volume: i32) {
-        let mut m = self.mixer.lock().unwrap();
+        let mut m = lock(&self.mixer);
         let Some(v) = m.voices.get_mut(id) else {
             return;
         };
@@ -701,7 +725,7 @@ impl Audio {
     // `Bgm_StreamStop` 0x4728E0: `Stop` + position 0, playing flag 0; the object, ring, +0x64 and file
     // position stay, so a later UnPause plays the ring on from position 0.
     fn stop_wav(&mut self) {
-        let mut m = self.mixer.lock().unwrap();
+        let mut m = lock(&self.mixer);
         m.stopped = true;
         if let Some(music) = &mut m.music {
             music.cursor = 0.0;
@@ -710,7 +734,7 @@ impl Audio {
 
     // Sound manager release on restart (00 §2): the streaming object is gone; nothing is left to UnPause.
     fn release_bgm(&mut self) {
-        let mut m = self.mixer.lock().unwrap();
+        let mut m = lock(&self.mixer);
         m.generation += 1;
         m.music = None;
     }
@@ -832,7 +856,7 @@ fn open_stream(
     } else if let Some(n) = buffer {
         cfg.buffer_size = cpal::BufferSize::Fixed(n);
     }
-    mixer.lock().unwrap().out_rate = f64::from(cfg.sample_rate);
+    lock(&mixer).out_rate = f64::from(cfg.sample_rate);
     stats
         .rate
         .store(u64::from(cfg.sample_rate), Ordering::Relaxed);
@@ -842,7 +866,7 @@ fn open_stream(
         cfg,
         move |out: &mut [f32], _| {
             cb_stats.on_callback((out.len() / channels) as u64);
-            mixer.lock().unwrap().render(out, channels);
+            render_guarded(&mixer, out, channels);
         },
         move |e| {
             match e.kind() {
@@ -1011,8 +1035,27 @@ mod tests {
         }
 
         fn stopped(&self) -> bool {
-            self.a.mixer.lock().unwrap().stopped
+            lock(&self.a.mixer).stopped
         }
+    }
+
+    // A poisoned mixer keeps taking commands; a panicking render yields silence and leaves the lock usable.
+    #[test]
+    fn mixer_survives_panics() {
+        let mut a = Audio::new(Source::new(NoFiles), AudioConfig::default());
+        let m = a.mixer.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        assert!(a.mixer.is_poisoned());
+        a.set_muted(true);
+        assert!(lock(&a.mixer).muted);
+        let mut out = [1.0f32; 4];
+        render_guarded(&a.mixer, &mut out, 0);
+        assert_eq!(out, [0.0; 4]);
+        render_guarded(&a.mixer, &mut out, 2);
     }
 
     // A lost stream is reopened while playing, at most once per second; never while paused or before the first start.
@@ -1084,8 +1127,7 @@ mod tests {
         d.a.load_midi(th08_core::content::LogicView::new(arc).present());
         assert!(d.a.midi_slots[30].is_some());
         let sf = crate::midi::tests::tiny_sf2();
-        d.a.mixer.lock().unwrap().font =
-            Some(Arc::new(rustysynth::SoundFont::new(&mut &sf[..]).unwrap()));
+        lock(&d.a.mixer).font = Some(Arc::new(rustysynth::SoundFont::new(&mut &sf[..]).unwrap()));
         d.b.midi_ready = true;
         let mut cfg = th08_core::config::Config {
             music: 2,
@@ -1098,7 +1140,7 @@ mod tests {
         assert!(d.a.midi_slots[1].is_some() && d.a.midi_slots[2].is_none());
         d.run(|b| b.play_slot(1));
         assert_eq!(d.a.midi_open, 1);
-        let playing = |a: &Audio| a.mixer.lock().unwrap().midi.as_ref().unwrap().playing;
+        let playing = |a: &Audio| lock(&a.mixer).midi.as_ref().unwrap().playing;
         assert!(playing(&d.a));
         d.b.fade_bgm(3.0, 0.5);
         assert!(matches!(d.b.out[..], [SoundCmd::Midi(MidiCmd::Fade(3000))]));
@@ -1134,7 +1176,7 @@ mod tests {
         let mut d = Dev::new();
         let mut music = Music::new(Pcm::from_frames(&[[16384, 16384]; 10]), 0);
         music.cursor = 3.0;
-        d.a.mixer.lock().unwrap().music = Some(music);
+        lock(&d.a.mixer).music = Some(music);
         d.run(|b| {
             b.fade_bgm(4.0, 1.0);
             b.start_fade();
@@ -1143,7 +1185,7 @@ mod tests {
         (0..240).for_each(|_| d.run(Bgm::tick_fade));
         d.run(|b| b.pause_bgm(false));
         {
-            let m = d.a.mixer.lock().unwrap();
+            let m = lock(&d.a.mixer);
             assert!(!m.stopped && m.music.as_ref().unwrap().cursor == 3.0);
         }
         d.run(|b| {
@@ -1152,7 +1194,7 @@ mod tests {
             b.stop_bgm();
         });
         {
-            let m = d.a.mixer.lock().unwrap();
+            let m = lock(&d.a.mixer);
             assert!(m.stopped && m.music.as_ref().unwrap().cursor == 0.0);
         }
         let cfg = th08_core::config::Config {
@@ -1251,14 +1293,14 @@ mod tests {
             (199_999, 150_000, 199_999, 150_000)
         );
         let mut d = Dev::new();
-        d.a.mixer.lock().unwrap().music = m.music.take();
+        lock(&d.a.mixer).music = m.music.take();
         d.run(|b| {
             b.stop_bgm();
             b.pause_bgm(false);
         });
         assert!(!d.stopped());
         d.run(Bgm::release_bgm);
-        assert!(d.a.mixer.lock().unwrap().music.is_none());
+        assert!(lock(&d.a.mixer).music.is_none());
     }
 
     #[test]

@@ -87,4 +87,7 @@
   <string name="last_failed_share">Поделиться отчётом</string>
   <string name="last_failed_dismiss">Скрыть</string>
   <string name="last_failed_subject">Отчёт об ошибке th08</string>
+  <string name="update_available">Доступна версия %1$s</string>
+  <string name="update_notes">Что нового</string>
+  <string name="update_download">Скачать</string>
 </resources>

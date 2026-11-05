@@ -88,4 +88,7 @@
   <string name="last_failed_share">Share report</string>
   <string name="last_failed_dismiss">Dismiss</string>
   <string name="last_failed_subject">th08 error report</string>
+  <string name="update_available">Version %1$s is available</string>
+  <string name="update_notes">What is new</string>
+  <string name="update_download">Download</string>
 </resources>

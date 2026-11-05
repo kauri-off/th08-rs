@@ -53,6 +53,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private var importCfg = false
     private val lastErrorFile get() = File(filesDir, "last_error.txt")
     private var lastError by mutableStateOf<String?>(null)
+    private var update by mutableStateOf<UpdateInfo?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -64,7 +65,11 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             val saved = cfg[e.key]?.takeUnless { e.developer }?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
             Setting(e, saved ?: e.default)
         }
-        Thread { copyBundledPacks(); runOnUiThread { packCall("status") } }.start()
+        Thread {
+            runCatching { copyBundledPacks() }.onFailure { Log.e("th08", "bundled packs: $it") }
+            runOnUiThread { packCall("status") }
+        }.start()
+        checkUpdate()
         // A job started before a configuration change keeps running in this process.
         importer.poll()
         setContent {
@@ -87,7 +92,9 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 LaunchedEffect(packs.busy) {
                     while (packs.busy != null) {
                         delay(250)
-                        packs = withContext(Dispatchers.Default) { PackState.parse(Packs.call(request("status"))) }
+                        val busy = packs.busy ?: ""
+                        packs = withContext(Dispatchers.Default) { runCatching { PackState.parse(Packs.call(request("status"))) } }
+                            .getOrElse { PackState(outcome = PackOutcome.Failed(busy, it.message ?: it.toString())) }
                     }
                 }
                 LaunchedEffect(importer.state.busy) {
@@ -114,7 +121,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 val lang = currentLang()
                 val res = remember(lang) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
-                    LocalSaves provides saves, LocalImport provides importer.state, LocalLastError provides lastError) {
+                    LocalSaves provides saves, LocalImport provides importer.state, LocalLastError provides lastError,
+                    LocalUpdate provides update) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -245,9 +253,15 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     override fun cancelImport() = importer.cancel()
 
+    // remove_dir_all of ~75 MB: off the UI thread.
     override fun removeGame() {
-        importer.remove()
-        data = checkData()
+        Thread {
+            val st = importer.removeState()
+            runOnUiThread {
+                importer.state = st
+                data = checkData()
+            }
+        }.start()
     }
 
     private fun request(op: String, code: String = ""): String = JSONObject().apply {
@@ -300,10 +314,13 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 have != null -> packNewer(toml, have)
                 else -> id !in seen
             }
+            if (copy) {
+                // A failed copy (full disk) leaves the id unseen, so the next start repairs it.
+                val ok = runCatching { out.deleteRecursively(); copyAssetDir("packs/$id", out) }
+                    .onFailure { Log.e("th08", "bundled pack $id not copied: $it") }.isSuccess
+                if (!ok) continue
+            }
             seen.add(id)
-            if (!copy) continue
-            out.deleteRecursively()
-            copyAssetDir("packs/$id", out)
         }
         if (marker.readLinesOrNull() != seen.sorted()) {
             runCatching { PortCfg.writeAtomic(marker, seen.sorted().joinToString("\n", postfix = "\n")) }
@@ -321,6 +338,21 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             return
         }
         children.forEach { copyAssetDir("$path/$it", File(out, it)) }
+    }
+
+    // Once per launcher start, off the UI thread; silent when off, offline or nothing newer.
+    private fun checkUpdate() {
+        if (rows.firstOrNull { it.e.key == "update_check" }?.value == "off") return
+        val req = JSONObject().put("config", filesDir.path).toString()
+        Thread {
+            val info = runCatching { parseUpdateReply(UpdateCheck.call(req)) }.getOrNull()
+            if (info != null) runOnUiThread { update = info }
+        }.start()
+    }
+
+    override fun openUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { Log.w("th08", "cannot open $url: $it") }
     }
 
     override fun shareError() {

@@ -161,6 +161,11 @@ pub fn cargo() -> Command {
     if let Some(v) = VERSION_NAME.get() {
         c.env("TH08_VERSION", v);
     }
+    // A release build's tag is baked into the game (build.rs): the launcher's update check runs only then.
+    match std::env::var("TH08_RELEASE_TAG") {
+        Ok(t) if !t.is_empty() => c.env("TH08_RELEASE_TAG", t),
+        _ => c.env_remove("TH08_RELEASE_TAG"),
+    };
     c
 }
 

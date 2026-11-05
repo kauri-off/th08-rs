@@ -27,6 +27,10 @@
 Сборки для Android бывают трёх каналов: `release` (`org.th08.port`) — тот, что на GitHub; `dev` и `debug` — локальные
 сборки. Подробности, точные пути и управление: [docs/PLAYING.md](docs/PLAYING.md) (на английском).
 
+Обновления: лаунчер сообщает о выходе новой версии (не чаще раза в день, можно выключить). На Android релизы на GitHub
+умеет отслеживать [Obtainium](https://github.com/ImranR98/Obtainium); AppImage для Linux обновляется сам через
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate).
+
 ## Что я хотел сделать
 
 Мне нужен был порт, который не просто похож на оригинал, а совпадает с ним. Критерий строгий: при тех же нажатиях

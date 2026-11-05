@@ -66,6 +66,20 @@ pub struct State {
     pub generation: u64,
 }
 
+// The state is plain data, so a panic in a job leaves it usable.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+// A panic payload as text.
+#[cfg(not(target_arch = "wasm32"))]
+fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic".into())
+}
+
 type Repaint = Arc<dyn Fn() + Send + Sync>;
 
 pub struct Manager {
@@ -82,13 +96,12 @@ struct Report {
 impl Progress for Report {
     fn line(&self, s: &str) {
         log::info!("translations: {s}");
-        s.trim()
-            .clone_into(&mut self.state.lock().unwrap().last_line);
+        s.trim().clone_into(&mut lock(&self.state).last_line);
         (self.repaint)();
     }
 
     fn files(&self, done: usize, total: usize) {
-        self.state.lock().unwrap().files = (done, total);
+        lock(&self.state).files = (done, total);
         (self.repaint)();
     }
 }
@@ -112,11 +125,11 @@ impl Manager {
     }
 
     pub fn state(&self) -> State {
-        self.state.lock().unwrap().clone()
+        lock(&self.state).clone()
     }
 
     pub fn busy(&self) -> bool {
-        self.state.lock().unwrap().busy.is_some()
+        lock(&self.state).busy.is_some()
     }
 
     fn report(&self) -> Report {
@@ -136,7 +149,7 @@ impl Manager {
         job: impl FnOnce(&Report) -> Option<Outcome> + Send + 'static,
     ) -> bool {
         {
-            let mut s = self.state.lock().unwrap();
+            let mut s = lock(&self.state);
             if s.busy.is_some() {
                 return false;
             }
@@ -146,9 +159,23 @@ impl Manager {
             s.last_line.clear();
         }
         let r = self.report();
+        let what = what.to_string();
         std::thread::spawn(move || {
-            let out = job(&r);
-            let mut s = r.state.lock().unwrap();
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&r)))
+                .unwrap_or_else(|p| {
+                    let error = format!("internal error: {}", panic_text(&*p));
+                    log::error!("translations: job {what:?} {error}");
+                    lock(&r.state).generation += 1;
+                    Some(Outcome::Failed {
+                        lang: if what.is_empty() {
+                            "thpatch.net".into()
+                        } else {
+                            what
+                        },
+                        error,
+                    })
+                });
+            let mut s = lock(&r.state);
             if out.is_some() {
                 s.outcome = out;
             }
@@ -162,7 +189,7 @@ impl Manager {
     pub fn load_list(&self) -> bool {
         self.spawn("", |r| match manage::server_languages(&Client::new()) {
             Ok(l) => {
-                r.state.lock().unwrap().server = Some(l);
+                lock(&r.state).server = Some(l);
                 None
             }
             Err(e) => Some(Outcome::Failed {
@@ -181,7 +208,7 @@ impl Manager {
                 let built = Building(r);
                 manage::install(&Client::new(), &code, &v, &config, &built)
             });
-            let mut s = r.state.lock().unwrap();
+            let mut s = lock(&r.state);
             s.generation += 1;
             Some(match res {
                 Ok(sum) => Outcome::Installed {
@@ -201,7 +228,7 @@ impl Manager {
         let config = self.config.clone();
         self.spawn(&code.clone(), move |r| {
             let res = manage::remove(&code, &config);
-            r.state.lock().unwrap().generation += 1;
+            lock(&r.state).generation += 1;
             Some(match res {
                 Ok(()) => Outcome::Removed { lang: code },
                 Err(e) => Outcome::Failed {
@@ -216,6 +243,44 @@ impl Manager {
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn wait(m: &Manager) -> State {
+        let t = std::time::Instant::now();
+        while m.busy() {
+            assert!(t.elapsed().as_secs() < 10, "job still busy");
+            std::thread::yield_now();
+        }
+        m.state()
+    }
+
+    // A panicking job ends as failed, not busy, and the next job is accepted.
+    #[test]
+    fn panicking_job_fails() {
+        let m = Manager::new(Path::new("/nonexistent"), || {});
+        assert!(m.spawn("xx", |r| {
+            let _g = r.state.lock();
+            panic!("boom")
+        }));
+        let s = wait(&m);
+        assert!(m.state.is_poisoned());
+        assert_eq!(
+            s.outcome,
+            Some(Outcome::Failed {
+                lang: "xx".into(),
+                error: "internal error: boom".into()
+            })
+        );
+        assert!(m.spawn("", |_| panic!("{}", 1)));
+        assert!(
+            matches!(wait(&m).outcome, Some(Outcome::Failed { lang, error })
+            if lang == "thpatch.net" && error == "internal error: 1")
+        );
+    }
+}
+
 // Progress that marks the build step once the download reports its last file.
 #[cfg(not(target_arch = "wasm32"))]
 struct Building<'a>(&'a Report);
@@ -228,7 +293,7 @@ impl Progress for Building<'_> {
 
     fn files(&self, done: usize, total: usize) {
         self.0.files(done, total);
-        self.0.state.lock().unwrap().building = done == total;
+        lock(&self.0.state).building = done == total;
     }
 }
 
@@ -317,7 +382,7 @@ pub mod bridge {
         let Some(config) = r["config"].as_str().map(PathBuf::from) else {
             return json!({"error": "no config folder"}).to_string();
         };
-        let mut g = MANAGER.lock().unwrap();
+        let mut g = super::lock(&MANAGER);
         if g.as_ref().is_none_or(|m| m.config() != config) {
             *g = Some(Manager::new(&config, || {}));
         }

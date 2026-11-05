@@ -3,7 +3,9 @@
   <!-- Translation downloads from srv.thpatch.net (settings screen, Packs.kt). -->
   <uses-permission android:name="android.permission.INTERNET"/>
   <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
-      android:extractNativeLibs="false" android:allowBackup="false">
+      android:extractNativeLibs="false" android:allowBackup="true" android:hasFragileUserData="true"
+      android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules">
+    <!-- Auto Backup keeps score.dat, th08.cfg, port.cfg and replay/ only (res/xml); "keep app data" on uninstall. -->
     <!-- Compose settings screen; writes port.cfg / launch.cfg in filesDir and starts the game below. -->
     <activity android:name=".LauncherActivity" android:exported="true" android:theme="@style/Theme.Th08">
       <intent-filter>

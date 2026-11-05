@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cloud backup and device transfer (Android 12+): the saves only; game data, packs and picked files stay out. -->
+<data-extraction-rules>
+  <cloud-backup>
+    <include domain="file" path="score.dat"/>
+    <include domain="file" path="th08.cfg"/>
+    <include domain="file" path="port.cfg"/>
+    <include domain="file" path="replay/"/>
+  </cloud-backup>
+  <device-transfer>
+    <include domain="file" path="score.dat"/>
+    <include domain="file" path="th08.cfg"/>
+    <include domain="file" path="port.cfg"/>
+    <include domain="file" path="replay/"/>
+  </device-transfer>
+</data-extraction-rules>

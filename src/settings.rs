@@ -287,6 +287,8 @@ pub struct Settings {
     pub screen_margin: u32,
     // Show the launcher screen before the game (th08 binary only).
     pub launcher: bool,
+    // Ask GitHub once a day whether a newer release exists (launcher only, release builds only; update.rs).
+    pub update_check: bool,
     // Open the port menu when the window / tab loses focus in a stage (desktop, web).
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
@@ -371,6 +373,7 @@ impl Settings {
             vsync: true,
             screen_margin: 0,
             launcher: true,
+            update_check: true,
             pause_unfocused: true,
             blit: th08_render::gfx::BlitOptions::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
@@ -652,6 +655,25 @@ pub const ENTRIES: &[Entry] = &[
         help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "update_check",
+        env: "TH08_UPDATE_CHECK",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::Display,
+        label: "Check for updates",
+        summary: "Show on this screen when a newer version is out",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::NATIVE,
+        persist: true,
+        help: "ask GitHub at most once a day, from this screen only, whether a newer release exists; nothing is sent but the request itself",
+        set: |s, v| {
+            s.update_check = parse_bool(v)?;
             Ok(())
         },
     },
@@ -2464,12 +2486,37 @@ fn parse_port_cfg(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+// port.cfg as text: None = no file; a non-UTF-8 file is decoded lossily (Ok(Some((text, false)))).
+#[cfg(not(target_arch = "wasm32"))]
+fn read_cfg_text(path: &std::path::Path) -> Result<Option<(String, bool)>, String> {
+    match std::fs::read(path) {
+        Ok(b) => Ok(Some(match String::from_utf8(b) {
+            Ok(t) => (t, true),
+            Err(e) => {
+                log::warn!(
+                    "{}: not UTF-8; read with the bad bytes replaced",
+                    path.display()
+                );
+                (String::from_utf8_lossy(e.as_bytes()).into_owned(), false)
+            }
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_port_cfg(dirs: &PlatformDirs) -> Vec<(String, String)> {
-    dirs.port_cfg()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|t| parse_port_cfg(&t))
-        .unwrap_or_default()
+    let Some(p) = dirs.port_cfg() else {
+        return Vec::new();
+    };
+    match read_cfg_text(&p) {
+        Ok(t) => t.map(|(t, _)| parse_port_cfg(&t)).unwrap_or_default(),
+        Err(e) => {
+            log::warn!("{e}; settings from port.cfg not applied");
+            Vec::new()
+        }
+    }
 }
 
 // Web: the port.cfg slot is localStorage, one `th08.<key>` item per setting.
@@ -2518,7 +2565,7 @@ pub fn try_write_port_cfg(
     let path = dirs
         .port_cfg()
         .ok_or("no config directory; port.cfg not saved")?;
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let (old, utf8) = read_cfg_text(&path)?.unwrap_or((String::new(), true));
     let mut text = drop_dev_keys(&old);
     for &(key, value) in changes {
         match find(key) {
@@ -2528,6 +2575,17 @@ pub fn try_write_port_cfg(
     }
     if text == old {
         return Ok(());
+    }
+    if !utf8 {
+        // The original bytes survive the rewrite as port.cfg.bak.
+        let bak = path.with_extension("cfg.bak");
+        let raw = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::platform::write_atomic(&bak, &raw).map_err(|e| format!("{}: {e}", bak.display()))?;
+        log::warn!(
+            "{}: not UTF-8; the original is kept as {}",
+            path.display(),
+            bak.display()
+        );
     }
     crate::platform::write_atomic(&path, text.as_bytes())
         .map_err(|e| format!("{}: {e}", path.display()))
@@ -2813,6 +2871,31 @@ mod tests {
             "# keep\nscale = 3\nfullscreen = on\n"
         );
         assert_eq!(set_cfg_line(&t, "scale", None), "# keep\nfullscreen = on\n");
+    }
+
+    // A Shift-JIS port.cfg still applies its ASCII lines, and the first rewrite keeps the original as port.cfg.bak.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn port_cfg_non_utf8_kept() {
+        let d = std::env::temp_dir().join(format!("th08-portcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let raw = b"# \x93\x8c\x95\xfb\ngame_dir = C:\\\x93\x8c\x95\xfb\nscale = 3\n".to_vec();
+        std::fs::write(d.join("port.cfg"), &raw).unwrap();
+        let dirs = PlatformDirs {
+            config: Some(d.clone()),
+            ..PlatformDirs::default()
+        };
+        assert!(read_port_cfg(&dirs).contains(&("scale".into(), "3".into())));
+        try_write_port_cfg(&dirs, &[("fullscreen", Some("on"))]).unwrap();
+        assert_eq!(std::fs::read(d.join("port.cfg.bak")).unwrap(), raw);
+        let t = std::fs::read_to_string(d.join("port.cfg")).unwrap();
+        assert!(
+            t.contains("scale = 3\n")
+                && t.contains("fullscreen = on\n")
+                && t.contains("game_dir = ")
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

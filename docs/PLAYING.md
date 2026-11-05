@@ -52,9 +52,17 @@ and keeps them in its private storage; the picked files are not changed and can 
 
 - Desktop: the `save_dir` setting (`th08 --help`) moves `score.dat`, `th08.cfg` and the replays elsewhere.
 - Android: this is the app's private storage. Other apps and a file manager cannot see it, and **uninstalling the
-  app deletes it**, saves included.
-- Browser: everything is kept in the site's storage (saves and settings in local storage, downloaded translations
-  as `packs/lang_<code>.zip` in the origin private file system); clearing the site data deletes them.
+  app deletes it**, saves included. Before you uninstall, switch to another build (a different signing key, an older
+  version) or move to a new phone, use **Export saves** in the launcher's Saves section and keep the zip; **Import
+  saves** puts it back.
+- Android Auto Backup (when it is on in the phone's settings) backs up `score.dat`, `th08.cfg`, `port.cfg` and
+  `replay/` only, never the game files or translations, and restores them when the same app is installed again.
+  It does not carry saves to a build signed with another key; export them for that. On Android 10 and newer the
+  uninstall dialog can also offer to keep the app's data.
+- Browser: everything is kept in the site's storage (saves and settings in local storage, game files and downloaded
+  translations as `packs/lang_<code>.zip` in the origin private file system); clearing the site data deletes them.
+  The page asks the browser to keep this storage when you pick the game files, but a browser may still clear it
+  (Safari after a week without a visit), so export the saves from time to time.
 - With any cheat setting on, `score.dat` and replays are not written (the launcher says so).
 
 ## Translations
@@ -67,6 +75,20 @@ removed in the same panel. The browser build does the same with the game files s
 packs in the site's storage.
 
 The launcher and the in-game port menu themselves come in Japanese, English and Russian (**Language** setting).
+
+## Updates
+
+The launcher of a release build (the files on GitHub, Android `org.th08.port`) asks GitHub's release list at most
+once a day whether a newer version is out, and only while the launcher screen is open, never during play. When there
+is one, a row at the top says "Version X is available" with **What is new** (the release page) and **Download** (the
+file for your system: the APK on Android, the installer or the portable exe on Windows, matching the one you run, the
+AppImage on Linux). Offline or on any error it shows nothing. The request carries no data about you or your game; the
+time of the last check is kept in `update_check.json` next to `port.cfg`. Turn it off with **Check for updates** in
+the Display section (`update_check = off` in `port.cfg`). Besides translation downloads it is the only network
+request the port makes. Local builds and the browser build never check.
+
+On Android, [Obtainium](https://github.com/ImranR98/Obtainium) can track the GitHub releases and install new APKs;
+the Linux AppImage updates itself with AppImageUpdate (see Downloads).
 
 ## Controls
 

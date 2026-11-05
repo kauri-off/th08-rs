@@ -23,6 +23,11 @@ impl Progress for Stdout {
     }
 }
 
+// Guarded state is plain data, so a panic elsewhere does not make it unusable.
+pub(crate) fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // `n` copies of a worker loop on threads; one run on the calling thread in the browser (no threads there).
 fn parallel(n: usize, worker: impl Fn() + Sync) {
     #[cfg(not(target_arch = "wasm32"))]

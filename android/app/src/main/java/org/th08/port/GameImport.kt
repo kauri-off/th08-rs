@@ -3,6 +3,7 @@
 package org.th08.port
 
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -87,11 +88,12 @@ fun hasFile(dir: File, vararg names: String) =
 
 class GameImporter(private val act: ComponentActivity) {
     var state by mutableStateOf(ImportState())
-        private set
+
+    private fun result(req: JSONObject): ImportState = runCatching { ImportState.parse(GameImport.call(req.toString())) }
+        .getOrElse { ImportState(outcome = ImportOutcome.Failed("failed", it.message ?: it.toString())) }
 
     private fun call(req: JSONObject) {
-        state = runCatching { ImportState.parse(GameImport.call(req.toString())) }
-            .getOrElse { ImportState(outcome = ImportOutcome.Failed("failed", it.message ?: it.toString())) }
+        state = result(req)
     }
 
     private fun request(op: String) = JSONObject().put("op", op).put("game", importDir(act).path)
@@ -100,7 +102,8 @@ class GameImporter(private val act: ComponentActivity) {
 
     fun cancel() = call(request("cancel"))
 
-    fun remove() = call(request("remove"))
+    // Blocking (deletes the imported files): call off the UI thread, then set `state`.
+    fun removeState() = result(request("remove"))
 
     // Output size estimate per picked file (MB): th08.dat → ~26 MB pack, thbgm.dat → ~48 MB; a .pak as it is.
     private fun needMb(name: String, size: Long): Long = when (name.lowercase()) {
@@ -125,12 +128,15 @@ class GameImporter(private val act: ComponentActivity) {
             return
         }
         val files = JSONArray()
+        val fds = mutableListOf<Int>()
         for ((uri, name, _) in picked) {
             val fd = runCatching { act.contentResolver.openFileDescriptor(uri, "r")!!.detachFd() }.getOrElse {
                 Log.e("th08", "import: cannot open $name: $it")
+                fds.forEach { f -> runCatching { ParcelFileDescriptor.adoptFd(f).close() } }
                 state = ImportState(outcome = ImportOutcome.Failed("failed", "$name: ${it.message ?: it}"))
                 return
             }
+            fds.add(fd)
             files.put(JSONObject().put("name", name).put("fd", fd))
         }
         call(request("start").put("files", files))

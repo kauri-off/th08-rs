@@ -31,6 +31,9 @@ last_failed = "前回の実行はエラーで終了しました："
 copy_report = "レポートをコピー"
 open_folder = "フォルダーを開く"
 dismiss = "閉じる"
+update_available = "バージョン {version} が公開されています"
+update_notes = "更新内容"
+update_download = "ダウンロード"
 save_failed = "{name} を保存できませんでした：{err}"
 not_set = "（未設定）"
 changed = "変更済み"
@@ -165,6 +168,11 @@ unit = " dp"
 label = "起動時にこの画面を表示"
 summary = "ゲーム開始前にこの画面を表示"
 help = "起動時にこの画面を表示する。オフの場合、th08 の起動中に Shift を押し続ける（Web 版: ?launcher=1）と再び表示されます"
+
+[entry.update_check]
+label = "アップデートを確認"
+summary = "新しいバージョンが出たらこの画面に表示します"
+help = "この画面からのみ、1日1回まで GitHub に新しいリリースがあるか問い合わせます。リクエスト以外は何も送信しません"
 
 [entry.pause_unfocused]
 label = "フォーカスを失ったら一時停止"

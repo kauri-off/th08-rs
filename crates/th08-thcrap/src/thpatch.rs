@@ -189,11 +189,11 @@ impl Client {
 
     #[cfg(target_arch = "wasm32")]
     pub fn get(&self, url: &str) -> Result<Vec<u8>> {
-        match self.responses.lock().unwrap().get(url) {
+        match crate::lock(&self.responses).get(url) {
             Some(Ok(b)) => Ok(b.clone()),
             Some(Err(e)) => anyhow::bail!("GET {url}: {e}"),
             None => {
-                self.pending.lock().unwrap().insert(url.to_string());
+                crate::lock(&self.pending).insert(url.to_string());
                 anyhow::bail!("GET {url}: not fetched yet")
             }
         }
@@ -202,7 +202,7 @@ impl Client {
     // The URLs asked for since the last call that have no response yet.
     #[cfg(target_arch = "wasm32")]
     pub fn take_pending(&self) -> Vec<String> {
-        std::mem::take(&mut *self.pending.lock().unwrap())
+        std::mem::take(&mut *crate::lock(&self.pending))
             .into_iter()
             .collect()
     }
@@ -217,7 +217,7 @@ impl Client {
                 Ok(b)
             }
         });
-        self.responses.lock().unwrap().insert(url.to_string(), r);
+        crate::lock(&self.responses).insert(url.to_string(), r);
     }
 
     // Up to three attempts: a phone's connection drops single requests of a parallel batch.
@@ -258,11 +258,11 @@ impl Client {
 
     // Base URL of repo `id`: the server's `repo.js` neighbours are asked for their `repo.js` id until it matches.
     fn repo_base(&self, id: &str) -> Result<String> {
-        if let Some(b) = self.repos.lock().unwrap().get(id) {
+        if let Some(b) = crate::lock(&self.repos).get(id) {
             return Ok(b.clone());
         }
         let list = {
-            let mut n = self.neighbours.lock().unwrap();
+            let mut n = crate::lock(&self.neighbours);
             if n.is_none() {
                 let repo = json_object(&self.get(&format!("{SERVER}repo.js"))?, "repo.js")?;
                 *n = Some(
@@ -289,10 +289,7 @@ impl Client {
                 continue;
             };
             if let Some(rid) = r.get("id").and_then(Value::as_str) {
-                self.repos
-                    .lock()
-                    .unwrap()
-                    .insert(rid.to_string(), u.clone());
+                crate::lock(&self.repos).insert(rid.to_string(), u.clone());
                 if rid == id {
                     return Ok(u);
                 }
@@ -385,14 +382,16 @@ impl Client {
                     Ok(crate::vfs::write(p, b)?)
                 });
                 if let Err(e) = r {
-                    errors.lock().unwrap().push(format!("{e:#}"));
+                    crate::lock(&errors).push(format!("{e:#}"));
                 }
                 let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 prog.files(n, todo.len());
             }
         };
         crate::parallel(WORKERS, worker);
-        errors.into_inner().unwrap()
+        errors
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

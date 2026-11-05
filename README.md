@@ -27,6 +27,10 @@ the game: the port reads `th08.dat` and `thbgm.dat` from it.
 Android builds come in three channels: `release` (`org.th08.port`) is the one on GitHub; `dev` and `debug` are local
 builds. Details, exact paths and controls: [docs/PLAYING.md](docs/PLAYING.md).
 
+Updates: the launcher says when a newer release is out (once a day at most, can be turned off). On Android,
+[Obtainium](https://github.com/ImranR98/Obtainium) can track the GitHub releases; the Linux AppImage updates itself
+with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate).
+
 ## What I set out to do
 
 I wanted a port that is not just similar to the original but identical to it. The test is strict: give it the same
