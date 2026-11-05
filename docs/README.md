@@ -5,6 +5,7 @@ Reference documents for the port. Behaviour itself is described only in the numb
 
 | Document | Contents |
 |---|---|
+| [PLAYING.md](PLAYING.md) | for players: downloads, where the game files go, saves, translations, controls |
 | [STATUS.md](STATUS.md) | what works, known differences from the original, what is next |
 | [DECISIONS.md](DECISIONS.md) | technical choices (libraries, rendering, assets, timing) and why |
 | [PARITY_POLICY.md](PARITY_POLICY.md) | what "identical to the original" means for logic and for drawing |

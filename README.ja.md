@@ -6,6 +6,25 @@
 関係がなく、ゲームデータは含まれていません。遊ぶにはゲーム本体が必要です。移植版は本体の `th08.dat` と `thbgm.dat`
 を読み込みます。
 
+## 遊び方
+
+1. **ダウンロード**：[リリースページ](https://github.com/kauri-off/th08-rs/releases)から、Windows は `.exe`、Linux は
+   `.AppImage`（`chmod +x` してから実行）、Android は `.apk` を入手します。[ブラウザ版](https://kauri-off.github.io/th08-rs/)は
+   インストール不要です。
+2. **お手持ちのゲームから** `th08.dat` と `thbgm.dat`（あれば `th08.pak` / `thbgm.pak`）を用意します。移植版には
+   ゲームデータが含まれていないため、東方永夜抄を所有している必要があります。
+3. **置き場所：**
+   - Windows / Linux：コピーは不要です。初回起動時にランチャーでゲームのフォルダを選びます。
+   - Android（現時点）：ファイルマネージャーか adb で
+     `/storage/emulated/0/Android/data/org.th08.port/files/game/` にコピーし、**再確認** をタップします。
+4. **セーブ、リプレイ、`port.cfg`** の場所は `%APPDATA%\th08\`（Windows）、`~/.config/th08/`（Linux）、
+   アプリの専用領域（Android。アンインストールすると消えます）です。
+5. **翻訳：** ランチャーの **翻訳** パネルで Touhou Patch Center から翻訳をダウンロードすると、お手持ちのゲームデータ
+   から端末上でパックが作られます。その後 **ゲーム内テキストの言語** で選びます。
+
+Android 版には 3 つのチャンネルがあります。`release`（`org.th08.port`）が GitHub で配布しているもので、`dev` と
+`debug` はローカルビルドです。詳細、正確なパス、操作方法：[docs/PLAYING.md](docs/PLAYING.md)（英語）。
+
 ## 目指したこと
 
 原作に「似ている」移植ではなく、原作と「同じ」移植を作りたいと考えました。基準は厳しく、同じ入力を与えたら、
@@ -61,15 +80,11 @@
 - コアをウィンドウ、サウンド、ファイルシステムから切り離す
 
 書き直しの間、挙動は固定しています。一歩進むごとに、移植版を書き直し前の自分自身とリプレイ集の両方と照合します。
-次は Android 版、その後スマートフォン向けのブラウザ版で、配置を自由に変えられるタッチ操作ボタンが付きます。
+配置を自由に変えられるタッチ操作ボタン付きの Android 版は公開済みで、次はスマートフォン向けのブラウザ版です。
 
-## 試すには
+## ビルド
 
-Windows 版と Linux 版のビルド済みファイルは[リリースページ](https://github.com/kauri-off/th08-rs/releases)にあります。
-ブラウザ版は https://kauri-off.github.io/th08-rs/ です。初回起動時に、`th08.dat` がある東方永夜抄のフォルダを
-尋ねられます。
-
-自分でビルドするには、安定版の Rust が必要です。
+ビルド済みのファイルは[遊び方](#遊び方)を参照してください。自分でビルドするには、安定版の Rust が必要です。
 
 ```sh
 cargo run --release -- "/path/to/TH08 - Imperishable Night"
@@ -90,8 +105,9 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 | `re/` | リバースエンジニアリング用ツール：フォーマットのダンプ、Ghidra スクリプト、実行時プローブ、プレイの録画 |
 | `docs/` | 進捗、設計判断、書き直しのアーキテクチャ（[目次](docs/README.md)） |
 
-貢献の方法：[CONTRIBUTING.md](CONTRIBUTING.md)（英語）。
 | `web/`, `packaging/`, `xtask/` | ブラウザ用フロントエンド、パッケージング用ファイル、`cargo xtask dist` |
+
+貢献の方法：[CONTRIBUTING.md](CONTRIBUTING.md)（英語）。
 
 ## ライセンス
 

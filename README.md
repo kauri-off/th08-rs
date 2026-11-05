@@ -6,6 +6,25 @@ This is an unofficial fan reimplementation of 東方永夜抄 ~ Imperishable Nig
 Rust. It is not affiliated with Team Shanghai Alice and contains no game data. To play it you need your own copy of
 the game: the port reads `th08.dat` and `thbgm.dat` from it.
 
+## Play it
+
+1. **Download** from the [releases page](https://github.com/kauri-off/th08-rs/releases): the `.exe` for Windows, the
+   `.AppImage` for Linux (`chmod +x`, then run), the `.apk` for Android. No install needed in the
+   [browser](https://kauri-off.github.io/th08-rs/).
+2. **Take from your own copy of the game** `th08.dat` and `thbgm.dat` (or `th08.pak` / `thbgm.pak` if you have
+   them). The port contains no game data: you must own Touhou 8.
+3. **Put them where the port looks:**
+   - Windows / Linux: nothing to copy; pick your game folder in the launcher on the first start.
+   - Android (for now): copy them with a file manager or adb into
+     `/storage/emulated/0/Android/data/org.th08.port/files/game/`, then tap **Check again**.
+4. **Saves, replays and `port.cfg`** live in `%APPDATA%\th08\` (Windows), `~/.config/th08/` (Linux) or the app's
+   private storage (Android: uninstalling deletes them).
+5. **Translations:** the **Translations** panel in the launcher downloads one from Touhou Patch Center and builds the
+   pack on your device from your game data; then choose it in **Game text language**.
+
+Android builds come in three channels: `release` (`org.th08.port`) is the one on GitHub; `dev` and `debug` are local
+builds. Details, exact paths and controls: [docs/PLAYING.md](docs/PLAYING.md).
+
 ## What I set out to do
 
 I wanted a port that is not just similar to the original but identical to it. The test is strict: give it the same
@@ -63,15 +82,11 @@ The port is complete. I am now rewriting it into idiomatic Rust:
 - the core is cut off from the window, sound and file system.
 
 Behaviour is frozen during the rewrite. After every step the port is checked against itself and against the replay
-set. Next comes an Android build, then a mobile web build, with a touch overlay you can rearrange.
+set. The Android build, with a touch overlay you can rearrange, is out; the mobile web build comes next.
 
-## Trying it
+## Building it
 
-Prebuilt Windows and Linux builds are on the [releases page](https://github.com/kauri-off/th08-rs/releases). A browser
-build is at https://kauri-off.github.io/th08-rs/. On first start the port asks for your Touhou 8 folder, the one that
-contains `th08.dat`.
-
-To build it yourself, you need stable Rust:
+Prebuilt packages: see [Play it](#play-it). To build it yourself, you need stable Rust:
 
 ```sh
 cargo run --release -- "/path/to/TH08 - Imperishable Night"
@@ -92,8 +107,9 @@ the options; channels, versions and CI signing are in [CONTRIBUTING.md](CONTRIBU
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder ([index](re/README.md)) |
 | `docs/` | status, decisions, the architecture of the rewrite ([index](docs/README.md)) |
 
-How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 | `web/`, `packaging/`, `xtask/` | the browser front end, packaging files and `cargo xtask dist` |
+
+How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
