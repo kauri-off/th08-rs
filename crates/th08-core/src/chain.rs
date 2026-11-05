@@ -1,7 +1,7 @@
 //! funcChain payload of the game (00 §3): one `Node` value per task object, dispatched to its stateless forwarder.
 
 use crate::drawlist::Recorder;
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::task::{Chain, Ret, Task};
 use anyhow::Result;
 
@@ -55,7 +55,7 @@ impl Task<Ctx> for Node {
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         self.with(|t| t.draw_step(ctx, tag))
     }
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         self.with(|t| t.emit(ctx, rec, tag));
     }
     fn on_register(&mut self, ctx: &mut Ctx, chain: Chain, tag: u8) -> Result<()> {

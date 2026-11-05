@@ -1357,7 +1357,7 @@ impl Task<Ctx> for EffectTask {
     }
 
     // EffectMgr_Draw writes nothing: emit only.
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, _: u8) {
         ctx.w.effects.emit_main(&ctx.w.anm, rec);
     }
 }
@@ -1559,7 +1559,7 @@ impl Task<Ctx> for ScreenTask {
         }
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, _: u8) {
         if let Some(s) = ctx.w.effects.screen_fx[self.slot].filter(|s| !s.done) {
             s.draw_fx(rec);
         }

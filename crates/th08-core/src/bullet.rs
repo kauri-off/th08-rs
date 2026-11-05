@@ -4,7 +4,7 @@ use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
-use crate::game::{Ctx, Sys};
+use crate::game::{Ctx, Sys, View};
 use crate::item::ItemManager;
 use crate::player::{GrazeEnv, Player};
 use crate::task::{self, Chain, Ret, Task};
@@ -1850,7 +1850,7 @@ impl Task<Ctx> for BulletTask {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         let p = ctx.w.player.as_deref().expect("player");
         let b = ctx.w.bullets.as_deref().expect("bullet manager");
         b.emit(&ctx.w.anm, rec, &ctx.w.effects, p, ctx.w.game.flags);

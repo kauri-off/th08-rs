@@ -35,7 +35,7 @@ pub enum Chain {
 // One subsystem object: node callbacks (0x20-byte node: +0x04 per-frame, +0x08 on-register, +0x0C on-remove).
 // Port: a subsystem registers one object on several nodes; `tag` tells the nodes apart. The chain payload is the
 // context's `Copy` node value (`TaskCtx::Node`), whose `Task` impl dispatches to the subsystem (chain.rs for `Ctx`).
-pub trait Task<C> {
+pub trait Task<C: TaskCtx> {
     fn calc(&mut self, _ctx: &mut C, _tag: u8) -> Ret {
         Ret::Next
     }
@@ -45,7 +45,7 @@ pub trait Task<C> {
         Ret::Next
     }
     // Then emit: records the node's draw commands from the state the step left; reads only, skipped with emit off.
-    fn emit(&self, _ctx: &C, _rec: &mut Recorder, _tag: u8) {}
+    fn emit(&self, _v: &C::View<'_>, _rec: &mut Recorder, _tag: u8) {}
     fn on_register(&mut self, _ctx: &mut C, _chain: Chain, _tag: u8) -> Result<()> {
         Ok(())
     }
@@ -55,7 +55,10 @@ pub trait Task<C> {
 pub trait TaskCtx: Sized + 'static {
     // Chain payload: one value per task object (equal values = the same object, like the original's object pointer).
     type Node: Task<Self> + Copy + PartialEq + std::fmt::Debug;
+    // Read-only view the emits get: nothing reachable through it can change state.
+    type View<'a>;
     fn tasks(&mut self) -> &mut Tasks<Self::Node>;
+    fn view(&self) -> Self::View<'_>;
     // Called when a calc node returns 6, before the walk restarts from the head (session tool: one row per pass).
     fn on_restart(&mut self) {}
     // Emit switch: the recorder emits go to, None = emit off (draw-phase steps only).
@@ -248,10 +251,10 @@ pub fn run<C: TaskCtx>(ctx: &mut C, chain: Chain) -> Flow {
             Chain::Calc => t.calc(ctx, tag),
             Chain::Draw => {
                 let r = t.draw_step(ctx, tag);
-                // The recorder leaves the context for the emit, so the emit can take `&C`.
+                // The recorder leaves the context for the emit, so the emit can take a read-only view.
                 if let Some(rec) = ctx.recorder() {
                     let mut rec = std::mem::replace(rec, Recorder::detached());
-                    t.emit(ctx, &mut rec, tag);
+                    t.emit(&ctx.view(), &mut rec, tag);
                     if let Some(slot) = ctx.recorder() {
                         *slot = rec;
                     }
@@ -307,8 +310,12 @@ mod tests {
 
     impl TaskCtx for T {
         type Node = N;
+        type View<'a> = &'a T;
         fn tasks(&mut self) -> &mut Tasks<N> {
             &mut self.tasks
+        }
+        fn view(&self) -> &T {
+            self
         }
         fn on_restart(&mut self) {
             self.log.push("R".into());
@@ -336,7 +343,7 @@ mod tests {
             }
             Ret::Next
         }
-        fn emit(&self, ctx: &T, rec: &mut Recorder, _: u8) {
+        fn emit(&self, ctx: &&T, rec: &mut Recorder, _: u8) {
             if let N::Drawn(k) = *self {
                 rec.clear_viewport([k, ctx.log.len() as u8, 0, 0]);
             }

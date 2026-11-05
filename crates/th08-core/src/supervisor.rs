@@ -5,7 +5,7 @@ use crate::chain::Node;
 use crate::coreconfig::{CoreConfig, Ending};
 use crate::drawlist::{Blend, PLAYFIELD, Rect};
 use crate::drawlist::{Recorder, TexId};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, Game, GameManager};
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::SceneId;
@@ -203,7 +203,7 @@ impl Task<Ctx> for SceneTask {
         )
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ());
     }
 }
@@ -224,7 +224,7 @@ impl Task<Ctx> for SupervisorTask {
         Supervisor::with(ctx, |s, ctx| s.draw_step(ctx, tag))
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(s) = ctx.w.supervisor.as_deref() {
             s.emit(ctx, rec, tag);
         }
@@ -741,7 +741,7 @@ impl Supervisor {
     }
 
     // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         match tag {
             0 => {
                 if let Some(t) = self.logo {

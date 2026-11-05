@@ -5,7 +5,7 @@ use crate::ascii::{Text, int, percent_glyphs, short, uidx};
 use crate::builtin::Builtin;
 use crate::drawlist::{Align, Blend, Recorder, TextCmd, TextSite, Vertex};
 use crate::fmath;
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
@@ -13,6 +13,7 @@ use crate::scoredat::Catk;
 use crate::sound;
 use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, lo8};
+use crate::world::World;
 use th08_formats::sjis::SjisString;
 
 // resulttext.anm ANM slot (00 §3.2 loader thread); text.anm slot 0 (info strips).
@@ -245,8 +246,8 @@ pub struct Lists {
     rpy_t: u32,
 }
 
-fn catk(ctx: &Ctx, id: usize) -> Catk {
-    ctx.w.game.score.catk.get(id).cloned().unwrap_or_default()
+fn catk(w: &World, id: usize) -> Catk {
+    w.game.score.catk.get(id).cloned().unwrap_or_default()
 }
 
 // Story or practice attempts of shot index `s` ≠ 0.
@@ -255,12 +256,11 @@ fn seen(c: &Catk, s: usize) -> bool {
 }
 
 // Card_IsSelectable 0x46FD5F: attempted (ids < 205) or the Last Word's FLSP byte == id (0xCD + k, 15 §2.8).
-fn selectable(ctx: &Ctx, id: usize) -> bool {
+fn selectable(w: &World, id: usize) -> bool {
     if id < 205 {
-        return seen(&catk(ctx, id), 12);
+        return seen(&catk(w, id), 12);
     }
-    ctx.w
-        .game
+    w.game
         .score
         .flsp
         .get(id - 205)
@@ -289,11 +289,11 @@ fn fullwidth_digits(n: usize) -> String {
 }
 
 // AnmVm_Init + sprite, top-left anchor (unless centred), white.
-fn scratch(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
+fn scratch(w: &World, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
     vm.anm_slot = short(slot);
-    vm.set_sprite(&ctx.w.anm, sprite);
+    vm.set_sprite(&w.anm, sprite);
     if !centred {
         vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
     }
@@ -319,7 +319,7 @@ fn place(vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
 }
 
-fn emit0(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm) {
+fn emit0(ctx: &View, rec: &mut Recorder, vm: &AnmVm) {
     ctx.w.anm.emit_mode(rec, vm, 0);
 }
 
@@ -415,8 +415,8 @@ impl MainMenu {
     // ---- screen 11 (12 §2.5) ----
 
     // Any-clear mask CLRD[shot].any[difficulty]: 0 → 1 (stage 1 only); the 6B bit adds 4A and 4B (12 §2.5).
-    fn practice_mask(ctx: &Ctx) -> u16 {
-        let g = &ctx.w.game;
+    fn practice_mask(w: &World) -> u16 {
+        let g = &w.game;
         let mut m = g.clear_any[g.shot as usize % 12][g.cfg.difficulty.min(3) as usize];
         if m == 0 {
             m = 1;
@@ -441,7 +441,7 @@ impl MainMenu {
             self.interrupt_all(18);
             self.char_vms_list(i32::from(ctx.w.game.shot));
             self.cursor = int(ctx.w.game.stage).clamp(0, 7);
-            let m = Self::practice_mask(ctx);
+            let m = Self::practice_mask(&ctx.w);
             self.stages = std::array::from_fn(|i| ctx.core.unlock || m & (1 << i) != 0);
             if !self.stages[uidx(self.cursor.clamp(0, 7))] {
                 self.cursor = 0;
@@ -482,7 +482,7 @@ impl MainMenu {
         ctx.w
             .ascii
             .push(text(ax, ay - 96.0, "Stage    HI-Score", 0xFFFF_FFFF, false));
-        let m = Self::practice_mask(ctx);
+        let m = Self::practice_mask(&ctx.w);
         let g = &ctx.w.game;
         let (shot, d) = (g.shot as usize % 12, g.cfg.difficulty.min(4) as usize);
         let p = &g.score.pscr[shot];
@@ -505,8 +505,8 @@ impl MainMenu {
     // ---- screen 16 (16 §6.1, §6.4) ----
 
     // Screen 16 offers shots whose team has a Final A clear (Clear_TeamFinalA); solo shots always pass (16 §6.1).
-    pub(crate) fn sp_shot_ok(ctx: &Ctx, s: i32) -> bool {
-        s >= 4 || crate::menu::team_final_a(&ctx.w.game, ctx.core.unlock, uidx(s))
+    pub(crate) fn sp_shot_ok(w: &World, unlock: bool, s: i32) -> bool {
+        s >= 4 || crate::menu::team_final_a(&w.game, unlock, uidx(s))
     }
 
     pub(crate) fn spell_char(&mut self, ctx: &mut Ctx) {
@@ -545,7 +545,7 @@ impl MainMenu {
             self.interrupt_all(18);
             let mut c = i32::from(ctx.w.game.shot).min(n - 1);
             for _ in 0..n {
-                if Self::sp_shot_ok(ctx, c) {
+                if Self::sp_shot_ok(&ctx.w, ctx.core.unlock, c) {
                     break;
                 }
                 c = (c + 1) % n;
@@ -554,9 +554,9 @@ impl MainMenu {
             self.prev_cursor = -1;
             self.lists.scratch_for = crate::menu::SPELL_PRACTICE;
             self.lists.scratch = vec![
-                scratch(ctx, RT_SLOT, 2, false),
-                scratch(ctx, RT_SLOT, 3, false),
-                scratch(ctx, crate::menu::ANM_SLOT, 144, false),
+                scratch(&ctx.w, RT_SLOT, 2, false),
+                scratch(&ctx.w, RT_SLOT, 3, false),
+                scratch(&ctx.w, crate::menu::ANM_SLOT, 144, false),
             ];
             // QUIRK (16 §6.4): the anchor bits go to the EA5C VM twice, so the pie frame stays centred.
             self.lists.scratch[2].flags &= !(anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y);
@@ -595,7 +595,9 @@ impl MainMenu {
         if !self.lists.sp_input || self.pending.is_some() {
             return;
         }
-        self.move_cursor(ctx, n, LEFT, RIGHT, Self::sp_shot_ok);
+        self.move_cursor(ctx, n, LEFT, RIGHT, |ctx, c| {
+            Self::sp_shot_ok(&ctx.w, ctx.core.unlock, c)
+        });
         let inp = ctx.w.input;
         let d = if inp.pressed_or_repeat(UP) {
             -1
@@ -679,11 +681,11 @@ impl MainMenu {
             let count = (b - a) as u32;
             let (mut pc, mut pca, mut seen_all) = (0u32, 0u32, 0u32);
             for id in a..b {
-                let c = catk(ctx, id);
+                let c = catk(&ctx.w, id);
                 pc += u32::from(c.counters[PC][s] != 0);
                 pca += u32::from(c.counters[PC][12] != 0);
                 let sn = if r > 8 {
-                    selectable(ctx, id)
+                    selectable(&ctx.w, id)
                 } else {
                     seen(&c, 12)
                 };
@@ -732,7 +734,7 @@ impl MainMenu {
             sc_shot as f32 / 205.0,
             tot[1] as f32 / 222.0,
             (0..205)
-                .filter(|&id| catk(ctx, id).counters[SC][12] != 0)
+                .filter(|&id| catk(&ctx.w, id).counters[SC][12] != 0)
                 .count() as f32
                 / 205.0,
         ];
@@ -766,7 +768,7 @@ impl MainMenu {
     }
 
     // Emit of 0x46F5CB: scratch 0, scratch 1 / 2, then pies and percent glyphs interleaved (16 §6.4 steps 1, 4, 6).
-    pub(crate) fn spell_char_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+    pub(crate) fn spell_char_emit(&self, ctx: &View, rec: &mut Recorder) {
         if self.spell_char_own() {
             emit0(ctx, rec, &self.lists.scratch[0]);
             emit0(ctx, rec, &self.lists.scratch[1]);
@@ -801,11 +803,11 @@ impl MainMenu {
     }
 
     // Displayed by card id: the CATK bytes are only the vanilla text.
-    fn row_name(ctx: &Ctx, id: usize) -> Txt {
-        let c = catk(ctx, id);
+    fn row_name(w: &World, id: usize) -> Txt {
+        let c = catk(w, id);
         if seen(&c, 12) {
             Txt::new(spell_ref(id, SpellField::Name), sjis(&c.name))
-        } else if id >= 205 && selectable(ctx, id) {
+        } else if id >= 205 && selectable(w, id) {
             Builtin::SpWelcome.txt()
         } else {
             Builtin::Unknown8.txt()
@@ -817,12 +819,12 @@ impl MainMenu {
         let (a, b) = self.card_ids();
         self.lists.scratch_for = crate::menu::SPELL_CARD;
         self.lists.scratch = (0..15)
-            .map(|j| scratch(ctx, RT_SLOT, j + 2, false))
+            .map(|j| scratch(&ctx.w, RT_SLOT, j + 2, false))
             .collect();
         for j in 0..15 {
             let i = uidx(self.lists.page) * 15 + j;
             if a + i < b {
-                let s = Self::row_name(ctx, a + i);
+                let s = Self::row_name(&ctx.w, a + i);
                 render_strip(ctx, &mut self.lists.scratch[j], s);
             }
         }
@@ -844,10 +846,10 @@ impl MainMenu {
     }
 
     // Info panel line k (16 §6.3, 0x46D7F9).
-    fn info_line(&self, ctx: &Ctx, k: usize) -> Txt {
+    fn info_line(&self, w: &World, k: usize) -> Txt {
         let (a, _) = self.card_ids();
         let id = a + uidx(self.lists.card.max(0));
-        let c = catk(ctx, id);
+        let c = catk(w, id);
         let s = uidx(self.cursor.clamp(0, 11));
         let att = seen(&c, 12);
         let lw = id >= 205;
@@ -902,7 +904,7 @@ impl MainMenu {
             }
             4 => Builtin::SpComment.txt(),
             _ => {
-                if id >= 204 && !att && !selectable(ctx, id) {
+                if id >= 204 && !att && !selectable(w, id) {
                     Builtin::SpHint {
                         card: id as u8,
                         line: (k - 5) as u8,
@@ -921,7 +923,7 @@ impl MainMenu {
     }
 
     fn render_info(&mut self, ctx: &mut Ctx, k: usize) {
-        let s = self.info_line(ctx, k);
+        let s = self.info_line(&ctx.w, k);
         render_strip(ctx, &mut self.lists.info[k], s);
     }
 
@@ -954,10 +956,10 @@ impl MainMenu {
             self.lists.page = self.lists.card / 15;
             self.lists.prev_card = self.lists.card;
             self.card_rows(ctx);
-            self.lists.header = scratch(ctx, RT_SLOT, 17, false);
+            self.lists.header = scratch(&ctx.w, RT_SLOT, 17, false);
             render_strip(ctx, &mut self.lists.header, Builtin::SpListHeader.txt());
             self.lists.info = (0..7)
-                .map(|k| scratch(ctx, TEXT_SLOT, 21 + k, false))
+                .map(|k| scratch(&ctx.w, TEXT_SLOT, 21 + k, false))
                 .collect();
             for k in 0..7 {
                 self.render_info(ctx, k);
@@ -1024,7 +1026,7 @@ impl MainMenu {
         let id = a + uidx(self.lists.card);
         if inp.pressed(CONFIRM) {
             // Locked card: SE 0x29 (16 §6.2).
-            let ok = seen(&catk(ctx, id), 12) || selectable(ctx, id);
+            let ok = seen(&catk(&ctx.w, id), 12) || selectable(&ctx.w, id);
             if !ok {
                 ctx.w.sound.play(sound::INVALID);
                 return;
@@ -1069,7 +1071,7 @@ impl MainMenu {
             }
             let id = a + i;
             let y = 94.0 + 16.0 * j as f32;
-            let c = catk(ctx, id);
+            let c = catk(&ctx.w, id);
             let col = vm_argb(&self.lists.scratch[j]);
             let marker = if c.counters[PC][s] != 0 {
                 "@"
@@ -1111,7 +1113,7 @@ impl MainMenu {
         self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15
     }
 
-    pub(crate) fn spell_card_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+    pub(crate) fn spell_card_emit(&self, ctx: &View, rec: &mut Recorder) {
         if !self.spell_card_own() {
             return;
         }
@@ -1254,7 +1256,7 @@ impl MainMenu {
                 ),
                 Err(_) => Txt::dynamic(sjis(&r.card_name())),
             };
-            self.notice = scratch(ctx, RT_SLOT, 11, false);
+            self.notice = scratch(&ctx.w, RT_SLOT, 11, false);
             render_strip(ctx, &mut self.notice, name);
             self.cursor = int(first);
             self.lists.rpy_sub = 2;
@@ -1445,7 +1447,7 @@ impl MainMenu {
         }
     }
 
-    pub(crate) fn replay_emit(&self, ctx: &Ctx, rec: &mut Recorder) {
+    pub(crate) fn replay_emit(&self, ctx: &View, rec: &mut Recorder) {
         if let (2 | 3, Some(i)) = (self.lists.rpy_sub, self.lists.rpy_loaded)
             && self.replays[i].1.spell_id() >= 0
         {

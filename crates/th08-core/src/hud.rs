@@ -7,12 +7,13 @@ use crate::drawlist::{
     Align, Blend, FULLSCREEN, PLAYFIELD, Recorder, TexId, TextCmd, TextSite, Vertex,
 };
 use crate::enemy::EnemyManager;
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, Game};
 use crate::msg::{self, Dialogue, Event};
 use crate::player::{Player, Popup, Stats};
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::lo8;
+use crate::world::World;
 use anyhow::Result;
 
 // Hud_Calc 0x4338CA prio 15, Hud_Draw 0x433927 prio 17; ANM slots front 10, loadingNN 12, stgNtxt 13, times 14 (12 §5.1).
@@ -884,13 +885,13 @@ impl Hud {
                 anm.prepare(vm, 5);
             }
         }
-        if !dialogue_active(ctx) {
+        if !dialogue_active(&ctx.w) {
             self.bar_step(ctx);
         }
     }
 
     // Hud_DrawBoss emit: unguarded VMs, the guarded bar part, the stage-clear VM last.
-    fn emit_boss(&self, ctx: &Ctx, rec: &mut Recorder) {
+    fn emit_boss(&self, ctx: &View, rec: &mut Recorder) {
         let anm = &ctx.w.anm;
         rec.set_viewport(PLAYFIELD);
         // Stage title VMs, the stage-start clock, then the night clock with Draw2DRot (12 §5.1, §5.7).
@@ -918,7 +919,7 @@ impl Hud {
                 anm.emit_mode(rec, vm, 5);
             }
         }
-        if !dialogue_active(ctx) {
+        if !dialogue_active(ctx.w) {
             self.emit_bar(ctx, rec);
         }
         if self.clear_vm.script.is_some() {
@@ -974,7 +975,7 @@ impl Hud {
     }
 
     // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
-    fn emit_bar(&self, ctx: &Ctx, rec: &mut Recorder) {
+    fn emit_bar(&self, ctx: &View, rec: &mut Recorder) {
         let Some(e) = ctx.w.enemies.as_deref() else {
             return;
         };
@@ -1252,8 +1253,8 @@ impl Hud {
 }
 
 // Msg_IsActive on the HUD's dialogue (10 §1).
-fn dialogue_active(ctx: &Ctx) -> bool {
-    ctx.w.msg.as_deref().is_some_and(Dialogue::active)
+fn dialogue_active(w: &World) -> bool {
+    w.msg.as_deref().is_some_and(Dialogue::active)
 }
 
 // The HUD lent out of `ctx.w.hud` for a step that also takes the `Ctx` (nothing it calls reads `ctx.w.hud`).
@@ -1285,7 +1286,7 @@ impl Task<Ctx> for HudTask {
         with_hud(ctx, |h, ctx| h.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(h) = ctx.w.hud.as_deref() {
             h.emit(ctx, rec, tag);
         }
@@ -1331,7 +1332,7 @@ impl Hud {
         let inp = ctx.w.input.game_view();
         self.ecl_requests(ctx);
         // Hud_Update 0x435900, steps 1–7 of 12 §5.1b.
-        if !dialogue_active(ctx)
+        if !dialogue_active(&ctx.w)
             && let Some(e) = ctx.w.enemies.as_deref()
         {
             self.boss_calc(e);
@@ -1483,7 +1484,7 @@ impl Hud {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         if ctx.w.game.loading != 0 {
             return;
         }

@@ -5,7 +5,7 @@ use crate::anmvm::{self, AnmVm, table_index};
 use crate::builtin::Builtin;
 use crate::drawlist::{Align, PLAYFIELD, Recorder, TextCmd, TextSite};
 use crate::enemy::EnemyManager;
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::task::{self, Chain, Ret, Task};
 use crate::textref::Text;
 use crate::types::lo8;
@@ -408,7 +408,7 @@ impl Task<Ctx> for GuiTask {
         with_gui(ctx, |g, ctx| g.draw_step(ctx, tag)).unwrap_or(Ret::Next)
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(g) = ctx.w.gui.as_deref() {
             g.emit(ctx, rec, tag);
         }
@@ -530,7 +530,7 @@ impl Gui {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         let anm = &ctx.w.anm;
         rec.set_viewport(PLAYFIELD);
         // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4.

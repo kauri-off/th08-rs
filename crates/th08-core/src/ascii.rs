@@ -3,7 +3,7 @@
 use crate::anmvm::{self, AnmVm};
 use crate::drawlist::Recorder;
 use crate::drawlist::{Blend, FULLSCREEN};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, Game};
 use crate::input::{self, Input};
 use crate::task::{self, Chain, Ret, Task};
@@ -1612,7 +1612,7 @@ impl Task<Ctx> for AsciiTask {
         AsciiManager::with(ctx, |a, ctx| a.draw_step(ctx, tag))
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(a) = ctx.w.ascii_mgr.as_deref() {
             a.emit(ctx, rec, tag);
         }
@@ -1720,7 +1720,7 @@ impl AsciiManager {
         Ret::Next
     }
 
-    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         let high = tag == 1;
         // Pause draw 0x404750 (12 §3): playfield viewport; the capture VM (temporary copy, z-write off) while
         // the state ≠ 0; then menu VMs 0..9, all Draw2DSnap.

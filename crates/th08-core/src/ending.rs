@@ -2,11 +2,12 @@
 
 use crate::anmvm::{self, AnmVm};
 use crate::drawlist::{Align, Recorder, TexId, TextCmd, TextSite};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
 use crate::task::{Chain, Ret};
 use crate::textref::{Text, TextRef};
+use crate::world::World;
 use anyhow::Result;
 use th08_formats::end;
 
@@ -214,8 +215,8 @@ impl Ending {
     }
 
     // Shot / Enter edge (mask 0x1001), or Ctrl held while skip-allowed (16 §1.4).
-    fn released(&self, ctx: &Ctx) -> bool {
-        ctx.w.input.pressed(SHOT | ENTER) || self.skip_allowed && ctx.w.input.down(SKIP)
+    fn released(&self, w: &World) -> bool {
+        w.input.pressed(SHOT | ENTER) || self.skip_allowed && w.input.down(SKIP)
     }
 
     // One interpreter frame (0x428B80, 16 §1.4); false when the script ended (`@z`).
@@ -224,7 +225,7 @@ impl Ending {
             if self.page_timer > 0 {
                 self.page_timer -= 1;
                 if self.page_min == 0 {
-                    if self.released(ctx) {
+                    if self.released(&ctx.w) {
                         self.page_timer = 0;
                     }
                 } else {
@@ -246,7 +247,7 @@ impl Ending {
             } else {
                 self.line_timer -= 1;
                 if self.line_min == 0 {
-                    if self.released(ctx) {
+                    if self.released(&ctx.w) {
                         self.line_timer = 0;
                     }
                 } else {
@@ -515,7 +516,7 @@ impl Ending {
         Ret::Next
     }
 
-    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         if self.done {
             return;
         }

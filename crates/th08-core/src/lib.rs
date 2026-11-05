@@ -1,6 +1,11 @@
 //! th08 game logic core: platform-free `World` state, the `Ctx` frame driver and every ported subsystem.
-// Logic transcendentals go through `fmath` (05 §10); clippy.toml lists the banned std methods.
-#![deny(clippy::disallowed_methods)]
+// Logic transcendentals go through `fmath` (05 §10); clippy.toml lists the banned std methods and the
+// interior-mutability types, so an emit holding `&World` cannot change logic state.
+#![deny(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::disallowed_macros
+)]
 #![forbid(unsafe_code)]
 
 pub mod anmdebug;

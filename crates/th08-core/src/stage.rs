@@ -1188,7 +1188,7 @@ impl Task<Ctx> for StageTask {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, tag: u8) {
         if let Some(st) = ctx.w.stage.as_deref() {
             st.emit(ctx, rec, tag);
         }
@@ -1284,7 +1284,7 @@ impl Stage {
         self.drawn[tag as usize] = out;
     }
 
-    pub fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    pub fn emit(&self, ctx: &crate::game::View, rec: &mut Recorder, tag: u8) {
         let anm = &ctx.w.anm;
         for it in self.drawn.get(tag as usize).into_iter().flatten() {
             match it {

@@ -4,7 +4,7 @@ use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, Timer, table_index};
 use crate::bullet::{BulletDesc, FROZEN_TINT, LaserDesc};
 use crate::drawlist::{PLAYFIELD, Recorder};
-use crate::game::{Ctx, Sys};
+use crate::game::{Ctx, Sys, View};
 use crate::player::Player;
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::{EnemyIdx, lo8};
@@ -3108,7 +3108,7 @@ impl Task<Ctx> for EnemyTask {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         let p = ctx.w.player.as_deref().expect("player");
         let m = ctx.w.enemies.as_deref().expect("enemy manager");
         m.draw_layer_emit(&ctx.w.anm, rec, p, tag == 1, ctx.w.game.flags);

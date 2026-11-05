@@ -35,6 +35,12 @@ pub struct Ctx {
     emit: bool,
 }
 
+// What an emit sees: the World and the port switches, read-only (no interior mutability in th08-core).
+pub struct View<'a> {
+    pub w: &'a crate::world::World,
+    pub core: &'a crate::coreconfig::CoreConfig,
+}
+
 // The sound device that executes the frame's `SoundCmd` stream (13 §1, 02 §3–§5); `audio::Audio` (cpal) in the
 // app and tools.
 pub trait AudioOut {
@@ -245,8 +251,15 @@ impl TestSys {
 
 impl TaskCtx for Ctx {
     type Node = crate::chain::Node;
+    type View<'a> = View<'a>;
     fn tasks(&mut self) -> &mut Tasks<crate::chain::Node> {
         &mut self.w.tasks
+    }
+    fn view(&self) -> View<'_> {
+        View {
+            w: &self.w,
+            core: &self.core,
+        }
     }
     fn recorder(&mut self) -> Option<&mut Recorder> {
         self.emit.then_some(&mut self.rec)
@@ -440,7 +453,11 @@ impl Ctx {
             return;
         }
         if self.w.info.showing() {
-            crate::menu::InfoNotices::draw(self);
+            let v = View {
+                w: &self.w,
+                core: &self.core,
+            };
+            crate::menu::InfoNotices::draw(&v, &mut self.rec);
             if self.drawlog.is_some() {
                 self.log_frame();
             }

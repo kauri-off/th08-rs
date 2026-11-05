@@ -4,7 +4,7 @@ use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::builtin::Builtin;
 use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret};
@@ -423,7 +423,7 @@ impl MusicRoom {
         Ret::Next
     }
 
-    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         if self.removed {
             return;
         }

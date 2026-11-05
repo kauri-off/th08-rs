@@ -5,7 +5,7 @@ use crate::ascii::Text;
 use crate::builtin::Builtin;
 use crate::drawlist::TexId;
 use crate::drawlist::{FULLSCREEN, Recorder};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{
     BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, KEY_S, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
@@ -16,6 +16,7 @@ use crate::sound;
 use crate::task::{Chain, Ret};
 use crate::textref::{FmtArg, SpellField, Text as Txt, TextRef};
 use crate::types::{D3dColor, SceneId, lo8};
+use crate::world::World;
 use th08_formats::sjis::SjisString;
 
 // Result_Calc 0x4584B0 at prio 16, Result_Draw 0x4586B4 at prio 18.
@@ -179,11 +180,11 @@ struct NameKeys {
 
 // AnmVm_Init + sprite, top-left anchor unless centred, white (16 §2.4 text VMs).
 #[expect(clippy::cast_possible_wrap, reason = "ANM slots 0, 0x15, 0x16 (16 §2)")]
-fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
+fn text_vm(w: &World, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     let mut vm = AnmVm::default();
     vm.init();
     vm.anm_slot = slot as _;
-    vm.set_sprite(&ctx.w.anm, sprite);
+    vm.set_sprite(&w.anm, sprite);
     if !centred {
         vm.flags |= anmvm::F_ANCHOR_X | anmvm::F_ANCHOR_Y;
     }
@@ -192,7 +193,7 @@ fn text_vm(ctx: &Ctx, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 }
 
 // Mode-0 draw of a copy at (x, y): the original's draws of these VMs leave no persistent write (16 §2.4).
-fn emit_at(ctx: &Ctx, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
+fn emit_at(ctx: &View, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
     let mut vm = vm.clone();
     vm.pos = [x, y, 0.0];
     ctx.w.anm.emit_mode(rec, &vm, 0);
@@ -705,7 +706,7 @@ impl ResultScreen {
                 if self.frame == 1 {
                     ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     for k in 0..19 {
-                        let s = self.play_line(ctx, k);
+                        let s = self.play_line(&ctx.w, k);
                         self.render(ctx, k, s);
                     }
                     self.run_secs = ctx.w.game.score.plst.run_time[2];
@@ -727,7 +728,7 @@ impl ResultScreen {
                     ctx.w.game.update_run_time(ctx.host.ticks_ms());
                     if ctx.w.game.score.plst.run_time[2] != self.run_secs {
                         self.run_secs = ctx.w.game.score.plst.run_time[2];
-                        let s = self.play_line(ctx, 0);
+                        let s = self.play_line(&ctx.w, 0);
                         self.render(ctx, 0, s);
                     }
                 }
@@ -752,8 +753,8 @@ impl ResultScreen {
         }
     }
 
-    fn play_line(&self, ctx: &Ctx, k: usize) -> Txt {
-        play_line(&ctx.w.game.score.plst, k, 5)
+    fn play_line(&self, w: &World, k: usize) -> Txt {
+        play_line(&w.game.score.plst, k, 5)
     }
 
     // State 9, Result_NameEntry 0x45621E (16 §2.2): input from frame 10, every key edge or repeat except the ESC finish.
@@ -1358,7 +1359,7 @@ impl ResultScreen {
     }
 
     // Emit of the card list: header text VM 10, then per row the bar (×2.375) and the row text VM, all copies.
-    fn emit_cards(&self, ctx: &Ctx, rec: &mut Recorder) {
+    fn emit_cards(&self, ctx: &View, rec: &mut Recorder) {
         let a = self.vms[VM_ANCHOR].pos;
         if a[0] >= 640.0 || self.card_page < 0 {
             return;
@@ -1408,13 +1409,13 @@ impl ResultScreen {
             .map(|k| {
                 // AnmVm_Init colour 0xFFFFFFFF; never seen before a page renders or fades them (16 §2.4).
                 if k < 14 {
-                    text_vm(ctx, 0, 21 + k, false)
+                    text_vm(&ctx.w, 0, 21 + k, false)
                 } else {
-                    text_vm(ctx, RT_SLOT, 2 + k - 14, false)
+                    text_vm(&ctx.w, RT_SLOT, 2 + k - 14, false)
                 }
             })
             .collect();
-        self.bar = text_vm(ctx, ANM_SLOT, 32, true);
+        self.bar = text_vm(&ctx.w, ANM_SLOT, 32, true);
         // +0x58, the replay name, starts as LSNM (15 §3.6 "pre-filled from LSNM"; state 9 overwrites it).
         self.name.copy_from_slice(&ctx.w.game.score.lsnm[..8]);
         self.register_state(&mut ctx.w.game);
@@ -1503,7 +1504,7 @@ impl ResultScreen {
         Ret::Next
     }
 
-    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         if self.removed {
             return;
         }

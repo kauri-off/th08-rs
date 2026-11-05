@@ -5,12 +5,13 @@ use crate::ascii::{int, lo16, short, uidx};
 use crate::builtin::Builtin;
 use crate::config::Config;
 use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
 use crate::task::{Chain, Ret};
 use crate::types::{SceneId, lo8};
+use crate::world::World;
 use anyhow::Result;
 
 // title01.anm in ANM slot 20; calc prio 4 (0x467399), draw prio 3 (0x47087F) (00 §4).
@@ -170,14 +171,14 @@ impl InfoNotices {
     }
 
     // Draw of the iteration: the picture full-screen and the black quad (0, 0)–(639, 479).
-    pub fn draw(ctx: &mut Ctx) {
+    pub fn draw(ctx: &View, rec: &mut Recorder) {
         let Some((tex, _)) = ctx.w.info.cur else {
             return;
         };
-        ctx.rec.set_viewport(FULLSCREEN);
-        ctx.rec.image(tex, 0.0, 0.0);
+        rec.set_viewport(FULLSCREEN);
+        rec.image(tex, 0.0, 0.0);
         if let Some(a) = info_fade_alpha(ctx.w.info.drawn) {
-            ctx.rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
+            rec.rect(0.0, 0.0, 639.0, 479.0, [0, 0, 0, a]);
         }
     }
 }
@@ -485,17 +486,17 @@ impl MainMenu {
             self.highlight(ctx, 1 + i, int(i) == self.cursor);
         }
         for i in 0..ITEMS {
-            if Self::item_locked(ctx, i) {
+            if Self::item_locked(&ctx.w, ctx.core.unlock, i) {
                 self.vms[1 + i].color = [0x40, 0x40, 0x40, 0xFF];
             }
         }
     }
 
     // Items 1 (Extra) and 2 (Spell Practice) are skipped and drawn 0xFF404040 while locked (12 §2.2).
-    fn item_locked(ctx: &Ctx, i: usize) -> bool {
+    fn item_locked(w: &World, unlock: bool, i: usize) -> bool {
         match i {
-            1 => !extra_any(&ctx.w.game, ctx.core.unlock),
-            2 => !spell_practice_unlocked(&ctx.w.game, ctx.core.unlock),
+            1 => !extra_any(&w.game, unlock),
+            2 => !spell_practice_unlocked(&w.game, unlock),
             _ => false,
         }
     }
@@ -524,7 +525,9 @@ impl MainMenu {
             self.highlight_items(ctx);
         }
         if input && self.quitting.is_none() {
-            let locked: Vec<bool> = (0..ITEMS).map(|i| Self::item_locked(ctx, i)).collect();
+            let locked: Vec<bool> = (0..ITEMS)
+                .map(|i| Self::item_locked(&ctx.w, ctx.core.unlock, i))
+                .collect();
             let old = self.cursor;
             self.move_cursor(ctx, int(ITEMS), UP, DOWN, |_, c| !locked[uidx(c)]);
             if self.cursor != old {
@@ -794,7 +797,7 @@ impl MainMenu {
     fn char_allowed(&self, ctx: &Ctx, c: i32) -> bool {
         match self.screen {
             CHAR_EXTRA => extra_unlocked(&ctx.w.game, ctx.core.unlock, uidx(c)),
-            CHAR_SPELL => Self::sp_shot_ok(ctx, c),
+            CHAR_SPELL => Self::sp_shot_ok(&ctx.w, ctx.core.unlock, c),
             _ => true,
         }
     }
@@ -1387,7 +1390,7 @@ impl MainMenu {
     // description VM, then the per-screen text and the final-route notice.
     // Step: VM draw state (`prepare`), per-screen ASCII pushes / scratch VM positions / pie easing, the notice VM.
     pub(crate) fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
-        if !self.drawn(ctx) || tag == SURFACE_PRIO as u8 {
+        if !self.drawn(&ctx.w) || tag == SURFACE_PRIO as u8 {
             return Ret::Next;
         }
         for vm in &mut self.vms {
@@ -1408,7 +1411,7 @@ impl MainMenu {
             _ => {}
         }
         // Final-route notice: screen 5 only, frame counter > 8, scratch VM at (400, 170) top-left, Draw2DSnap (12 §2.4).
-        if let Some(spr) = self.notice_sprite(ctx) {
+        if let Some(spr) = self.notice_sprite(&ctx.w) {
             let vm = &mut self.notice;
             vm.init();
             vm.anm_slot = short(ANM_SLOT);
@@ -1419,8 +1422,8 @@ impl MainMenu {
         Ret::Next
     }
 
-    pub(crate) fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
-        if !self.drawn(ctx) {
+    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
+        if !self.drawn(ctx.w) {
             return;
         }
         rec.set_viewport(FULLSCREEN);
@@ -1442,7 +1445,7 @@ impl MainMenu {
             SPELL_CARD => self.spell_card_emit(ctx, rec),
             _ => {}
         }
-        if self.notice_sprite(ctx).is_some() {
+        if self.notice_sprite(ctx.w).is_some() {
             ctx.w.anm.emit_mode(rec, &self.notice, 0);
         }
     }
@@ -1450,19 +1453,15 @@ impl MainMenu {
 
 impl MainMenu {
     // The draw runs only once loading is done and the VMs exist (12 §2.2).
-    fn drawn(&self, ctx: &Ctx) -> bool {
-        ctx.w.game.menu_loading == 0 && !self.vms.is_empty()
+    fn drawn(&self, w: &World) -> bool {
+        w.game.menu_loading == 0 && !self.vms.is_empty()
     }
 
-    fn notice_sprite(&self, ctx: &Ctx) -> Option<i32> {
+    fn notice_sprite(&self, w: &World) -> Option<i32> {
         if self.screen != CHAR || self.frames <= 8 {
             return None;
         }
-        final_notice(
-            &ctx.w.game,
-            uidx(self.cursor),
-            ctx.w.game.cfg.difficulty as usize,
-        )
+        final_notice(&w.game, uidx(self.cursor), w.game.cfg.difficulty as usize)
     }
 }
 

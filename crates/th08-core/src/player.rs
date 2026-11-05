@@ -3,7 +3,7 @@ use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect::Effects;
-use crate::game::{Ctx, Sys};
+use crate::game::{Ctx, Sys, View};
 use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::input;
 use crate::item::ItemManager;
@@ -1522,7 +1522,7 @@ impl Task<Ctx> for PlayerTask {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         let anm = &ctx.w.anm;
         let p = ctx.w.player.as_deref().expect("player");
         rec.set_viewport(PLAYFIELD);

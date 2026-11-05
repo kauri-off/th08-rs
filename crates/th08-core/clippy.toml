@@ -1,0 +1,58 @@
+# th08-core only: this file replaces the workspace clippy.toml, so the fmath ban below repeats it verbatim.
+disallowed-methods = [
+    { path = "f32::sin", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::cos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::tan", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::asin", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::acos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::atan", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::atan2", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::sin_cos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::exp", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::ln", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::powf", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::hypot", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::mul_add", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::sin", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::cos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::tan", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::asin", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::acos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::atan", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::atan2", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::sin_cos", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::exp", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::ln", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::powf", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::hypot", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f64::mul_add", reason = "use crate::fmath (05 §10: same bits on every target)" },
+]
+too-many-lines-threshold = 150
+too-many-arguments-threshold = 7
+# No interior mutability: an emit that only gets `&World` must not be able to change logic state.
+disallowed-types = [
+    { path = "std::cell::Cell", reason = "no interior mutability in th08-core" },
+    { path = "std::cell::RefCell", reason = "no interior mutability in th08-core" },
+    { path = "std::cell::OnceCell", reason = "no interior mutability in th08-core" },
+    { path = "std::cell::LazyCell", reason = "no interior mutability in th08-core" },
+    { path = "std::cell::UnsafeCell", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::Mutex", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::RwLock", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::OnceLock", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::LazyLock", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicBool", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicI8", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicU8", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicI16", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicU16", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicI32", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicU32", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicI64", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicU64", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicIsize", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicUsize", reason = "no interior mutability in th08-core" },
+    { path = "std::sync::atomic::AtomicPtr", reason = "no interior mutability in th08-core" },
+]
+disallowed-macros = [
+    { path = "std::thread_local", reason = "no interior mutability in th08-core" },
+]

@@ -2,7 +2,7 @@
 
 use crate::anmvm::AnmVm;
 use crate::drawlist::{FULLSCREEN, PLAYFIELD, Recorder};
-use crate::game::Ctx;
+use crate::game::{Ctx, View};
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::{Context, Result};
 
@@ -79,7 +79,7 @@ impl Task<Ctx> for AnmDebugTask {
         with(ctx, |a, ctx| a.draw_step(ctx, tag))
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, tag: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
         if let Some(a) = ctx.w.anm_debug.as_deref() {
             a.emit(ctx, rec, tag);
         }
@@ -108,7 +108,7 @@ impl AnmDebug {
         Ret::Next
     }
 
-    fn emit(&self, ctx: &Ctx, rec: &mut Recorder, _: u8) {
+    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
         rec.set_viewport(if self.playfield {
             PLAYFIELD
         } else {
