@@ -52,7 +52,8 @@ and keeps them in its private storage; the picked files are not changed and can 
 - Desktop: the `save_dir` setting (`th08 --help`) moves `score.dat`, `th08.cfg` and the replays elsewhere.
 - Android: this is the app's private storage. Other apps and a file manager cannot see it, and **uninstalling the
   app deletes it**, saves included.
-- Browser: everything is kept in the site's local storage.
+- Browser: everything is kept in the site's storage (saves and settings in local storage, downloaded translations
+  as `packs/lang_<code>.zip` in the origin private file system); clearing the site data deletes them.
 - With any cheat setting on, `score.dat` and replays are not written (the launcher says so).
 
 ## Translations
@@ -61,7 +62,8 @@ The game text is the original Japanese by default. To get another language, open
 launcher's Language section and download one: the port fetches the translation from Touhou Patch Center
 (thpatch.net) and builds the pack on your device from your own game data, so the game folder must be set first.
 Then pick it in **Game text language** (or leave it at "Same as the screens"). Installed packs can be updated and
-removed in the same panel. The browser build cannot download translations yet.
+removed in the same panel. The browser build does the same with the game files selected in the page and keeps the
+packs in the site's storage.
 
 The launcher and the in-game port menu themselves come in Japanese, English and Russian (**Language** setting).
 

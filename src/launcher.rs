@@ -304,7 +304,6 @@ fn saved_text(r: &Row) -> String {
 
 // Translation packs on the settings screen: the job manager (None without a config folder) and the installed packs,
 // re-listed when (job generation, game folder) changes.
-#[cfg(not(target_arch = "wasm32"))]
 struct Tr {
     manager: Option<crate::translations::Manager>,
     installed: Vec<crate::packs::Installed>,
@@ -352,7 +351,6 @@ pub struct Model {
     rows: Vec<Row>,
     folder: Folder,
     dirs: settings::PlatformDirs,
-    #[cfg(not(target_arch = "wasm32"))]
     tr: Tr,
     // Developer view: Cheats and Tools rows and the origin tags are shown.
     pub dev: bool,
@@ -383,18 +381,20 @@ impl Model {
         let dev = rows
             .iter()
             .any(|r| r.e.audience == Audience::Dev && r.origin > Origin::PortCfg);
-        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        #[cfg(not(target_arch = "wasm32"))]
+        let manager = s
+            .dirs
+            .config
+            .as_deref()
+            .map(|c| crate::translations::Manager::new(c, || {}));
+        #[cfg(target_arch = "wasm32")]
+        let manager = Some(crate::translations::Manager::browser());
         let mut m = Self {
             rows,
             folder,
             dirs: s.dirs.clone(),
-            #[cfg(not(target_arch = "wasm32"))]
             tr: Tr {
-                manager: s
-                    .dirs
-                    .config
-                    .as_deref()
-                    .map(|c| crate::translations::Manager::new(c, || {})),
+                manager,
                 installed: Vec::new(),
                 seen: None,
                 filter: String::new(),
@@ -405,24 +405,21 @@ impl Model {
             saves: SavesUi::default(),
             view: View::Settings,
         };
-        #[cfg(not(target_arch = "wasm32"))]
         m.refresh_installed();
         m
     }
 
     // The translation job manager (tools drive it directly for screenshots).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn translations(&self) -> Option<&crate::translations::Manager> {
         self.tr.manager.as_ref()
     }
 
     // Re-lists the installed packs after an install / remove or a game folder change.
-    #[cfg(not(target_arch = "wasm32"))]
     fn refresh_installed(&mut self) {
         let generation = self.tr.manager.as_ref().map_or(0, |t| t.state().generation);
         let key = (generation, self.game_dir());
         if self.tr.seen.as_ref() != Some(&key) {
-            let gd = (!key.1.is_empty()).then(|| PathBuf::from(&key.1));
+            let gd = (!key.1.is_empty()).then(|| std::path::PathBuf::from(&key.1));
             self.tr.installed = crate::packs::installed(gd.as_deref(), self.dirs.config.as_deref());
             self.tr.seen = Some(key);
         }
@@ -432,7 +429,6 @@ impl Model {
     // when no pack of it is installed (kept, so a reinstall brings it back).
     fn pack_choices(&self, lang: Lang) -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = Vec::new();
-        #[cfg(not(target_arch = "wasm32"))]
         for p in &self.tr.installed {
             if p.language != "ja" && !v.iter().any(|(c, _)| *c == p.language) {
                 let name = if p.title.is_empty() {
@@ -469,7 +465,6 @@ impl Model {
         self.rows.iter_mut().find(|r| r.e.key == key).unwrap()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn game_dir(&self) -> String {
         self.row("game_dir").value.text()
     }
@@ -730,7 +725,6 @@ impl Model {
     }
 
     fn group_ui(&mut self, ui: &mut egui::Ui, g: Group, lang: Lang) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.refresh_installed();
         let extra = self.pack_choices(lang);
         // The game folder row is at the top.
@@ -930,19 +924,16 @@ impl Model {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn translations_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
-        ui.label(egui::RichText::new(i18n::ui(lang, "tr_title")).strong());
-        ui.label(egui::RichText::new(i18n::ui(lang, "tr_web")).weak());
-    }
-
     // Installed packs, the server's languages and the running download (port-only UI).
-    #[cfg(not(target_arch = "wasm32"))]
     fn translations_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        #[cfg(not(target_arch = "wasm32"))]
         let data = match &self.folder {
             Folder::Native if self.folder_ok() => Some(PathBuf::from(self.game_dir())),
             _ => None,
         };
+        // The browser reads th08.dat / th08.pak from the files picked in the page.
+        #[cfg(target_arch = "wasm32")]
+        let data = matches!(&self.folder, Folder::Web(_) if self.folder_ok()).then_some(());
         let Some(t) = &self.tr.manager else {
             return;
         };
@@ -985,7 +976,10 @@ impl Model {
             ui.colored_label(ui.visuals().warn_fg_color, i18n::ui(lang, "tr_needs_data"));
         }
         job_ui(ui, lang, &st);
+        #[cfg(not(target_arch = "wasm32"))]
         let dir = t.packs_dir().display().to_string();
+        #[cfg(target_arch = "wasm32")]
+        let dir = i18n::ui(lang, "tr_site_storage").to_string();
         ui.label(
             egui::RichText::new(i18n::ui_fmt(lang, "tr_attribution", &[("dir", &dir)]))
                 .small()
@@ -993,8 +987,13 @@ impl Model {
         );
         match act {
             Some((true, code)) => {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(d) = data {
                     t.install(&code, crate::translations::Data::Dir(d));
+                }
+                #[cfg(target_arch = "wasm32")]
+                if data.is_some() {
+                    t.install(&code);
                 }
             }
             Some((false, code)) => {
@@ -1006,7 +1005,6 @@ impl Model {
 }
 
 // Installed packs with Update / Remove for the downloaded ones; returns (install?, code) of a click.
-#[cfg(not(target_arch = "wasm32"))]
 fn installed_ui(
     ui: &mut egui::Ui,
     lang: Lang,
@@ -1070,7 +1068,6 @@ fn installed_ui(
 }
 
 // The server's languages (filtered) with Download / Update.
-#[cfg(not(target_arch = "wasm32"))]
 fn server_ui(
     ui: &mut egui::Ui,
     lang: Lang,
@@ -1135,7 +1132,6 @@ fn server_ui(
 }
 
 // The running job's progress, else the last outcome.
-#[cfg(not(target_arch = "wasm32"))]
 fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
     use crate::translations::Outcome;
     if let Some(code) = st.busy.as_deref().filter(|c| !c.is_empty()) {

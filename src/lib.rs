@@ -12,7 +12,6 @@ pub mod platform;
 pub mod saves;
 pub mod settings;
 pub mod sources;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod translations;
 pub mod transport;
 
@@ -32,13 +31,16 @@ pub fn start(files: js_sys::Array) {
         .collect();
     let source = sources::web(files);
     // `?launcher=0` (or a saved launcher = off) starts the game directly; `?shot=` runs never show it.
-    // Web dirs: none; port.cfg and saves are localStorage items.
+    // Web dirs: none; port.cfg and saves are localStorage items, translation packs are in the site storage.
     let s = settings::Settings::game_environment(settings::PlatformDirs::default());
-    if s.launcher && !s.is_tool_run() {
-        app::run_launcher(Some(source), s);
-    } else {
-        app::run(source, s);
-    }
+    wasm_bindgen_futures::spawn_local(async move {
+        packs::web::load().await;
+        if s.launcher && !s.is_tool_run() {
+            app::run_launcher(Some(source), s);
+        } else {
+            app::run(source, s);
+        }
+    });
 }
 
 // Android entry: logcat logger, panics to logcat, config + saves in the app's internal storage. Game files, first

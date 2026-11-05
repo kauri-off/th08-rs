@@ -45,7 +45,7 @@ pub fn load(decls: &[FontDecl]) -> (Vec<FontInfo>, Vec<String>) {
     let mut bad = Vec::new();
     for d in decls {
         let Some(path) = &d.file else { continue };
-        let Ok(bytes) = std::fs::read(path) else {
+        let Ok(bytes) = crate::vfs::read(path) else {
             bad.push(format!("{}: unreadable", d.name));
             continue;
         };

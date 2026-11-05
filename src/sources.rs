@@ -12,7 +12,23 @@ pub fn native(dir: std::path::PathBuf) -> Source {
 // The web page's picked files as a `Source`.
 #[cfg(target_arch = "wasm32")]
 pub fn web(files: Vec<web_sys::File>) -> Source {
+    PICKED.with_borrow_mut(|p| p.clone_from(&files));
     Source::new(WebFiles(files))
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PICKED: std::cell::RefCell<Vec<web_sys::File>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+// The picked content file (th08.pak first, then th08.dat), for the translation importer.
+#[cfg(target_arch = "wasm32")]
+pub fn web_content_file() -> Option<web_sys::File> {
+    PICKED.with_borrow(|p| {
+        th08_core::content::CONTENT_FILES
+            .iter()
+            .find_map(|c| p.iter().find(|f| f.name().eq_ignore_ascii_case(c)).cloned())
+    })
 }
 
 // Desktop / Android external dir: loose files in one directory.

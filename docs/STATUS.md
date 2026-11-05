@@ -18,7 +18,8 @@
 - Launcher with every port setting (egui on desktop and web, Compose on Android); launcher text in Japanese, English
   and Russian.
 - Translated game text: the launcher's Translations panel downloads a Touhou Patch Center translation and builds a
-  presentation pack on the device from the player's game data (desktop and Android; [arch/I18N.md](arch/I18N.md)).
+  presentation pack on the device from the player's game data (desktop, Android and browser;
+  [arch/I18N.md](arch/I18N.md)).
 - Optional repacked game data (`.pak`, Vorbis BGM) for smaller local packages
   ([arch/ASSETS_FORMAT.md](arch/ASSETS_FORMAT.md)).
 - The idiomatic rewrite is done up to and including the module pass: one cloneable `World`, drawing as a command
@@ -35,7 +36,8 @@
 
 ## Limits
 
-- The browser build cannot download translations.
+- The browser build holds the event loop while it builds a translation pack (a few seconds; the page does not
+  redraw meanwhile).
 
 ## Next
 

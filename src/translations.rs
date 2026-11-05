@@ -1,15 +1,15 @@
-//! Translation packs from the settings screens: the server's language list and download / update / remove jobs on a
-//! background thread, with progress for the screen to poll.
+//! Translation packs from the settings screens: server language list, download / update / remove jobs, progress.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use th08_thcrap::Progress;
 use th08_thcrap::manage::{self, ServerLang};
-use th08_thcrap::thcrap::Vanilla;
-use th08_thcrap::thpatch::Client;
+#[cfg(not(target_arch = "wasm32"))]
+use th08_thcrap::{thcrap::Vanilla, thpatch::Client};
 
 // Where the importer reads the vanilla text (it maps the translation's keys through th08.dat / th08.pak).
+#[cfg(not(target_arch = "wasm32"))]
 pub enum Data {
     Dir(PathBuf),
     Bytes {
@@ -26,6 +26,7 @@ pub enum Data {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Data {
     fn vanilla(self) -> anyhow::Result<Vanilla> {
         match self {
@@ -118,6 +119,16 @@ impl Manager {
         self.state.lock().unwrap().busy.is_some()
     }
 
+    fn report(&self) -> Report {
+        Report {
+            state: self.state.clone(),
+            repaint: self.repaint.clone(),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Manager {
     // Runs `job` on a new thread unless one is running; false = refused.
     fn spawn(
         &self,
@@ -134,10 +145,7 @@ impl Manager {
             s.building = false;
             s.last_line.clear();
         }
-        let r = Report {
-            state: self.state.clone(),
-            repaint: self.repaint.clone(),
-        };
+        let r = self.report();
         std::thread::spawn(move || {
             let out = job(&r);
             let mut s = r.state.lock().unwrap();
@@ -205,9 +213,14 @@ impl Manager {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 // Progress that marks the build step once the download reports its last file.
+#[cfg(not(target_arch = "wasm32"))]
 struct Building<'a>(&'a Report);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Progress for Building<'_> {
     fn line(&self, s: &str) {
         self.0.line(s);
@@ -222,6 +235,7 @@ impl Progress for Building<'_> {
 // The Android settings screen's calls (JNI `Packs.call`): one JSON request, one JSON reply.
 // `{"op": "status" | "list" | "install" | "remove", "config": DIR, "dir": GAME_DIR?, "code": "en"?,
 //   "fd": N?, "off": N?, "len": N?, "name": "th08.pak"?}`; the reply always carries the state and the installed packs.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bridge {
     use super::{Data, Manager, Outcome};
     use serde_json::{Value, json};

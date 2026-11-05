@@ -22,9 +22,9 @@ pub struct Source {
 
 // SOURCE.txt of a cache folder, else (a local thcrap folder) the newest file time; revision = hash of files.js.
 pub fn source_of(dir: &Path, patch: &str) -> Source {
-    let revision = std::fs::read(dir.join("files.js"))
+    let revision = crate::vfs::read(dir.join("files.js"))
         .map_or_else(|_| "unknown".to_string(), |b| thpatch::revision(&b));
-    if let Ok(s) = std::fs::read_to_string(dir.join("SOURCE.txt")) {
+    if let Ok(s) = crate::vfs::read_to_string(dir.join("SOURCE.txt")) {
         let field = |k: &str| {
             s.lines()
                 .find_map(|l| l.strip_prefix(k).map(|v| v.trim().to_string()))
@@ -40,11 +40,10 @@ pub fn source_of(dir: &Path, patch: &str) -> Source {
     let mut newest = std::time::SystemTime::UNIX_EPOCH;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-            let p = e.path();
-            if p.is_dir() {
+        for p in crate::vfs::list(&d).into_iter().flatten() {
+            if crate::vfs::is_dir(&p) {
                 stack.push(p);
-            } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+            } else if let Some(t) = crate::vfs::modified(&p) {
                 newest = newest.max(t);
             }
         }
@@ -116,7 +115,13 @@ fn font_report(
         writeln!(t, "  {b}")?;
     }
     // Per script: characters from the chain, from the system font only, from no font.
+    #[cfg(not(target_arch = "wasm32"))]
     let sys = th08_render::text::Raster::new(None, Vec::new());
+    #[cfg(not(target_arch = "wasm32"))]
+    let system_has = |c: char| sys.has_glyph(c).1 == Some(true);
+    // The browser draws what the pack fonts lack with its own fonts, which cannot be asked here.
+    #[cfg(target_arch = "wasm32")]
+    let system_has = |_: char| true;
     let mut per: std::collections::BTreeMap<&str, (usize, usize, usize)> =
         std::collections::BTreeMap::new();
     let mut none = Vec::new();
@@ -125,7 +130,7 @@ fn font_report(
         let e = per.entry(s).or_default();
         if chain.covered.get(&c).copied().flatten().is_some() {
             e.0 += 1;
-        } else if sys.has_glyph(c).1 == Some(true) {
+        } else if system_has(c) {
             e.1 += 1;
         } else {
             e.2 += 1;
@@ -251,25 +256,25 @@ fn attribution(s: &Source, fonts: &str) -> String {
 
 // Empty, or a previous pack (pack.toml present) that `--force` may replace.
 fn prepare_dir(dir: &Path, force: bool) -> Result<()> {
-    if dir.exists() && std::fs::read_dir(dir)?.next().is_some() {
-        if !(force && dir.join("pack.toml").is_file()) {
+    if crate::vfs::exists(dir) && !crate::vfs::list(dir)?.is_empty() {
+        if !(force && crate::vfs::is_file(&dir.join("pack.toml"))) {
             bail!(
                 "{}: not empty (--force replaces an existing pack)",
                 dir.display()
             );
         }
-        std::fs::remove_dir_all(dir)?;
+        crate::vfs::remove_dir_all(dir)?;
     }
-    std::fs::create_dir_all(dir)?;
+    crate::vfs::create_dir_all(dir)?;
     Ok(())
 }
 
 fn write(dir: &Path, rel: &str, b: &[u8]) -> Result<()> {
     let p = dir.join(rel);
     if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d)?;
+        crate::vfs::create_dir_all(d)?;
     }
-    std::fs::write(&p, b).with_context(|| format!("write {}", p.display()))
+    crate::vfs::write(&p, b).with_context(|| format!("write {}", p.display()))
 }
 
 // `fonts/<k>-<name>` with [A-Za-z0-9._-] only.

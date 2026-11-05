@@ -31,7 +31,7 @@ pub struct Vanilla {
 impl Vanilla {
     // th08.dat or a th08.pak repacked from it (by its name).
     pub fn from_dat(path: &Path) -> Result<Self> {
-        let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let raw = crate::vfs::read(path).with_context(|| format!("read {}", path.display()))?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         Self::from_bytes(&name, raw)
     }
@@ -39,16 +39,11 @@ impl Vanilla {
     // The content file of a game folder (th08.pak first, then th08.dat, any letter case).
     pub fn from_game_dir(dir: &Path) -> Result<Self> {
         for n in th08_core::content::CONTENT_FILES {
-            let found = std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| {
-                    p.is_file()
-                        && p.file_name()
-                            .is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case(n))
-                });
+            let found = crate::vfs::list(dir).into_iter().flatten().find(|p| {
+                crate::vfs::is_file(p)
+                    && p.file_name()
+                        .is_some_and(|f| f.to_string_lossy().eq_ignore_ascii_case(n))
+            });
             if let Some(p) = found {
                 return Self::from_dat(&p);
             }
@@ -359,11 +354,11 @@ pub struct Lang {
 }
 
 fn read_json(p: &Path) -> Result<Option<serde_json::Map<String, Value>>> {
-    let Ok(meta) = std::fs::metadata(p) else {
+    let Some(len) = crate::vfs::len(p) else {
         return Ok(None);
     };
-    anyhow::ensure!(meta.len() <= MAX_JSON, "{}: too large", p.display());
-    let b = std::fs::read(p)?;
+    anyhow::ensure!(len <= MAX_JSON, "{}: too large", p.display());
+    let b = crate::vfs::read(p)?;
     // thcrap JSON may carry a UTF-8 BOM.
     let b = b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&b);
     match serde_json::from_slice::<Value>(b) {
@@ -451,19 +446,18 @@ pub fn images(dir: &Path, report: &mut Report) -> Vec<(String, Vec<u8>)> {
     let g = dir.join("th08");
     let mut stack = vec![g.clone()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else {
+        let Ok(mut ents) = crate::vfs::list(&d) else {
             continue;
         };
-        let mut ents: Vec<_> = rd.flatten().map(|e| e.path()).collect();
         ents.sort();
         for p in ents {
-            let ft = std::fs::symlink_metadata(&p).map(|m| m.file_type());
-            if ft.as_ref().is_ok_and(std::fs::FileType::is_dir) {
-                stack.push(p);
-                continue;
-            }
-            if !ft.is_ok_and(|t| t.is_file()) {
-                continue;
+            match crate::vfs::kind(&p) {
+                Some(crate::vfs::Kind::Dir) => {
+                    stack.push(p);
+                    continue;
+                }
+                Some(crate::vfs::Kind::File) => {}
+                _ => continue,
             }
             let rel = p
                 .strip_prefix(&g)
@@ -489,8 +483,8 @@ pub fn images(dir: &Path, report: &mut Report) -> Vec<(String, Vec<u8>)> {
                     continue;
                 }
             };
-            let ok = std::fs::metadata(&p).is_ok_and(|m| m.len() <= MAX_IMAGE);
-            match std::fs::read(&p) {
+            let ok = crate::vfs::len(&p).is_some_and(|n| n <= MAX_IMAGE);
+            match crate::vfs::read(&p) {
                 Ok(b) if ok && image::load_from_memory(&b).is_ok() => out.push((dst, b)),
                 _ => report.add("image", format!("{rel}: not a decodable image, skipped")),
             }

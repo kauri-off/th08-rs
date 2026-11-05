@@ -95,7 +95,7 @@ tr_removed = "{lang} を削除しました"
 tr_failed = "{lang}: {err}"
 tr_needs_data = "先にゲームフォルダを選んでください: th08.dat または th08.pak を読み込みます"
 tr_attribution = "翻訳: Touhou Patch Center (thpatch.net) とその協力者、CC BY-SA 4.0。ゲームのテキストは上海アリス幻樂団によるものです。パックはこの端末の {dir} に作成され、個人利用に限ります。"
-tr_web = "ブラウザ版では翻訳のダウンロードにまだ対応していません。デスクトップ版か Android 版を使ってください。"
+tr_site_storage = "このブラウザのサイトデータ"
 [group]
 language = "言語"
 game_data = "ゲームデータ"

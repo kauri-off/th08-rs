@@ -51,6 +51,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 log = "0.4.34"
 serde_json = "1"
 toml = "1.1"
+# Translation download / import from the settings screens (translations.rs).
+th08-thcrap = { path = "crates/th08-thcrap" }
 web-time = "1.1.0"
 wgpu = "30"
 winit = "0.30"
@@ -81,8 +83,6 @@ directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Start-up blocks on a future on Android too (app::spawn), so pollster is native, not desktop-only.
 pollster = "1.0.1"
-# Translation download / import from the settings screens (translations.rs).
-th08-thcrap = { path = "crates/th08-thcrap" }
 
 # Desktop only: no file/message dialogs, CLI or stderr logger on wasm (page) or Android (logcat).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
@@ -110,7 +110,7 @@ egui-winit = { version = "0.37", default-features = false }
 js-sys = "0.3.106"
 wasm-bindgen = "0.2.129"
 wasm-bindgen-futures = "0.4.79"
-web-sys = { version = "0.3.106", features = ["Window", "Document", "HtmlCanvasElement", "HtmlInputElement", "Element", "File", "FileList", "Location", "UrlSearchParams", "Blob", "Event", "console", "CanvasRenderingContext2d", "ImageData", "TextMetrics", "Storage", "Navigator", "HtmlAnchorElement", "Url", "BlobPropertyBag", "EventTarget"] }
+web-sys = { version = "0.3.106", features = ["Window", "Document", "HtmlCanvasElement", "HtmlInputElement", "Element", "File", "FileList", "Location", "UrlSearchParams", "Blob", "Event", "console", "CanvasRenderingContext2d", "ImageData", "TextMetrics", "Storage", "Navigator", "HtmlAnchorElement", "Url", "BlobPropertyBag", "EventTarget", "Response", "StorageManager", "FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetDirectoryOptions", "FileSystemGetFileOptions", "FileSystemWritableFileStream"] }
 
 [profile.dev.package."*"]
 opt-level = 2

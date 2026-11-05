@@ -254,10 +254,7 @@ pub const UI: &[(&str, &str)] = &[
         "Translations by Touhou Patch Center (thpatch.net) and its contributors, CC BY-SA 4.0; the game text \
          is by Team Shanghai Alice. Packs are built on this device into {dir}, for personal use.",
     ),
-    (
-        "tr_web",
-        "Downloading translations is not available in the browser version yet; use the desktop or Android version.",
-    ),
+    ("tr_site_storage", "this browser's site storage"),
 ];
 
 type Table = HashMap<String, String>;

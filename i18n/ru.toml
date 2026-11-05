@@ -95,7 +95,7 @@ tr_removed = "{lang} удалён"
 tr_failed = "{lang}: {err}"
 tr_needs_data = "сначала выберите папку игры: импорт читает th08.dat или th08.pak"
 tr_attribution = "Переводы: Touhou Patch Center (thpatch.net) и его участники, CC BY-SA 4.0; текст игры — Team Shanghai Alice. Пакеты собираются на этом устройстве в {dir}, для личного использования."
-tr_web = "В браузерной версии скачивание переводов пока недоступно; используйте версию для компьютера или Android."
+tr_site_storage = "хранилище сайта в этом браузере"
 [group]
 language = "Язык"
 game_data = "Данные игры"

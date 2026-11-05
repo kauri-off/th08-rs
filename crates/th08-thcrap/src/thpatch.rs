@@ -145,8 +145,15 @@ impl Patch {
     }
 }
 
+// Natively a blocking HTTPS agent. In the browser requests cannot block: `get` answers from the responses the page
+// fetched and records every other URL as pending; the page fetches those and runs the job again until none is left.
 pub struct Client {
+    #[cfg(not(target_arch = "wasm32"))]
     agent: ureq::Agent,
+    #[cfg(target_arch = "wasm32")]
+    responses: Mutex<HashMap<String, Result<Vec<u8>, String>>>,
+    #[cfg(target_arch = "wasm32")]
+    pending: Mutex<std::collections::BTreeSet<String>>,
     // Repo id → base URL; `thpatch` is the server itself, others come from `repo.js` neighbours.
     repos: Mutex<HashMap<String, String>>,
     neighbours: Mutex<Option<Vec<String>>>,
@@ -160,19 +167,57 @@ impl Default for Client {
 
 impl Client {
     pub fn new() -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(60)))
-            .build()
-            .into();
         let repos = HashMap::from([("thpatch".to_string(), SERVER.to_string())]);
         Self {
-            agent,
+            #[cfg(not(target_arch = "wasm32"))]
+            agent: ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(60)))
+                .build()
+                .into(),
+            #[cfg(target_arch = "wasm32")]
+            responses: Mutex::default(),
+            #[cfg(target_arch = "wasm32")]
+            pending: Mutex::default(),
             repos: Mutex::new(repos),
             neighbours: Mutex::new(None),
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn get(&self, url: &str) -> Result<Vec<u8>> {
+        match self.responses.lock().unwrap().get(url) {
+            Some(Ok(b)) => Ok(b.clone()),
+            Some(Err(e)) => anyhow::bail!("GET {url}: {e}"),
+            None => {
+                self.pending.lock().unwrap().insert(url.to_string());
+                anyhow::bail!("GET {url}: not fetched yet")
+            }
+        }
+    }
+
+    // The URLs asked for since the last call that have no response yet.
+    #[cfg(target_arch = "wasm32")]
+    pub fn take_pending(&self) -> Vec<String> {
+        std::mem::take(&mut *self.pending.lock().unwrap())
+            .into_iter()
+            .collect()
+    }
+
+    // A response fetched by the page: the body (at most `MAX_FILE` bytes) or the error.
+    #[cfg(target_arch = "wasm32")]
+    pub fn answer(&self, url: &str, r: Result<Vec<u8>, String>) {
+        let r = r.and_then(|b| {
+            if b.len() as u64 > MAX_FILE {
+                Err(format!("larger than {} MiB", MAX_FILE >> 20))
+            } else {
+                Ok(b)
+            }
+        });
+        self.responses.lock().unwrap().insert(url.to_string(), r);
+    }
+
     // Up to three attempts: a phone's connection drops single requests of a parallel batch.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get(&self, url: &str) -> Result<Vec<u8>> {
         let mut last = None;
         for attempt in 0..3u64 {
@@ -308,42 +353,39 @@ impl Client {
     // failed requests.
     fn download_all(&self, items: &[(String, PathBuf, u32)], prog: &dyn Progress) -> Vec<String> {
         let crc_ok =
-            |p: &Path, crc: u32| std::fs::read(p).is_ok_and(|b| crc32fast::hash(&b) == crc);
+            |p: &Path, crc: u32| crate::vfs::read(p).is_ok_and(|b| crc32fast::hash(&b) == crc);
         let todo: Vec<&(String, PathBuf, u32)> =
             items.iter().filter(|(_, p, c)| !crc_ok(p, *c)).collect();
         let next = std::sync::atomic::AtomicUsize::new(0);
         let done = std::sync::atomic::AtomicUsize::new(0);
         let errors = Mutex::new(Vec::new());
         prog.files(0, todo.len());
-        std::thread::scope(|s| {
-            for _ in 0..WORKERS {
-                s.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((url, p, crc)) = todo.get(i) else {
-                            break;
-                        };
-                        let r = self.get(url).and_then(|b| {
-                            // The server's own list can be stale (lang_ru themes.js, 2026-11): kept, reported.
-                            if crc32fast::hash(&b) != *crc {
-                                prog.line(&format!(
-                                    "  warning: {url}: CRC32 differs from files.js (kept)"
-                                ));
-                            }
-                            if let Some(d) = p.parent() {
-                                std::fs::create_dir_all(d)?;
-                            }
-                            Ok(std::fs::write(p, b)?)
-                        });
-                        if let Err(e) = r {
-                            errors.lock().unwrap().push(format!("{e:#}"));
-                        }
-                        let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        prog.files(n, todo.len());
+        let worker = || {
+            loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((url, p, crc)) = todo.get(i) else {
+                    break;
+                };
+                let r = self.get(url).and_then(|b| {
+                    // The server's own list can be stale (lang_ru themes.js, 2026-11): kept, reported.
+                    if crc32fast::hash(&b) != *crc {
+                        prog.line(&format!(
+                            "  warning: {url}: CRC32 differs from files.js (kept)"
+                        ));
                     }
+                    if let Some(d) = p.parent() {
+                        crate::vfs::create_dir_all(d)?;
+                    }
+                    Ok(crate::vfs::write(p, b)?)
                 });
+                if let Err(e) = r {
+                    errors.lock().unwrap().push(format!("{e:#}"));
+                }
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                prog.files(n, todo.len());
             }
-        });
+        };
+        crate::parallel(WORKERS, worker);
         errors.into_inner().unwrap()
     }
 }
@@ -408,7 +450,7 @@ pub fn fetch(
         revision(&me.files_raw)
     };
     let dir = cache.join(lang).join(&rev);
-    std::fs::create_dir_all(&dir)?;
+    crate::vfs::create_dir_all(&dir)?;
     let mut layers = Vec::new();
     let mut items: Vec<(String, PathBuf, u32)> = Vec::new();
     for q in &langs {
@@ -440,7 +482,7 @@ pub fn fetch(
                 let path = dir.join("fonts").join(&sub).join("th08.js");
                 let e = c.download_all(&[(format!("{}th08.js", q.base), path.clone(), crc)], p);
                 if e.is_empty()
-                    && let Ok(m) = std::fs::read(&path)
+                    && let Ok(m) = crate::vfs::read(&path)
                         .map_err(anyhow::Error::from)
                         .and_then(|b| json_object(&b, "th08.js"))
                     && let Some(f) = m.get("font").and_then(Value::as_str)
@@ -479,11 +521,11 @@ pub fn fetch(
     ));
     let errors = c.download_all(&items, p);
     anyhow::ensure!(errors.is_empty(), "{lang}: {}", errors.join("; "));
-    std::fs::write(dir.join("files.js"), &me.files_raw)?;
-    std::fs::write(dir.join("patch.js"), serde_json::to_vec_pretty(&me.meta)?)?;
-    if !dir.join("SOURCE.txt").is_file() {
+    crate::vfs::write(dir.join("files.js"), &me.files_raw)?;
+    crate::vfs::write(dir.join("patch.js"), serde_json::to_vec_pretty(&me.meta)?)?;
+    if !crate::vfs::is_file(&dir.join("SOURCE.txt")) {
         let now = jiff::Timestamp::now();
-        std::fs::write(
+        crate::vfs::write(
             dir.join("SOURCE.txt"),
             format!(
                 "url {}\nretrieved {}\nrevision {rev}\n",
@@ -530,7 +572,7 @@ fn local_visit(
         .parent()
         .and_then(Path::file_name)
         .map(|s| s.to_string_lossy().into_owned());
-    let meta = std::fs::read(d.join("patch.js"))
+    let meta = crate::vfs::read(d.join("patch.js"))
         .ok()
         .and_then(|b| json_object(&b, "patch.js").ok());
     for dep in meta
@@ -549,7 +591,7 @@ fn local_visit(
             local_visit(repos, &root.join(r).join(p), out, seen, depth + 1);
         }
     }
-    if depth == 0 || d.is_dir() {
+    if depth == 0 || crate::vfs::is_dir(d) {
         out.push(d.to_path_buf());
     }
 }
@@ -563,7 +605,7 @@ pub fn local_fonts(lang_dir: &Path) -> Fonts {
             .map_or_else(|| "local".to_string(), |s| s.to_string_lossy().into_owned())
     };
     let read = |d: &Path, f: &str| {
-        std::fs::read(d.join(f))
+        crate::vfs::read(d.join(f))
             .ok()
             .and_then(|b| json_object(&b, f).ok())
     };
@@ -618,7 +660,7 @@ pub fn local_fonts(lang_dir: &Path) -> Fonts {
             let p = d.join(&name);
             let (file, status) = if !is_th08_font(&name) {
                 (None, "for another game, skipped".to_string())
-            } else if p.is_file() {
+            } else if crate::vfs::is_file(&p) {
                 (Some(p), "local file".to_string())
             } else {
                 (None, "declared, not installed".to_string())

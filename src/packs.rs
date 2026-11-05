@@ -89,9 +89,46 @@ pub fn select(s: &Settings) -> Option<Mounted> {
     }
 }
 
+// Browser: the packs in the site storage (`web`), by id or by language.
 #[cfg(target_arch = "wasm32")]
-pub fn select(_: &Settings) -> Option<Mounted> {
-    None
+pub fn select(s: &Settings) -> Option<Mounted> {
+    let (id, zip) = if let Some(p) = &s.pack {
+        let found = web::get(p);
+        if found.is_none() {
+            log::warn!("pack {p}: not in the browser storage");
+        }
+        (p.clone(), found?)
+    } else {
+        if s.hermetic && s.game_text.is_none() && s.language.is_none() {
+            return None;
+        }
+        let lang = game_text(s);
+        if lang == "ja" {
+            return None;
+        }
+        let found = web::all().into_iter().find(|(_, z)| {
+            manifest_of_zip(z)
+                .is_some_and(|m| m.get("language").and_then(toml::Value::as_str) == Some(&lang))
+        });
+        if found.is_none() {
+            log::info!("no {lang} presentation pack in the browser storage; vanilla text");
+        }
+        found?
+    };
+    let m = read_zip(std::io::Cursor::new(zip)).and_then(|f| mount(&f, &id));
+    match m {
+        Ok(m) => {
+            for w in &m.warnings {
+                log::warn!("pack {}: {w}", m.id);
+            }
+            log::info!("pack {} ({}) mounted", m.id, m.language);
+            Some(m)
+        }
+        Err(e) => {
+            log::warn!("pack {id}: {e:#}");
+            None
+        }
+    }
 }
 
 // The game text language code: `game_text`, `follow` = the screen language.
@@ -113,6 +150,35 @@ pub struct Installed {
     pub path: std::path::PathBuf,
     // In `<config folder>/packs`: installed by a settings screen, so it can be updated and removed there.
     pub managed: bool,
+}
+
+// Browser: the packs in the site storage, all removable.
+#[cfg(target_arch = "wasm32")]
+pub fn installed(_: Option<&std::path::Path>, _: Option<&std::path::Path>) -> Vec<Installed> {
+    web::all()
+        .into_iter()
+        .filter_map(|(id, z)| {
+            let m = manifest_of_zip(&z)?;
+            let get = |k: &str| {
+                m.get(k)
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let language = get("language");
+            (!language.is_empty()).then(|| Installed {
+                language,
+                title: get("title"),
+                revision: get("revision"),
+                coverage: m
+                    .get("coverage")
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))),
+                path: std::path::PathBuf::from(&id),
+                id,
+                managed: true,
+            })
+        })
+        .collect()
 }
 
 // Every pack of the pack folders (both, name order); `config` = the config folder.
@@ -272,22 +338,75 @@ fn source_date(s: &str) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_manifest(p: &std::path::Path) -> Option<toml::Table> {
-    let text = if p.is_dir() {
-        std::fs::read_to_string(p.join("pack.toml")).ok()?
+    if p.is_dir() {
+        std::fs::read_to_string(p.join("pack.toml"))
+            .ok()?
+            .parse()
+            .ok()
     } else {
-        let mut z = zip::ZipArchive::new(std::fs::File::open(p).ok()?).ok()?;
-        let mut f = z.by_name("pack.toml").ok()?;
-        let mut s = String::new();
-        std::io::Read::read_to_string(&mut f, &mut s).ok()?;
-        s
-    };
-    text.parse().ok()
+        zip_manifest(std::fs::File::open(p).ok()?)
+    }
+}
+
+fn zip_manifest(r: impl std::io::Read + std::io::Seek) -> Option<toml::Table> {
+    let mut z = zip::ZipArchive::new(r).ok()?;
+    let mut f = z.by_name("pack.toml").ok()?;
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut f, &mut s).ok()?;
+    s.parse().ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn manifest_of_zip(z: &[u8]) -> Option<toml::Table> {
+    zip_manifest(std::io::Cursor::new(z))
+}
+
+// Every file of a pack zip, as (relative path with '/', bytes) in name order.
+fn read_zip(r: impl std::io::Read + std::io::Seek) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    let mut z = zip::ZipArchive::new(r)?;
+    for i in 0..z.len() {
+        let mut f = z.by_index(i)?;
+        if f.is_dir() {
+            continue;
+        }
+        let name = f.name()?.replace('\\', "/");
+        let mut b = Vec::new();
+        f.read_to_end(&mut b)?;
+        out.push((name, b));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+// A pack folder's files as a zip (the browser keeps each pack as one zip); text deflated, images and fonts stored.
+pub fn write_zip(files: &[(String, Vec<u8>)]) -> anyhow::Result<Vec<u8>> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, b) in files {
+        let l = name.to_ascii_lowercase();
+        let packed = [".png", ".jpg", ".ttf", ".otf", ".ttc"]
+            .iter()
+            .any(|e| l.ends_with(e));
+        let method = if packed {
+            zip::CompressionMethod::Stored
+        } else {
+            zip::CompressionMethod::Deflated
+        };
+        z.start_file(
+            name.as_str(),
+            SimpleFileOptions::default().compression_method(method),
+        )?;
+        z.write_all(b)?;
+    }
+    Ok(z.finish()?.into_inner())
 }
 
 // Every file of a pack folder (recursively) or zip, as (relative path with '/', bytes).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_files(p: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
-    use std::io::Read;
     let mut out = Vec::new();
     if p.is_dir() {
         let mut stack = vec![p.to_path_buf()];
@@ -303,17 +422,7 @@ pub fn read_files(p: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u8>)>>
             }
         }
     } else {
-        let mut z = zip::ZipArchive::new(std::fs::File::open(p)?)?;
-        for i in 0..z.len() {
-            let mut f = z.by_index(i)?;
-            if f.is_dir() {
-                continue;
-            }
-            let name = f.name()?.replace('\\', "/");
-            let mut b = Vec::new();
-            f.read_to_end(&mut b)?;
-            out.push((name, b));
-        }
+        return read_zip(std::fs::File::open(p)?);
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
@@ -427,6 +536,142 @@ pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<M
     })
 }
 
+// Browser pack storage: `packs/<id>.zip` in the origin private file system, kept in memory once loaded (`load`
+// runs before the launcher, so `select` and `installed` stay synchronous).
+#[cfg(target_arch = "wasm32")]
+pub mod web {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use js_sys::{Reflect, Uint8Array};
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemWritableFileStream};
+
+    thread_local! {
+        static PACKS: RefCell<BTreeMap<String, Vec<u8>>> = RefCell::default();
+    }
+
+    #[expect(clippy::needless_pass_by_value, reason = "a map_err callback")]
+    fn err(e: JsValue) -> String {
+        e.as_string()
+            .or_else(|| {
+                e.dyn_ref::<js_sys::Error>()
+                    .map(|e| String::from(e.message()))
+            })
+            .unwrap_or_else(|| format!("{e:?}"))
+    }
+
+    async fn dir(create: bool) -> Result<FileSystemDirectoryHandle, String> {
+        let storage = web_sys::window().ok_or("no window")?.navigator().storage();
+        let root: FileSystemDirectoryHandle = JsFuture::from(storage.get_directory())
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(err)?;
+        let o = web_sys::FileSystemGetDirectoryOptions::new();
+        o.set_create(create);
+        JsFuture::from(root.get_directory_handle_with_options("packs", &o))
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(err)
+    }
+
+    fn file_name(id: &str) -> String {
+        format!("{id}.zip")
+    }
+
+    // Reads the stored packs (no storage or none stored: nothing).
+    pub async fn load() {
+        let Ok(d) = dir(false).await else { return };
+        let keys = d.keys();
+        let mut found = BTreeMap::new();
+        while let Ok(next) = keys.next()
+            && let Ok(step) = JsFuture::from(next).await
+        {
+            if Reflect::get(&step, &"done".into()).is_ok_and(|v| v.is_truthy()) {
+                break;
+            }
+            let Some(name) = Reflect::get(&step, &"value".into())
+                .ok()
+                .and_then(|v| v.as_string())
+            else {
+                continue;
+            };
+            let Some(id) = name.strip_suffix(".zip").filter(|i| !i.starts_with('.')) else {
+                continue;
+            };
+            match read(&d, &name).await {
+                Ok(b) => {
+                    found.insert(id.to_string(), b);
+                }
+                Err(e) => log::warn!("pack {name}: {e}"),
+            }
+        }
+        if !found.is_empty() {
+            log::info!("{} translation pack(s) in the browser storage", found.len());
+        }
+        PACKS.with_borrow_mut(|p| p.extend(found));
+    }
+
+    async fn read(d: &FileSystemDirectoryHandle, name: &str) -> Result<Vec<u8>, String> {
+        let h: FileSystemFileHandle = JsFuture::from(d.get_file_handle(name))
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(err)?;
+        let f: web_sys::File = JsFuture::from(h.get_file())
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(err)?;
+        let buf = JsFuture::from(f.array_buffer()).await.map_err(err)?;
+        Ok(Uint8Array::new(&buf).to_vec())
+    }
+
+    // Saves a pack (replacing one of the same id) and makes it available at once.
+    pub async fn store(id: &str, zip: Vec<u8>) -> Result<(), String> {
+        let d = dir(true).await?;
+        let o = web_sys::FileSystemGetFileOptions::new();
+        o.set_create(true);
+        let h: FileSystemFileHandle =
+            JsFuture::from(d.get_file_handle_with_options(&file_name(id), &o))
+                .await
+                .map_err(err)?
+                .dyn_into()
+                .map_err(err)?;
+        let w: FileSystemWritableFileStream = JsFuture::from(h.create_writable())
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(err)?;
+        JsFuture::from(w.write_with_u8_array(&zip).map_err(err)?)
+            .await
+            .map_err(err)?;
+        JsFuture::from(w.close()).await.map_err(err)?;
+        PACKS.with_borrow_mut(|p| p.insert(id.to_string(), zip));
+        Ok(())
+    }
+
+    pub async fn delete(id: &str) -> Result<(), String> {
+        let d = dir(false).await?;
+        JsFuture::from(d.remove_entry(&file_name(id)))
+            .await
+            .map_err(err)?;
+        PACKS.with_borrow_mut(|p| p.remove(id));
+        Ok(())
+    }
+
+    pub fn get(id: &str) -> Option<Vec<u8>> {
+        PACKS.with_borrow(|p| p.get(id).cloned())
+    }
+
+    pub fn all() -> Vec<(String, Vec<u8>)> {
+        PACKS.with_borrow(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,6 +766,19 @@ mod tests {
             "{:?}",
             m.warnings
         );
+    }
+
+    #[test]
+    fn zip_round_trip() {
+        let files = vec![
+            f("fonts/0-a.ttf", b"font"),
+            f("pack.toml", b"language = \"xx\"\n"),
+            f("text/msg.json", b"{}"),
+        ];
+        let z = write_zip(&files).unwrap();
+        assert_eq!(read_zip(std::io::Cursor::new(&z)).unwrap(), files);
+        let m = zip_manifest(std::io::Cursor::new(&z)).unwrap();
+        assert_eq!(m.get("language").and_then(toml::Value::as_str), Some("xx"));
     }
 
     #[test]

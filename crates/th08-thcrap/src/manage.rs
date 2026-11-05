@@ -53,38 +53,33 @@ pub fn server_languages(c: &Client) -> Result<Vec<ServerLang>> {
     let langs = c.languages()?;
     let rows = std::sync::Mutex::new(BTreeMap::new());
     let next = std::sync::atomic::AtomicUsize::new(0);
-    std::thread::scope(|s| {
-        for _ in 0..8 {
-            s.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some((id, title)) = langs.get(i) else {
-                        break;
-                    };
-                    let Ok(raw) = thpatch::files_js(c, id) else {
-                        continue;
-                    };
-                    let Ok(files) = thpatch::file_list(&raw) else {
-                        continue;
-                    };
-                    let deps = c
-                        .patch("thpatch", id)
-                        .map(|p| p.dependencies())
-                        .unwrap_or_default();
-                    let base: Vec<String> = deps
-                        .into_iter()
-                        .filter(|(r, d)| r == "thpatch" && thpatch::valid_lang(d))
-                        .map(|(_, d)| d)
-                        .collect();
-                    let text: BTreeSet<String> =
-                        files.keys().filter(|n| th08_text(n)).cloned().collect();
-                    let images = files.keys().filter(|n| thpatch::is_image(n)).count();
-                    rows.lock().unwrap().insert(
-                        id.clone(),
-                        (title.clone(), base, text, images, thpatch::revision(&raw)),
-                    );
-                }
-            });
+    crate::parallel(8, || {
+        loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some((id, title)) = langs.get(i) else {
+                break;
+            };
+            let Ok(raw) = thpatch::files_js(c, id) else {
+                continue;
+            };
+            let Ok(files) = thpatch::file_list(&raw) else {
+                continue;
+            };
+            let deps = c
+                .patch("thpatch", id)
+                .map(|p| p.dependencies())
+                .unwrap_or_default();
+            let base: Vec<String> = deps
+                .into_iter()
+                .filter(|(r, d)| r == "thpatch" && thpatch::valid_lang(d))
+                .map(|(_, d)| d)
+                .collect();
+            let text: BTreeSet<String> = files.keys().filter(|n| th08_text(n)).cloned().collect();
+            let images = files.keys().filter(|n| thpatch::is_image(n)).count();
+            rows.lock().unwrap().insert(
+                id.clone(),
+                (title.clone(), base, text, images, thpatch::revision(&raw)),
+            );
         }
     });
     let rows = rows.into_inner().unwrap();
@@ -177,13 +172,30 @@ pub fn install(
     p: &dyn Progress,
 ) -> Result<Summary> {
     let id = lang_id(code)?;
+    let f = thpatch::fetch(c, &id, &cache_dir(config), true, p)?;
+    install_fetched(&id, &f, v, config, p)
+}
+
+// Downloads the files `install` needs into the cache (the browser's first step: it fetches, then builds).
+pub fn fetch(c: &Client, code: &str, config: &Path, p: &dyn Progress) -> Result<thpatch::Fetched> {
+    thpatch::fetch(c, &lang_id(code)?, &cache_dir(config), true, p)
+}
+
+// The build step of `install` over a finished download.
+pub fn install_fetched(
+    code: &str,
+    f: &thpatch::Fetched,
+    v: &Vanilla,
+    config: &Path,
+    p: &dyn Progress,
+) -> Result<Summary> {
+    let id = lang_id(code)?;
     let cache = cache_dir(config);
-    let f = thpatch::fetch(c, &id, &cache, true, p)?;
     let packs = packs_dir(config);
-    std::fs::create_dir_all(&packs)?;
+    crate::vfs::create_dir_all(&packs)?;
     let tmp = packs.join(format!(".{id}.new"));
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp)?;
+    if crate::vfs::exists(&tmp) {
+        crate::vfs::remove_dir_all(&tmp)?;
     }
     let mut sum = build::build_pack(
         &id,
@@ -196,19 +208,15 @@ pub fn install(
         p,
     )?;
     let dst = packs.join(&id);
-    if dst.exists() {
-        std::fs::remove_dir_all(&dst).with_context(|| format!("remove {}", dst.display()))?;
+    if crate::vfs::exists(&dst) {
+        crate::vfs::remove_dir_all(&dst).with_context(|| format!("remove {}", dst.display()))?;
     }
-    std::fs::rename(&tmp, &dst)?;
+    crate::vfs::rename(&tmp, &dst)?;
     sum.out = dst;
     // Older revisions of this language in the cache are not needed any more.
-    for e in std::fs::read_dir(cache.join(&id))
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        if e.path() != f.dir {
-            let _ = std::fs::remove_dir_all(e.path());
+    for e in crate::vfs::list(&cache.join(&id)).into_iter().flatten() {
+        if e != f.dir {
+            let _ = crate::vfs::remove_dir_all(e);
         }
     }
     Ok(sum)
@@ -219,12 +227,12 @@ pub fn remove(code: &str, config: &Path) -> Result<()> {
     let id = lang_id(code)?;
     let dst = packs_dir(config).join(&id);
     anyhow::ensure!(
-        dst.join("pack.toml").is_file(),
+        crate::vfs::is_file(&dst.join("pack.toml")),
         "{}: no installed pack",
         dst.display()
     );
-    std::fs::remove_dir_all(&dst)?;
-    let _ = std::fs::remove_dir_all(cache_dir(config).join(&id));
+    crate::vfs::remove_dir_all(&dst)?;
+    let _ = crate::vfs::remove_dir_all(cache_dir(config).join(&id));
     Ok(())
 }
 
