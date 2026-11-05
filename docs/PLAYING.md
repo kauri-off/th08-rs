@@ -37,8 +37,8 @@ Nothing to copy. On the first start the launcher asks for the game folder: pick 
 
 In the launcher's Game data row, tap **Import game files** and pick `th08.dat` and `thbgm.dat` (or `.pak` files)
 wherever they are: Downloads, a USB drive, cloud storage. The app checks them, converts them into its own format
-and keeps them in its private storage; the picked files are not changed and can be deleted afterwards. Import
-arrives in 0.1.2; 0.1.0 and 0.1.1 cannot load game data on Android without developer tools.
+and keeps them in its private storage; the picked files are not changed and can be deleted afterwards. Import needs
+0.1.2 or newer.
 
 ## Saves, replays and settings
 
