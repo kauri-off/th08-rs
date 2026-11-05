@@ -6,6 +6,12 @@ use web_time::Instant;
 // Frame_Run deadline step, 1/60 s.
 pub const FRAME: f64 = 1.0 / 60.0;
 
+// Port pacing for hosts that tick only at requestAnimationFrame (web): a frame is due up to RAF_EARLY before its
+// deadline, and a frame up to RAF_LATE late keeps the grid instead of dropping, so rAF jitter around a grid point
+// does not drop frames in bursts. Native re-polls every ≤ 1 ms and keeps the exact Frame_Run test.
+const RAF_EARLY: f64 = 0.002;
+const RAF_LATE: f64 = 0.004;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tick {
     // `draws` times: `per_draw` logic frames, then one draw; one Present at the end.
@@ -30,6 +36,9 @@ pub struct Pacer {
     rate: (u32, u32),
     held: bool,
     step: bool,
+    // Seconds a frame may be due early / late without moving the grid: (RAF_EARLY, RAF_LATE) when ticks come only
+    // at requestAnimationFrame, else exact.
+    tol: (f64, f64),
 }
 
 impl Pacer {
@@ -46,6 +55,11 @@ impl Pacer {
             rate: (1, 1),
             held: false,
             step: false,
+            tol: if cfg!(target_arch = "wasm32") {
+                (RAF_EARLY, RAF_LATE)
+            } else {
+                (0.0, 0.0)
+            },
         }
     }
 
@@ -67,15 +81,21 @@ impl Pacer {
             return Tick::Suspended;
         }
         let now = self.secs(now);
-        if (self.turbo == 0 || self.held) && now <= self.deadline {
-            return Tick::Wait(self.deadline - now);
+        let (early, late) = self.tol;
+        let paced = self.turbo == 0 || self.held;
+        if paced && now <= self.deadline - early {
+            return Tick::Wait(self.deadline - early - now);
         }
         let step = if self.held {
             FRAME
         } else {
             FRAME * f64::from(self.rate.1)
         };
-        while self.deadline < now {
+        // A paced run always takes its grid point (native: the deadline is already behind `now`).
+        if paced {
+            self.deadline += step;
+        }
+        while self.deadline + late < now {
             self.deadline += step;
         }
         if self.held {
@@ -263,5 +283,63 @@ mod tests {
         assert_eq!(runs(p.poll(at(&p, 0.051))), 8);
         p.step();
         assert_eq!(runs(p.poll(at(&p, 0.070))), 8);
+    }
+
+    // Deadlines dropped over `polls` polls at `hz` (phase `phase` s, deterministic jitter within ±1.5 ms, σ 0.5 ms):
+    // grid points passed (run or skipped) minus logic frames run.
+    fn drops(raf: bool, hz: f64, phase: f64, polls: u32) -> i64 {
+        let mut p = Pacer::with_epoch(Instant::now(), 0);
+        if raf {
+            p.tol = (RAF_EARLY, RAF_LATE);
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64 ^ hz.to_bits() ^ phase.to_bits();
+        let mut jitter = || {
+            let sum: f64 = (0..3)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+                })
+                .sum();
+            sum * 0.001
+        };
+        let base = 0.010 + phase;
+        p.poll(at(&p, base));
+        let first = p.deadline;
+        let mut ran = 0i64;
+        for k in 1..polls {
+            let t = base + f64::from(k) / hz + jitter();
+            ran += i64::from(runs(p.poll(at(&p, t))));
+        }
+        ((p.deadline - first) / FRAME).round() as i64 - ran
+    }
+
+    fn worst(raf: bool, hz: f64) -> i64 {
+        (0..34)
+            .map(|i| drops(raf, hz, f64::from(i) * 0.0005, 3600))
+            .max()
+            .unwrap()
+    }
+
+    // rAF-locked polls near 60 Hz: the exact test drops frames in bursts (the worst phase at 60.00 Hz loses over a
+    // tenth of them); with the tolerances only the clock difference is lost (59.94 Hz: 3.6 per 3600 polls).
+    #[test]
+    fn raf_near_60hz() {
+        assert!(worst(false, 59.94) > 30);
+        assert!(worst(false, 60.0) > 300);
+        assert!(worst(false, 60.02) > 30);
+        assert!(worst(true, 59.94) <= 5);
+        assert!(worst(true, 60.0) <= 1);
+        assert!(worst(true, 60.02) <= 1);
+    }
+
+    // 75–144 Hz rAF: nothing dropped with or without the tolerances, so every grid point still runs its frame.
+    #[test]
+    fn raf_fast_displays() {
+        for hz in [75.0, 90.0, 120.0, 144.0] {
+            assert_eq!(worst(false, hz), 0, "{hz} exact");
+            assert_eq!(worst(true, hz), 0, "{hz} raf");
+        }
     }
 }

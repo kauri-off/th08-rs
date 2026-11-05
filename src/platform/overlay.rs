@@ -229,7 +229,7 @@ impl Overlay for TouchOverlay {
 }
 
 // What the replay transport HUD shows: the speed label, and the touch strip (window px) while a replay plays.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TransportView {
     pub label: Option<String>,
     pub strip: Option<[(Action, [f32; 4]); 4]>,

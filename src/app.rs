@@ -29,6 +29,10 @@ struct Running {
     replay: ReplayTransport,
     // A save failure toast and when it goes.
     toast: Option<(String, Instant)>,
+    // When the event loop next wakes the game for a redraw (None: on the next request only).
+    wake: Option<Instant>,
+    // While held: the last picture must be presented again (hold, resize, transport input, port menu closed).
+    held_dirty: bool,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -103,6 +107,8 @@ struct App {
     auto_at: Option<Instant>,
     // Between `Suspended` and the next `Resumed` (no surface, no logic frames).
     suspended: bool,
+    // The game's audio was last synced with a paused replay.
+    replay_held: bool,
     // Last safe-area read (`refresh_safe`).
     safe_at: Option<Instant>,
     // Window focus, and whether audio pauses while unfocused: Android only (focus goes at Home / recents, before
@@ -167,6 +173,8 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         hidden_overlay: None,
         replay: ReplayTransport::default(),
         toast: None,
+        wake: None,
+        held_dirty: false,
     }))
 }
 
@@ -249,6 +257,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.sync_audio();
             }
             UserEvent::Gfx(mut gfx) => {
+                crate::platform::framerate::request_60(self.window());
                 gfx.safe = self.read_safe();
                 if self.launcher {
                     let view = {
@@ -280,6 +289,18 @@ impl ApplicationHandler<UserEvent> for App {
         for _ in 0..crate::platform::back::take() {
             log::info!("back: OnBackInvokedCallback");
             self.back(el);
+        }
+        // The running game sleeps until its wake time (frame deadline, paused-replay HUD check).
+        if let Shell::Running(r) = &mut self.shell {
+            let due = r.wake.is_some_and(|t| t <= Instant::now());
+            if due {
+                r.wake = None;
+            }
+            let flow = r.wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
+            if due {
+                self.window().request_redraw();
+            }
+            return el.set_control_flow(flow);
         }
         let (waiting, repaint_at) = match &self.shell {
             Shell::Setup(ui) | Shell::Error(ui) => (
@@ -403,6 +424,7 @@ impl App {
             launcher,
             auto_at: None,
             suspended: false,
+            replay_held: false,
             safe_at: None,
             sticks: crate::joystick::StickFilter::default(),
             pads_at: None,
@@ -480,7 +502,9 @@ impl App {
         if let Err(e) = res {
             log::error!("surface: {e:#}");
         }
+        crate::platform::framerate::request_60(&window);
         if let Shell::Running(r) = &mut self.shell {
+            r.held_dirty = true;
             if in_stage(r) {
                 self.open_port_menu();
             } else {
@@ -492,10 +516,12 @@ impl App {
         window.request_redraw();
     }
 
-    // Game audio is held while suspended, while the port menu is open and (opt-in) while the window is unfocused;
-    // `mute_unfocused` silences it without holding it.
+    // Game audio is held while suspended, while the port menu is open, while a replay is paused and (opt-in) while
+    // the window is unfocused; `mute_unfocused` silences it without holding it.
     fn sync_audio(&mut self) {
-        let hold = self.suspended || self.focus.holds_audio();
+        let held = matches!(&self.shell, Shell::Running(r) if r.pacer.is_held());
+        self.replay_held = held;
+        let hold = self.suspended || self.focus.holds_audio() || held;
         let focused = self.focus.focused;
         if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
             let mute = r.settings.mute_unfocused && !focused;
@@ -784,6 +810,7 @@ impl App {
         if !self.suspended {
             r.pacer.resume(Instant::now());
         }
+        r.held_dirty = true;
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(true);
         }
@@ -860,14 +887,32 @@ impl App {
     }
 
     fn game_event(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
+        self.game_event_inner(el, ev);
+        if let Shell::Running(r) = &self.shell
+            && r.pacer.is_held() != self.replay_held
+        {
+            self.sync_audio();
+        }
+    }
+
+    fn game_event_inner(&mut self, el: &ActiveEventLoop, ev: WindowEvent) {
         let window = self.window().clone();
         let Shell::Running(r) = &mut self.shell else {
             return;
         };
         match ev {
             WindowEvent::CloseRequested => close(r, el),
-            WindowEvent::Resized(s) => gfx(&mut r.ctx).resize(s.width, s.height),
+            WindowEvent::Resized(s) => {
+                gfx(&mut r.ctx).resize(s.width, s.height);
+                r.held_dirty = true;
+                r.wake = Some(Instant::now());
+            }
+            WindowEvent::Occluded(false) => {
+                r.held_dirty = true;
+                r.wake = Some(Instant::now());
+            }
             WindowEvent::Focused(f) => {
+                r.held_dirty = true;
                 if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
                     h.input.set_focus(f);
                 }
@@ -1078,22 +1123,34 @@ fn close(r: &mut Running, el: &ActiveEventLoop) {
 // One redraw of the running game: Frame_Run timing (00 §2, pacer.rs), the logic frames, draw and Present.
 fn frame(r: &mut Running, window: &Window) -> Frame {
     let now = Instant::now();
+    r.wake = None;
     follow_replay(r, now);
     let shot = r.settings.shot;
     let (per_draw, draws) = match r.pacer.poll(now) {
         Tick::Run { per_draw, draws } => (per_draw, draws),
         Tick::Suspended => return Frame::Continue,
+        // Paused replay: the last picture is presented again only when it or the HUD changes.
         Tick::Held => {
-            update_hud(r, window, now);
-            gfx(&mut r.ctx).present_held();
-            window.request_redraw();
+            let changed = update_hud(r, window, now);
+            if (changed || std::mem::take(&mut r.held_dirty)) && !gfx(&mut r.ctx).present_held() {
+                r.held_dirty = true;
+            }
+            r.wake = Some(now + HELD_POLL);
             return Frame::Continue;
         }
-        // Desktop: the port sleeps ≤ 1 ms for Sleep(0) while waiting.
+        // Native: the event loop sleeps until SPIN before the deadline, then ≤ 1 ms sleeps for Sleep(0).
         #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
         Tick::Wait(left) => {
             #[cfg(not(target_arch = "wasm32"))]
-            std::thread::sleep(std::time::Duration::from_secs_f64(left.min(0.001)));
+            {
+                if let Some(d) = r.pacer.next_deadline()
+                    && d > now + SPIN
+                {
+                    r.wake = Some(d - SPIN);
+                    return Frame::Continue;
+                }
+                std::thread::sleep(std::time::Duration::from_secs_f64(left.min(0.001)));
+            }
             window.request_redraw();
             return Frame::Continue;
         }
@@ -1265,6 +1322,8 @@ fn transport_act(r: &mut Running, a: Transp, now: Instant) {
     if a == Transp::Step {
         r.pacer.step();
     }
+    r.held_dirty = true;
+    r.wake = Some(now);
     r.replay.label_until = Some(now + LABEL);
     log::info!(
         "replay transport: {}",
@@ -1287,7 +1346,8 @@ fn strip_hit(r: &Running, x: f32, y: f32) -> Option<Transp> {
 }
 
 // The transport HUD: the label while it lasts (always while paused), the strip while a replay plays with touch on.
-fn update_hud(r: &mut Running, window: &Window, now: Instant) {
+// True when what it shows changed.
+fn update_hud(r: &mut Running, window: &Window, now: Instant) -> bool {
     let touch = gfx(&mut r.ctx).overlay.is_some();
     let size = window.inner_size();
     r.replay.strip = (r.replay.playing && touch).then(|| {
@@ -1313,16 +1373,26 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) {
         o.as_any_mut()
             .downcast_mut::<crate::platform::overlay::TransportOverlay>()
     }) {
-        o.view = crate::platform::overlay::TransportView {
+        let view = crate::platform::overlay::TransportView {
             label,
             strip,
             paused: t.paused,
             toast,
         };
+        if o.view != view {
+            o.view = view;
+            return true;
+        }
     }
+    false
 }
 
 const LABEL: std::time::Duration = std::time::Duration::from_millis(1500);
+// Native frame wait: the last stretch before a deadline, slept in ≤ 1 ms steps instead of left to the event loop.
+#[cfg(not(target_arch = "wasm32"))]
+const SPIN: std::time::Duration = std::time::Duration::from_micros(1500);
+// A paused replay re-checks its HUD (label, save toast) this often.
+const HELD_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 const TOAST: std::time::Duration = std::time::Duration::from_secs(5);
 
 // Hands the touch state to the overlay the renderer draws after the blit.
@@ -1538,6 +1608,8 @@ mod tests {
             hidden_overlay: None,
             replay: ReplayTransport::default(),
             toast: None,
+            wake: None,
+            held_dirty: false,
         })
     }
 
