@@ -587,6 +587,26 @@ async fn request_device(adapter: &wgpu::Adapter) -> anyhow::Result<(wgpu::Device
         .await?)
 }
 
+// Web: a lost WebGL context (GPU process restart, too many contexts) marks the device lost and wakes the event loop;
+// WebGPU reports it through the device-lost callback.
+#[cfg(target_arch = "wasm32")]
+fn watch_context_loss(window: &Arc<winit::window::Window>, flag: Arc<AtomicBool>) {
+    use wasm_bindgen::JsCast;
+    use winit::platform::web::WindowExtWebSys;
+    let Some(canvas) = window.canvas() else {
+        return;
+    };
+    let w = window.clone();
+    let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+        log::warn!("webglcontextlost");
+        flag.store(true, Ordering::Release);
+        w.request_redraw();
+    });
+    let _ =
+        canvas.add_event_listener_with_callback("webglcontextlost", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
 // A fresh flag per device, so the old device's late callback cannot trigger a second rebuild.
 fn watch_loss(device: &wgpu::Device) -> Arc<AtomicBool> {
     let lost = Arc::new(AtomicBool::new(false));
@@ -916,11 +936,16 @@ impl Gpu {
 }
 
 impl Gfx {
-    // `vsync` = port display setting; logic pacing is separate (app.rs).
-    pub async fn new(window: Arc<winit::window::Window>, vsync: bool) -> anyhow::Result<Self> {
+    // `vsync` = port display setting; logic pacing is separate (app.rs). The display handle lets GL present (EGL on
+    // X11 / Wayland); `WGPU_BACKEND` and the other wgpu variables are honoured.
+    pub async fn new(
+        window: Arc<winit::window::Window>,
+        display: winit::event_loop::OwnedDisplayHandle,
+        vsync: bool,
+    ) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::util::new_instance_with_webgpu_detection(
-            wgpu::InstanceDescriptor::new_without_display_handle(),
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display)).with_env(),
         )
         .await;
         let surface = instance.create_surface(window.clone())?;
@@ -956,6 +981,8 @@ impl Gfx {
         };
         surface.configure(&device, &config);
         let mut g = Self::build(instance, Some(surface), device, queue, config);
+        #[cfg(target_arch = "wasm32")]
+        watch_context_loss(&window, g.lost.clone());
         g.window = Some(window);
         Ok(g)
     }
@@ -1049,22 +1076,20 @@ impl Gfx {
         self.lost.store(true, Ordering::Release);
     }
 
-    // Before each submit: a lost device is replaced (native); web keeps the dead one and logs (no blocking there).
-    // Callers presenting on their own (launcher) call it first, then compare `generation`.
+    // Before each submit: a lost device is replaced (native); the web keeps the dead one and the app reloads the
+    // page (`is_lost`). Callers presenting on their own (launcher) call it first, then compare `generation`.
     pub fn recover_if_lost(&mut self) {
-        if !self.lost.load(Ordering::Acquire) {
-            return;
-        }
         #[cfg(not(target_arch = "wasm32"))]
-        match self.rebuild() {
-            Ok(()) => log::warn!("device rebuilt (generation {})", self.generation),
-            Err(e) => log::error!("device rebuild failed: {e:#}"),
+        if self.lost.load(Ordering::Acquire) {
+            match self.rebuild() {
+                Ok(()) => log::warn!("device rebuilt (generation {})", self.generation),
+                Err(e) => log::error!("device rebuild failed: {e:#}"),
+            }
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            log::error!("device lost; no rebuild on the web");
-            self.lost.store(false, Ordering::Release);
-        }
+    }
+
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
     }
 
     // Device loss (ARCH_D_MOBILE §5): a new device and surface on the same instance and window, pipelines and frame
@@ -1169,6 +1194,30 @@ impl Gfx {
         self.surface = Some(surface);
         self.window = Some(window);
         Ok(())
+    }
+
+    // The window's next texture, None to skip this frame. A lost surface (its native window went away under it) is
+    // made again on the current window; an outdated one is reconfigured.
+    pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        use wgpu::CurrentSurfaceTexture as T;
+        match self.surface.as_ref()?.get_current_texture() {
+            T::Success(f) | T::Suboptimal(f) => Some(f),
+            T::Outdated => {
+                self.reconfigure();
+                None
+            }
+            T::Lost => {
+                log::warn!("surface lost: made again");
+                self.surface = None;
+                if let Some(w) = self.window.clone()
+                    && let Err(e) = self.attach(w)
+                {
+                    log::error!("surface: {e:#}");
+                }
+                None
+            }
+            T::Timeout | T::Occluded | T::Validation => None,
+        }
     }
 
     pub fn reconfigure(&self) {
@@ -1812,14 +1861,7 @@ impl Gfx {
     }
 
     fn present_frame(&mut self) {
-        let Some(surface) = &self.surface else {
-            self.clear_batches();
-            return;
-        };
-        let (wgpu::CurrentSurfaceTexture::Success(frame)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
-        else {
-            surface.configure(&self.device, &self.config);
+        let Some(frame) = self.acquire() else {
             self.clear_batches();
             return;
         };
@@ -1840,13 +1882,7 @@ impl Gfx {
         paint: impl FnOnce(OverlayTarget<'_>, &mut wgpu::CommandEncoder),
     ) -> bool {
         self.recover_if_lost();
-        let Some(surface) = &self.surface else {
-            return false;
-        };
-        let (wgpu::CurrentSurfaceTexture::Success(frame)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
-        else {
-            surface.configure(&self.device, &self.config);
+        let Some(frame) = self.acquire() else {
             return false;
         };
         let target = view(&frame.texture);

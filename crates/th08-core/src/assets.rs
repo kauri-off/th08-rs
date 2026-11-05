@@ -55,3 +55,17 @@ impl Source {
         self.0.fetch(name, Some((offset, len))).await
     }
 }
+
+// Port: gives the loader's caller its thread back once (the app polls the start-up load between window events).
+pub async fn yield_now() {
+    let mut done = false;
+    std::future::poll_fn(|cx| {
+        if std::mem::replace(&mut done, true) {
+            std::task::Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}

@@ -306,6 +306,7 @@ impl Ctx {
         if let Some(o) = overlay {
             archive.mount(o);
         }
+        crate::assets::yield_now().await;
         // Supervisor_OnRegister 0x4461A0: the exe-check version list, archive only; missing fails start-up (15 §2.10).
         let ver = archive
             .read(crate::scoredat::VER_LIST_NAME)
@@ -313,6 +314,7 @@ impl Ctx {
         let mut bgm = crate::sound::Bgm::new(&archive.read("thbgm.fmt")?);
         audio.load(archive.present());
         bgm.midi_ready = audio.midi_available();
+        crate::assets::yield_now().await;
         // Config_Load (15 §1.2): th08.cfg and the thbgm.dat header probe (02 §1), then the file is written back.
         // The port's own save first, else the original's th08.cfg is imported (read-only); game-directory reads go
         // through the app's `DataSource`, saves through `host`.

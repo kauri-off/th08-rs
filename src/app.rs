@@ -12,7 +12,9 @@ use th08_render::gfx::Gfx;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{
+    ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy, OwnedDisplayHandle,
+};
 use winit::keyboard::{KeyCode, PhysicalKey};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::window::Fullscreen;
@@ -78,10 +80,15 @@ enum UserEvent {
 }
 
 // The `Failed` event for a start-up error: the error screen needs a new device, the failed load consumed the old one.
-async fn failed(window: Arc<Window>, e: anyhow::Error, vsync: Option<bool>) -> UserEvent {
+async fn failed(
+    window: Arc<Window>,
+    display: OwnedDisplayHandle,
+    e: anyhow::Error,
+    vsync: Option<bool>,
+) -> UserEvent {
     log::error!("startup failed: {e:#}");
     let gfx = match vsync {
-        Some(v) => Gfx::new(window, v).await.ok().map(Box::new),
+        Some(v) => Gfx::new(window, display, v).await.ok().map(Box::new),
         None => None,
     };
     UserEvent::Failed {
@@ -91,10 +98,19 @@ async fn failed(window: Arc<Window>, e: anyhow::Error, vsync: Option<bool>) -> U
 }
 
 struct App {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     proxy: EventLoopProxy<UserEvent>,
     shell: Shell,
-    // Created at the first `Resumed`.
+    // Created at the first `Resumed`, with the event loop's display handle (every device's wgpu instance gets it).
     window: Option<Arc<Window>>,
+    display_handle: Option<OwnedDisplayHandle>,
+    // Bumped at each `Suspended`: a device made before the native window changed has a dead surface.
+    surface_gen: u32,
+    // `surface_gen` when the running start-up step began.
+    step_gen: u32,
+    // Native: the start-up step, polled from the event loop so the load never blocks it (Android input ANR).
+    #[cfg(not(target_arch = "wasm32"))]
+    step: Option<std::pin::Pin<Box<dyn std::future::Future<Output = UserEvent>>>>,
     // The settings Setup edits: the start-up ones, then the ones the last Play used (Back from Error keeps the edits).
     // Direct starts: the final settings, cloned into `Running`.
     setup: Settings,
@@ -148,11 +164,15 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
     #[cfg(target_arch = "wasm32")]
     let drawlog = None;
+    th08_core::assets::yield_now().await;
     let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(gfx);
     let overlay = s.mount_pack(renderer.as_mut());
+    th08_core::assets::yield_now().await;
+    let audio = Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio()));
+    th08_core::assets::yield_now().await;
     let io = th08_core::game::Io {
         renderer,
-        audio: Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio())),
+        audio,
         host: s.app_host(),
         drawlog,
         overlay,
@@ -196,13 +216,14 @@ impl ApplicationHandler<UserEvent> for App {
                 .expect("window"),
         );
         self.window = Some(window.clone());
-        let (proxy, vsync) = (self.proxy.clone(), self.setup.vsync);
-        spawn(async move {
-            let ev = match Gfx::new(window.clone(), vsync).await {
+        let display = el.owned_display_handle();
+        self.display_handle = Some(display.clone());
+        let vsync = self.setup.vsync;
+        self.spawn(el, async move {
+            match Gfx::new(window.clone(), display.clone(), vsync).await {
                 Ok(g) => UserEvent::Gfx(Box::new(g)),
-                Err(e) => failed(window, e, None).await,
-            };
-            let _ = proxy.send_event(ev);
+                Err(e) => failed(window, display, e, None).await,
+            }
         });
     }
 
@@ -211,6 +232,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn suspended(&mut self, _: &ActiveEventLoop) {
         log::info!("lifecycle: suspended");
         self.suspended = true;
+        self.surface_gen = self.surface_gen.wrapping_add(1);
         match &mut self.shell {
             Shell::Running(r) | Shell::PortMenu(r, _) => {
                 r.pacer.suspend();
@@ -224,9 +246,17 @@ impl ApplicationHandler<UserEvent> for App {
         self.sync_audio();
     }
 
+    // Web: a page unloaded for good (not kept in the back-forward cache) writes score.dat first.
+    #[cfg(target_arch = "wasm32")]
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.save_clone("page unload");
+    }
+
     fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
+        let fix = surface_fix(self.step_gen, self.surface_gen, self.suspended);
         match ev {
             UserEvent::Ready(mut r) => {
+                self.fix_surface(gfx(&mut r.ctx), fix);
                 #[cfg(not(target_arch = "wasm32"))]
                 r.ctx.start();
                 r.ctx.set_windowed(!self.display.fullscreen);
@@ -249,7 +279,6 @@ impl ApplicationHandler<UserEvent> for App {
                 crate::platform::hitbox::install(gfx(&mut r.ctx), r.settings.hitboxes);
                 if self.suspended {
                     r.pacer.suspend();
-                    gfx(&mut r.ctx).detach();
                 } else {
                     self.window().request_redraw();
                 }
@@ -257,6 +286,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.sync_audio();
             }
             UserEvent::Gfx(mut gfx) => {
+                self.fix_surface(&mut gfx, fix);
                 crate::platform::framerate::request_60(self.window());
                 gfx.safe = self.read_safe();
                 if self.launcher {
@@ -276,7 +306,12 @@ impl ApplicationHandler<UserEvent> for App {
                     self.start_load(el, gfx, screen, s, source);
                 }
             }
-            UserEvent::Failed { msg, gfx } => self.failed(el, msg, gfx),
+            UserEvent::Failed { msg, mut gfx } => {
+                if let Some(g) = &mut gfx {
+                    self.fix_surface(g, fix);
+                }
+                self.failed(el, msg, gfx);
+            }
         }
     }
 
@@ -284,6 +319,14 @@ impl ApplicationHandler<UserEvent> for App {
         #[cfg(target_os = "android")]
         if winit::platform::android::activity::destroy_requested() {
             return self.destroyed(el);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.step.is_some() {
+            return self.poll_step(el);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.current_gfx().is_some_and(|g| g.is_lost()) {
+            return self.context_lost(el);
         }
         #[cfg(target_os = "android")]
         for _ in 0..crate::platform::back::take() {
@@ -374,6 +417,9 @@ impl ApplicationHandler<UserEvent> for App {
                 self.refresh_safe(false);
                 self.refresh_pads();
             }
+            // Web: a hidden tab may be discarded without another event; score.dat is written now.
+            #[cfg(target_arch = "wasm32")]
+            WindowEvent::Occluded(true) => self.save_clone("tab hidden"),
             // Android: joystick motion goes to the gamepad, never to a touch consumer.
             WindowEvent::Touch(t) if cfg!(target_os = "android") => {
                 // The motion hook ran just before this event: a hat change arrives with a stick move.
@@ -415,6 +461,11 @@ impl App {
             proxy: el.create_proxy(),
             shell: Shell::Loading,
             window: None,
+            display_handle: None,
+            surface_gen: 0,
+            step_gen: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            step: None,
             display: Display {
                 alt: false,
                 fullscreen: s.fullscreen && cfg!(not(target_arch = "wasm32")),
@@ -437,6 +488,101 @@ impl App {
 
     fn window(&self) -> &Arc<Window> {
         self.window.as_ref().expect("window")
+    }
+
+    fn display_handle(&self) -> OwnedDisplayHandle {
+        self.display_handle.clone().expect("display handle")
+    }
+
+    // Runs a start-up step; its event arrives as a user event. Native: polled from `about_to_wait` between window
+    // events; web: on the JS event loop.
+    fn spawn(
+        &mut self,
+        el: &ActiveEventLoop,
+        fut: impl std::future::Future<Output = UserEvent> + 'static,
+    ) {
+        self.step_gen = self.surface_gen;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.step = Some(Box::pin(fut));
+            self.poll_step(el);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = el;
+            let proxy = self.proxy.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = proxy.send_event(fut.await);
+            });
+        }
+    }
+
+    // One poll of the start-up step: it runs to its next yield point; while it is pending the loop keeps polling.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_step(&mut self, el: &ActiveEventLoop) {
+        let Some(mut fut) = self.step.take() else {
+            return;
+        };
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match fut.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(ev) => {
+                el.set_control_flow(ControlFlow::Wait);
+                self.user_event(el, ev);
+            }
+            std::task::Poll::Pending => {
+                self.step = Some(fut);
+                el.set_control_flow(ControlFlow::Poll);
+            }
+        }
+    }
+
+    // A device from a start-up step: a native window that went away meanwhile (Android Home during the load) left
+    // it a surface on the old window.
+    fn fix_surface(&self, g: &mut Gfx, fix: SurfaceFix) {
+        match fix {
+            SurfaceFix::Keep => {}
+            SurfaceFix::Detach => g.detach(),
+            SurfaceFix::Reattach => {
+                log::info!("lifecycle: the window changed during start-up; new surface");
+                g.detach();
+                if let Err(e) = g.attach(self.window().clone()) {
+                    log::error!("surface: {e:#}");
+                }
+            }
+        }
+    }
+
+    // The device of the current shell, if any.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn current_gfx(&mut self) -> Option<&mut Gfx> {
+        match &mut self.shell {
+            Shell::Running(r) | Shell::PortMenu(r, _) => Some(gfx(&mut r.ctx)),
+            Shell::Setup(ui) | Shell::Error(ui) => Some(&mut ui.gfx),
+            Shell::Loading => None,
+        }
+    }
+
+    // score.dat from a World clone (no RNG draws) while a game is loaded.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn save_clone(&mut self, why: &str) {
+        if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
+            let n = r.ctx.save_from_clone().len();
+            log::info!("{why}: score.dat saved from a World clone ({n} bytes)");
+        }
+    }
+
+    // Web: the WebGL / WebGPU context is gone and wgpu cannot rebuild it there. score.dat is written, then the page
+    // reloads (the files stay in the site storage) after a message.
+    #[cfg(target_arch = "wasm32")]
+    fn context_lost(&mut self, el: &ActiveEventLoop) {
+        log::error!("graphics context lost: reloading the page");
+        self.save_clone("context lost");
+        self.shell = Shell::Loading;
+        message_box("The graphics context was lost. The page reloads now.");
+        if let Some(w) = web_sys::window() {
+            let _ = w.location().reload();
+        }
+        el.exit();
     }
 
     // Where Setup's game files come from: the `game_dir` row (native) or the files picked in the web page.
@@ -736,13 +882,12 @@ impl App {
         self.shell = Shell::Loading;
         self.auto_at = None;
         el.set_control_flow(ControlFlow::Wait);
-        let (proxy, vsync) = (self.proxy.clone(), s.vsync);
-        spawn(async move {
-            let ev = match load(source, *gfx, s).await {
+        let (display, vsync) = (self.display_handle(), s.vsync);
+        self.spawn(el, async move {
+            match load(source, *gfx, s).await {
                 Ok(r) => UserEvent::Ready(r),
-                Err(e) => failed(window, e, Some(vsync)).await,
-            };
-            let _ = proxy.send_event(ev);
+                Err(e) => failed(window, display, e, Some(vsync)).await,
+            }
         });
     }
 
@@ -900,6 +1045,11 @@ impl App {
         let Shell::Running(r) = &mut self.shell else {
             return;
         };
+        // Web: the AudioContext opens (or resumes) inside a user gesture.
+        #[cfg(target_arch = "wasm32")]
+        if is_gesture(&ev) {
+            r.ctx.start();
+        }
         match ev {
             WindowEvent::CloseRequested => close(r, el),
             WindowEvent::Resized(s) => {
@@ -967,8 +1117,6 @@ impl App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                #[cfg(target_arch = "wasm32")]
-                r.ctx.start_once();
                 if let (PhysicalKey::Code(k), Some(h)) = (
                     event.physical_key,
                     r.ctx.host_as::<crate::platform::AppHost>(),
@@ -1058,11 +1206,29 @@ fn pad_frame(r: &mut Running) -> bool {
     };
     let used = h.joystick.take_used();
     let menu = (h.joystick.take_menu() && stage) | h.input.touch.take_menu();
+    #[cfg(target_arch = "wasm32")]
+    if used {
+        r.ctx.start();
+    }
     if used && let Some(o) = gfx(&mut r.ctx).overlay.take() {
         log::info!("gamepad in use: touch overlay hidden");
         r.hidden_overlay = Some(o);
     }
     menu
+}
+
+// An input the browser counts as a user gesture for audio.
+#[cfg(target_arch = "wasm32")]
+fn is_gesture(ev: &WindowEvent) -> bool {
+    match ev {
+        WindowEvent::KeyboardInput { event, .. } => event.state == ElementState::Pressed,
+        WindowEvent::MouseInput { state, .. } => *state == ElementState::Pressed,
+        WindowEvent::Touch(t) => matches!(
+            t.phase,
+            winit::event::TouchPhase::Started | winit::event::TouchPhase::Ended
+        ),
+        _ => false,
+    }
 }
 
 // The gamepad button index of an Android gamepad keycode event.
@@ -1112,12 +1278,27 @@ fn is_back(e: &winit::event::KeyEvent) -> bool {
         || (cfg!(target_os = "android") && esc)
 }
 
-// Closing the window mid-game. Tool `replay_save`: the recording is still written.
+// Closing the window mid-game: score.dat is written from a World clone (play time, card history, unlocks since the
+// last save point). Tool `replay_save`: the recording is still written.
 fn close(r: &mut Running, el: &ActiveEventLoop) {
     if r.ctx.core.replay_save.is_some() && r.ctx.w.game.scene == th08_core::types::SceneId::Game {
         th08_core::replay::finish(&mut r.ctx);
     }
+    close_save(r);
     el.exit();
+}
+
+// The score.dat bytes written at a window close (None: tool runs write nothing).
+fn close_save(r: &mut Running) -> Option<Vec<u8>> {
+    if r.settings.is_tool_run() {
+        return None;
+    }
+    let bytes = r.ctx.save_from_clone();
+    log::info!(
+        "close: score.dat saved from a World clone ({} bytes)",
+        bytes.len()
+    );
+    Some(bytes)
 }
 
 // One redraw of the running game: Frame_Run timing (00 §2, pacer.rs), the logic frames, draw and Present.
@@ -1469,12 +1650,23 @@ fn window_attrs(scale: u32, fullscreen: bool) -> winit::window::WindowAttributes
     attrs
 }
 
-// Native start-up blocks on the future; web runs it on the JS event loop.
-fn spawn(fut: impl std::future::Future<Output = ()> + 'static) {
-    #[cfg(not(target_arch = "wasm32"))]
-    pollster::block_on(fut);
-    #[cfg(target_arch = "wasm32")]
-    wasm_bindgen_futures::spawn_local(fut);
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SurfaceFix {
+    Keep,
+    Detach,
+    Reattach,
+}
+
+// What a device made by a start-up step that began at `made_at` needs now: none while suspended, a new one when a
+// `Suspended` came in between.
+fn surface_fix(made_at: u32, now: u32, suspended: bool) -> SurfaceFix {
+    if suspended {
+        SurfaceFix::Detach
+    } else if made_at != now {
+        SurfaceFix::Reattach
+    } else {
+        SurfaceFix::Keep
+    }
 }
 
 // Game window that loads at once with these final settings (owned by the game, not installed globally).
@@ -1648,6 +1840,45 @@ mod tests {
             assert_eq!(state(&b), want[4 * k + 3], "4× batch {k}");
         }
         assert!(want[N - 1].2[0] > 600, "game frames {}", want[N - 1].2[0]);
+    }
+
+    #[test]
+    fn surface_fix_after_suspend() {
+        assert_eq!(surface_fix(0, 0, false), SurfaceFix::Keep);
+        assert_eq!(surface_fix(0, 1, false), SurfaceFix::Reattach);
+        assert_eq!(surface_fix(0, 1, true), SurfaceFix::Detach);
+        assert_eq!(surface_fix(3, 3, true), SurfaceFix::Detach);
+        assert_eq!(surface_fix(u32::MAX, 0, false), SurfaceFix::Reattach);
+    }
+
+    // The start-up load yields to the event loop: a no-op-waker poll comes back pending before it is ready.
+    #[test]
+    fn yield_now_is_pending_once() {
+        let mut f = std::pin::pin!(th08_core::assets::yield_now());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(f.as_mut().poll(&mut cx).is_pending());
+        assert!(f.as_mut().poll(&mut cx).is_ready());
+    }
+
+    // A window close mid-stage writes score.dat from a clone: the game state (RNG included) is untouched.
+    #[test]
+    fn close_saves_from_clone() {
+        let Some(mut r) = running("close") else {
+            return;
+        };
+        for _ in 0..900 {
+            present(&mut r, 1, 1);
+        }
+        assert_eq!(r.ctx.w.game.scene, th08_core::types::SceneId::Game);
+        let before = state(&r);
+        let rng = r.ctx.w.rng.clone();
+        let saved = close_save(&mut r).expect("not a tool run");
+        assert_eq!(state(&r), before);
+        assert_eq!(format!("{:?}", r.ctx.w.rng), format!("{rng:?}"));
+        assert!(!saved.is_empty());
+        assert_eq!(saved.len(), r.ctx.save_from_clone().len());
+        r.settings.shot = Some(1);
+        assert!(close_save(&mut r).is_none());
     }
 
     // Paused: no logic frames; a step runs exactly one; resuming runs again.

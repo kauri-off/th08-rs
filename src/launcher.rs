@@ -1634,13 +1634,10 @@ impl Screen {
         if self.p.generation != gfx.generation() {
             self.p.renew(gfx);
         }
-        let Some(surface) = &gfx.surface else {
+        if gfx.surface.is_none() {
             return act;
-        };
-        let (wgpu::CurrentSurfaceTexture::Success(frame)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = surface.get_current_texture()
-        else {
-            gfx.reconfigure();
+        }
+        let Some(frame) = gfx.acquire() else {
             window.request_redraw();
             return act;
         };

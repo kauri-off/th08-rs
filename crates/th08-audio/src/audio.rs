@@ -524,6 +524,13 @@ impl Audio {
         if !self.started && !self.paused {
             self.open();
         }
+        // Web: a context opened outside a gesture the browser accepts stays suspended; each later gesture resumes it.
+        #[cfg(target_arch = "wasm32")]
+        if !self.paused
+            && let Some(s) = &self.stream
+        {
+            let _ = s.play();
+        }
     }
 
     // Port: AAudio / ALSA drop the stream on a route change; while not paused a new one is opened on the next command.
