@@ -139,7 +139,8 @@ impl Bits<'_> {
 pub fn lzss_decompress(input: &[u8], size_hint: usize) -> Vec<u8> {
     let mut ring = [0u8; 0x2000];
     let mut rp = 1usize;
-    let mut out = Vec::with_capacity(size_hint);
+    // One input bit yields at most one output byte, so the hint from a length field is capped by that.
+    let mut out = Vec::with_capacity(size_hint.min(input.len().saturating_mul(8)));
     let mut bs = Bits {
         data: input,
         pos: 0,
@@ -290,7 +291,8 @@ impl Archive {
         }
         let count = count.cast_unsigned() as usize;
         let table = lzss_decompress(&decrypt(&data[table_off..], &TABLE_KEY), table_size);
-        let mut raw = Vec::with_capacity(count);
+        // A table entry takes at least 13 bytes (name NUL + three dwords).
+        let mut raw = Vec::with_capacity(count.min(table.len() / 13));
         let mut p = 0;
         for _ in 0..count {
             let nul = table
@@ -344,7 +346,11 @@ impl Archive {
             .entries
             .get(&name.to_ascii_lowercase())
             .ok_or_else(|| ArchiveError::NotFound(name.to_string()))?;
-        Ok(lzss_decompress(&self.data[e.offset..e.end], e.size))
+        let stored = self
+            .data
+            .get(e.offset..e.end)
+            .ok_or(ArchiveError::BadTable)?;
+        Ok(lzss_decompress(stored, e.size))
     }
 }
 
@@ -419,6 +425,57 @@ mod tests {
         // Count −1.
         assert!(super::Archive::from_bytes(build(u32::MAX, 0, f)).is_err());
         assert!(super::Archive::from_bytes(build(1, 0x10000, f)).is_err());
+    }
+
+    // Header and table built by hand so entry offsets and counts can be anything.
+    fn raw_archive(count: u32, entries: &[(&str, u32, u32)], pad: usize) -> Vec<u8> {
+        let mut out = b"PBGZ".to_vec();
+        out.resize(16 + pad, 0);
+        let mut table = Vec::new();
+        for (name, off, size) in entries {
+            table.extend_from_slice(name.as_bytes());
+            table.push(0);
+            table.extend_from_slice(&off.to_le_bytes());
+            table.extend_from_slice(&size.to_le_bytes());
+            table.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let table_off = out.len() as u32;
+        out.extend_from_slice(&super::crypt(
+            &super::lzss_compress(&table),
+            &super::TABLE_KEY,
+            true,
+        ));
+        let hdr: Vec<u8> = [
+            count.wrapping_add(super::COUNT_BIAS),
+            table_off.wrapping_add(super::TABLE_OFF_BIAS),
+            (table.len() as u32).wrapping_add(super::TABLE_SIZE_BIAS),
+        ]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+        out[4..16].copy_from_slice(&super::crypt(&hdr, &super::HEADER_KEY, true));
+        out
+    }
+
+    #[test]
+    fn hostile_lengths_are_errors() {
+        // A count of 2^31-1 with a one-entry table: no huge allocation, just a table error.
+        let a = super::Archive::from_bytes(raw_archive(0x7FFF_FFFF, &[("a", 16, 4)], 4));
+        assert!(matches!(
+            a,
+            Err(super::ArchiveError::BadTable | super::ArchiveError::Truncated(_))
+        ));
+        // Entry ranges past the file or reversed.
+        let a =
+            super::Archive::from_bytes(raw_archive(2, &[("a", 0xFFFF_0000, 4), ("b", 16, 4)], 4))
+                .unwrap();
+        assert!(matches!(a.read("a"), Err(super::ArchiveError::BadTable)));
+        assert!(a.read_stored("b").is_ok());
+        let a = super::Archive::from_bytes(raw_archive(1, &[("a", 0x7FFF_FFFF, 4)], 4)).unwrap();
+        assert!(matches!(a.read("a"), Err(super::ArchiveError::BadTable)));
+        // A 4 GiB size hint over a few input bytes reserves only what the input can expand to.
+        let out = super::lzss_decompress(&[0x80, 0x40, 0x00, 0x00], usize::MAX);
+        assert!(out.capacity() <= 32);
     }
 
     #[test]

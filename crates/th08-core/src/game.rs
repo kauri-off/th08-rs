@@ -348,11 +348,26 @@ impl Ctx {
         if persist {
             // The port's own save first; else import the original's score.dat (read-only).
             // The whole file is loaded once; equivalent to the original's boot PLST take (15 §2.2, INFERRED).
-            let file = match ctx.host.read("score.dat") {
+            let own = ctx.host.read("score.dat");
+            let from_host = own.is_some();
+            let file = match own {
                 Some(f) => Some(f),
                 None => source.read("score.dat").await.ok(),
             };
-            ctx.w.game.load_score(file.as_deref(), ctx.host.ticks_ms());
+            let now = ctx.host.ticks_ms();
+            if !ctx.w.game.load_score(file.as_deref(), now)
+                && from_host
+                && let Some(f) = &file
+            {
+                // Port-only: the next flush overwrites score.dat with defaults, so the unreadable file is kept aside.
+                let t = ctx.host.local_time();
+                let name = format!(
+                    "score.dat.bad-{}-{:02}-{:02}_{:02}{:02}{:02}",
+                    t.year, t.month, t.day, t.hour, t.minute, t.second
+                );
+                log::warn!("score.dat kept as {name}");
+                ctx.host.write(&name, f);
+            }
             ctx.w.game.persist = true;
         } else {
             ctx.w.game.load_score(None, ctx.host.ticks_ms());
@@ -638,6 +653,39 @@ mod tests {
         assert_eq!(c.w.game.scene, SceneId::Boot);
         assert!(to_menu(&mut c));
         assert_eq!(c.w.game.cfg.windowed, mode);
+    }
+
+    // An unreadable score.dat from the save dir is kept aside before defaults replace it.
+    #[test]
+    fn bad_score_dat_kept() {
+        use crate::testdata::{block_on, source};
+        let Some(src) = source() else {
+            return;
+        };
+        let mut host = crate::host::MemHost::default();
+        host.time = crate::host::LocalTime {
+            year: 2026,
+            month: 11,
+            day: 5,
+            hour: 9,
+            minute: 8,
+            second: 7,
+        };
+        host.files.insert("score.dat".into(), vec![0xAB; 64]);
+        let io = super::Io {
+            renderer: Box::new(crate::drawlist::NullRenderer),
+            audio: Box::new(crate::testdata::NullAudio),
+            host: Box::new(host),
+            drawlog: None,
+            overlay: None,
+        };
+        let core = crate::coreconfig::CoreConfig::default();
+        let mut c = block_on(super::Ctx::load_with(src, io, core, true)).unwrap();
+        let h = crate::testdata::mem_host(&mut c);
+        assert_eq!(
+            h.files.get("score.dat.bad-2026-11-05_090807"),
+            Some(&vec![0xAB; 64])
+        );
     }
 
     // With emit off the frames run (boot, logo, menu) and no draw command is recorded.

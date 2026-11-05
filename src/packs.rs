@@ -348,11 +348,16 @@ fn read_manifest(p: &std::path::Path) -> Option<toml::Table> {
     }
 }
 
+// Pack zip limits, far above any real pack, so a zip bomb fails with an error instead of exhausting memory.
+const MAX_PACK_TOTAL: u64 = 512 << 20;
+const MAX_PACK_FILES: usize = 1 << 16;
+const MAX_MANIFEST: u64 = 1 << 20;
+
 fn zip_manifest(r: impl std::io::Read + std::io::Seek) -> Option<toml::Table> {
     let mut z = zip::ZipArchive::new(r).ok()?;
-    let mut f = z.by_name("pack.toml").ok()?;
+    let f = z.by_name("pack.toml").ok()?;
     let mut s = String::new();
-    std::io::Read::read_to_string(&mut f, &mut s).ok()?;
+    std::io::Read::read_to_string(&mut std::io::Read::take(f, MAX_MANIFEST), &mut s).ok()?;
     s.parse().ok()
 }
 
@@ -363,17 +368,36 @@ fn manifest_of_zip(z: &[u8]) -> Option<toml::Table> {
 
 // Every file of a pack zip, as (relative path with '/', bytes) in name order.
 fn read_zip(r: impl std::io::Read + std::io::Seek) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    read_zip_capped(r, MAX_PACK_TOTAL, MAX_PACK_FILES)
+}
+
+fn read_zip_capped(
+    r: impl std::io::Read + std::io::Seek,
+    max_total: u64,
+    max_files: usize,
+) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     use std::io::Read;
     let mut out = Vec::new();
     let mut z = zip::ZipArchive::new(r)?;
+    anyhow::ensure!(
+        z.len() <= max_files,
+        "pack zip has more than {max_files} entries"
+    );
+    let mut total = 0u64;
     for i in 0..z.len() {
-        let mut f = z.by_index(i)?;
+        let f = z.by_index(i)?;
         if f.is_dir() {
             continue;
         }
         let name = f.name()?.replace('\\', "/");
         let mut b = Vec::new();
-        f.read_to_end(&mut b)?;
+        f.take(max_total - total + 1).read_to_end(&mut b)?;
+        total += b.len() as u64;
+        anyhow::ensure!(
+            total <= max_total,
+            "pack zip unpacks to more than {} MiB",
+            max_total >> 20
+        );
         out.push((name, b));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -678,6 +702,17 @@ mod tests {
 
     fn f(p: &str, b: &[u8]) -> (String, Vec<u8>) {
         (p.to_string(), b.to_vec())
+    }
+
+    #[test]
+    fn pack_zip_caps() {
+        let files = vec![f("pack.toml", b"x"), f("big.txt", &vec![0; 1 << 20])];
+        let z = write_zip(&files).unwrap();
+        assert!(z.len() < 1 << 16);
+        let cur = || std::io::Cursor::new(z.clone());
+        assert_eq!(read_zip_capped(cur(), 2 << 20, 8).unwrap().len(), 2);
+        assert!(read_zip_capped(cur(), 1 << 20, 8).is_err());
+        assert!(read_zip_capped(cur(), 2 << 20, 1).is_err());
     }
 
     // Same language in both pack folders: the newer one wins, a tie goes to the config folder.

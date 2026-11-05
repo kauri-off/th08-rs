@@ -102,9 +102,11 @@ fn collect(store: &dyn Store) -> Vec<(String, Vec<u8>)> {
         .collect();
     replays.sort();
     replays.dedup();
+    // Unreadable replays stay out, so the archive passes `validate`.
     out.extend(replays.into_iter().filter_map(|n| {
         let name = format!("replay/{n}");
-        Some((name.clone(), store.read(&name)?))
+        let data = store.read(&name)?;
+        replay_error(&data).is_none().then_some((name, data))
     }));
     let cfg = store.port_cfg();
     if !cfg.is_empty() {
@@ -231,7 +233,25 @@ pub fn validate(data: &[u8]) -> Result<Archive, String> {
     if m["format"].as_u64() != Some(FORMAT) {
         return Err(format!("unknown save format {}", m["format"]));
     }
+    if let Some(s) = &a.score {
+        th08_core::scoredat::ScoreDat::parse(s, None).map_err(|e| format!("score.dat: {e}"))?;
+    }
+    if let Some((n, e)) = a
+        .replays
+        .iter()
+        .find_map(|(n, r)| replay_error(r).map(|e| (n, e)))
+    {
+        return Err(format!("replay/{n}: {e}"));
+    }
     Ok(a)
+}
+
+// Why a replay cannot be read; a well-formed slow-mode replay is kept (the game itself refuses to play it).
+fn replay_error(r: &[u8]) -> Option<th08_core::replay::ReplayError> {
+    match th08_core::replay::parse(r, None) {
+        Ok(_) | Err(th08_core::replay::ReplayError::SlowMode) => None,
+        Err(e) => Some(e),
+    }
 }
 
 // Player rows of an imported port.cfg that this build knows and accepts; the last line of a key wins.
@@ -612,6 +632,23 @@ mod tests {
         d
     }
 
+    // A real score.dat whose LSNM name is `tag`, and a real replay whose user block is `tag`.
+    fn score(tag: &[u8]) -> Vec<u8> {
+        let mut s = th08_core::scoredat::ScoreDat::default();
+        s.lsnm[..tag.len()].copy_from_slice(tag);
+        s.encode(&mut th08_core::rng::Rng::seeded(1))
+    }
+
+    fn rpy(tag: &[u8]) -> Vec<u8> {
+        let mut r = th08_core::replay::Replay::default();
+        r.stages[0] = Some(th08_core::replay::StageRecord {
+            inputs: vec![0, 1],
+            ..Default::default()
+        });
+        r.user = tag.to_vec();
+        r.encode(&mut th08_core::rng::Rng::seeded(1))
+    }
+
     fn store(root: &Path) -> DirStore {
         DirStore {
             save: root.join("save"),
@@ -626,9 +663,9 @@ mod tests {
     fn fill(root: &Path, tag: &[u8]) {
         let s = root.join("save");
         std::fs::create_dir_all(s.join("replay")).unwrap();
-        std::fs::write(s.join("score.dat"), [b"score-", tag].concat()).unwrap();
+        std::fs::write(s.join("score.dat"), score(tag)).unwrap();
         std::fs::write(s.join("th08.cfg"), [b"cfg-", tag].concat()).unwrap();
-        std::fs::write(s.join("replay/th8_01.rpy"), [b"r1-", tag].concat()).unwrap();
+        std::fs::write(s.join("replay/th8_01.rpy"), rpy(&[b"r1-", tag].concat())).unwrap();
         std::fs::write(s.join("replay/notes.txt"), b"x").unwrap();
         std::fs::create_dir_all(root.join("config")).unwrap();
         std::fs::write(
@@ -694,11 +731,14 @@ mod tests {
         let r = import(&mut sb, &out.zip, false, &T).unwrap();
         assert_eq!((r.files, r.replays, r.port_cfg), (3, 1, false));
         assert!(r.backup.is_none(), "nothing to back up");
-        assert_eq!(std::fs::read(b.join("save/score.dat")).unwrap(), b"score-A");
+        assert_eq!(
+            std::fs::read(b.join("save/score.dat")).unwrap(),
+            score(b"A")
+        );
         assert_eq!(std::fs::read(b.join("save/th08.cfg")).unwrap(), b"cfg-A");
         assert_eq!(
             std::fs::read(b.join("save/replay/th8_01.rpy")).unwrap(),
-            b"r1-A"
+            rpy(b"r1-A")
         );
         assert!(!b.join("config/port.cfg").exists());
 
@@ -718,19 +758,22 @@ mod tests {
         let zip = export(&store(&a), &T).unwrap().zip;
         let b = tmp("dst");
         fill(&b, b"B");
-        std::fs::write(b.join("save/replay/th8_02.rpy"), b"r2-B").unwrap();
+        std::fs::write(b.join("save/replay/th8_02.rpy"), rpy(b"r2-B")).unwrap();
         let r = import(&mut store(&b), &zip, false, &T).unwrap();
         let bk = PathBuf::from(r.backup.unwrap());
         assert_eq!(bk, b.join("save/th08-saves-backup-2026-11-05_090807.zip"));
         let old = validate(&std::fs::read(&bk).unwrap()).unwrap();
-        assert_eq!(old.score.as_deref(), Some(&b"score-B"[..]));
+        assert_eq!(old.score.as_deref(), Some(&score(b"B")[..]));
         assert_eq!(old.cfg.as_deref(), Some(&b"cfg-B"[..]));
         assert_eq!(old.replays.len(), 2);
-        assert_eq!(std::fs::read(b.join("save/score.dat")).unwrap(), b"score-A");
+        assert_eq!(
+            std::fs::read(b.join("save/score.dat")).unwrap(),
+            score(b"A")
+        );
         // Replays not in the archive stay.
         assert_eq!(
             std::fs::read(b.join("save/replay/th8_02.rpy")).unwrap(),
-            b"r2-B"
+            rpy(b"r2-B")
         );
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
@@ -741,6 +784,9 @@ mod tests {
         let man = manifest(&T);
         let m = man.as_bytes();
         let big = vec![0u8; (1 << 20) + 1];
+        let mut body = vec![0u8; 0x1C];
+        body.extend_from_slice(b"TH8K\x01\0\x01\0\x01\0\0\0");
+        let short_chunk = th08_core::scoredat::encode_container(&body, [0, 0]);
         let cases: Vec<(&str, Vec<u8>)> = vec![
             (
                 "traversal",
@@ -766,6 +812,18 @@ mod tests {
                 zip_of(&[(MANIFEST, br#"{"format":9}"#), ("score.dat", b"x")]),
             ),
             ("not a zip", b"PK\x03\x04 nope".to_vec()),
+            (
+                "bad score.dat",
+                zip_of(&[(MANIFEST, m), ("score.dat", b"score-X")]),
+            ),
+            (
+                "short chunk score.dat",
+                zip_of(&[(MANIFEST, m), ("score.dat", &short_chunk)]),
+            ),
+            (
+                "bad replay",
+                zip_of(&[(MANIFEST, m), ("replay/th8_01.rpy", b"T8RP nope")]),
+            ),
         ];
         let root = tmp("bad");
         fill(&root, b"B");
@@ -798,7 +856,7 @@ mod tests {
             (Some(3), Some(true)),
             "{v}"
         );
-        assert_eq!(std::fs::read(b.join("score.dat")).unwrap(), b"score-A");
+        assert_eq!(std::fs::read(b.join("score.dat")).unwrap(), score(b"A"));
         assert!(
             std::fs::read_to_string(b.join("port.cfg"))
                 .unwrap()

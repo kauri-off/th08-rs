@@ -17,6 +17,9 @@ pub const LICENCE: &str =
     "Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)";
 pub const LICENCE_URL: &str = "https://creativecommons.org/licenses/by-sa/4.0/";
 const MAX_FILE: u64 = 32 << 20;
+// Per fetched language, far above any real th08 patch chain.
+const MAX_ITEMS: usize = 5000;
+const MAX_TOTAL: u64 = 512 << 20;
 // Parallel requests of one download.
 const WORKERS: usize = 8;
 
@@ -172,6 +175,7 @@ impl Client {
             #[cfg(not(target_arch = "wasm32"))]
             agent: ureq::Agent::config_builder()
                 .timeout_global(Some(std::time::Duration::from_secs(60)))
+                .https_only(true)
                 .build()
                 .into(),
             #[cfg(target_arch = "wasm32")]
@@ -359,6 +363,7 @@ impl Client {
         let next = std::sync::atomic::AtomicUsize::new(0);
         let done = std::sync::atomic::AtomicUsize::new(0);
         let errors = Mutex::new(Vec::new());
+        let bytes = std::sync::atomic::AtomicU64::new(0);
         prog.files(0, todo.len());
         let worker = || {
             loop {
@@ -367,6 +372,7 @@ impl Client {
                     break;
                 };
                 let r = self.get(url).and_then(|b| {
+                    charge(&bytes, b.len(), url)?;
                     // The server's own list can be stale (lang_ru themes.js, 2026-11): kept, reported.
                     if crc32fast::hash(&b) != *crc {
                         prog.line(&format!(
@@ -388,6 +394,26 @@ impl Client {
         crate::parallel(WORKERS, worker);
         errors.into_inner().unwrap()
     }
+}
+
+fn check_count(lang: &str, n: usize) -> Result<()> {
+    anyhow::ensure!(
+        n <= MAX_ITEMS,
+        "{lang}: {n} files listed, more than {MAX_ITEMS}"
+    );
+    Ok(())
+}
+
+// Adds a body to the running byte total of one fetch; past `MAX_TOTAL` the download fails.
+fn charge(total: &std::sync::atomic::AtomicU64, len: usize, url: &str) -> Result<()> {
+    let len = len as u64;
+    let before = total.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+    anyhow::ensure!(
+        before + len <= MAX_TOTAL,
+        "{url}: language larger than {} MiB",
+        MAX_TOTAL >> 20
+    );
+    Ok(())
 }
 
 // A font declared by a patch of the chain: patch key, declared name, local file (None = not available), status.
@@ -514,6 +540,7 @@ pub fn fetch(
         }
     }
     let todo = items.len();
+    check_count(lang, todo)?;
     p.line(&format!(
         "{lang} revision {rev}: {todo} files ({}, {LICENCE}) in {}",
         me.base,
@@ -679,6 +706,18 @@ pub fn local_fonts(lang_dir: &Path) -> Fonts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_caps() {
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(Client::new().agent.config().https_only());
+        assert!(check_count("lang_en", MAX_ITEMS).is_ok());
+        assert!(check_count("lang_en", MAX_ITEMS + 1).is_err());
+        let t = std::sync::atomic::AtomicU64::new(0);
+        assert!(charge(&t, (MAX_TOTAL - 1) as usize, "a").is_ok());
+        assert!(charge(&t, 1, "b").is_ok());
+        assert!(charge(&t, 1, "c").is_err());
+    }
 
     #[test]
     fn file_filter() {

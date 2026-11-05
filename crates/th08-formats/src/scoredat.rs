@@ -461,8 +461,8 @@ impl ScoreDat {
                 return Err(ScoreError::EmptyChunk);
             }
             let Some(c) = d.get(p..p + size) else { break };
-            let ver = c[8];
-            match (&c[..4], ver) {
+            // Magic and version come from the decoded buffer, which `p + 12` bounds even for sizes 1..=8.
+            match (&d[p..p + 4], d[p + 8]) {
                 (b"TH8K", 1) => th8k = true,
                 (b"HSCR", 4) if size >= 0x168 => s.hscr.push(Hscr(c[..0x168].to_vec())),
                 (b"CLRD", 4) if size >= 0x24 => {
@@ -823,6 +823,24 @@ mod tests {
         assert_eq!(t, s);
         assert_eq!(t.hiscore(0, 1), 5_000_000);
         assert_eq!(t.card_history(54, 0, false), (1, 1));
+    }
+
+    // Chunk sizes 1..=8 once indexed past the chunk slice; every short size now parses or errors.
+    #[test]
+    fn short_chunk_sizes_do_not_panic() {
+        for size in 1u16..=12 {
+            for magic in [b"TH8K", b"HSCR", b"ZZZZ"] {
+                let mut body = vec![0u8; 0x1C];
+                let mut chunk = [0u8; 12];
+                chunk[..4].copy_from_slice(magic);
+                chunk[4..6].copy_from_slice(&size.to_le_bytes());
+                chunk[6..8].copy_from_slice(&size.to_le_bytes());
+                chunk[8] = 1;
+                body.extend_from_slice(&chunk);
+                let f = encode_container(&body, [3, 5]);
+                let _ = ScoreDat::parse(&f, None);
+            }
+        }
     }
 
     // A new entry goes before equal scores, including a default entry of the same score.

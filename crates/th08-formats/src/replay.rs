@@ -251,7 +251,7 @@ impl Replay {
                 .unwrap_or(img.len())
                 .min(img.len());
             let f = if fps[i] > o { fps[i].min(next) } else { next };
-            if o + REC > f {
+            if o.saturating_add(REC) > f {
                 return Err(ReplayError::StageRecord(i));
             }
             let mut r = StageRecord::parse(&img[o..f])?;
@@ -372,6 +372,42 @@ mod tests {
             Replay::parse(&f, None),
             Err(ReplayError::SlowMode)
         ));
+    }
+
+    // Edits the decrypted file and recomputes the checksum, as an attacker could.
+    fn reseal(f: &[u8], edit: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        let mut b = f.to_vec();
+        let k = b[0x15];
+        crypt(&mut b[0x18..], k, true);
+        edit(&mut b);
+        let sum = b[0x15..]
+            .iter()
+            .fold(CHECK_BASE, |a, &c| a.wrapping_add(u32::from(c)));
+        put_u32(&mut b, 0x10, sum);
+        crypt(&mut b[0x18..], k, false);
+        b
+    }
+
+    #[test]
+    fn hostile_length_fields() {
+        let mut r = Replay::default();
+        r.stages[0] = Some(StageRecord {
+            inputs: vec![0, 1],
+            fps: vec![60],
+            ..Default::default()
+        });
+        let f = r.encode(&mut crate::testdata::Counter(1, 0));
+        assert!(Replay::parse(&f, None).is_ok());
+        let huge = reseal(&f, |b| put_u32(b, 0x1C, u32::MAX));
+        assert!(Replay::parse(&huge, None).is_ok());
+        for v in [1, 0x67, 0x134, 0x7FFF_FFFF, u32::MAX] {
+            for at in [0x20, 0x44, 0x24, 0x48] {
+                let g = reseal(&f, |b| put_u32(b, at, v));
+                let _ = Replay::parse(&g, None);
+            }
+        }
+        let g = reseal(&f, |b| put_u32(b, 0x18, u32::MAX));
+        let _ = Replay::parse(&g, None);
     }
 
     #[test]

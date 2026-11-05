@@ -451,9 +451,10 @@ impl Game {
     }
 
     // Boot load (15 §2.2); a missing or invalid file starts from defaults.
-    // `now` = `Host::ticks_ms`, the run-time mark.
-    pub fn load_score(&mut self, file: Option<&[u8]>, now: u64) {
+    // `now` = `Host::ticks_ms`, the run-time mark. False when a file was given and failed to parse.
+    pub fn load_score(&mut self, file: Option<&[u8]>, now: u64) -> bool {
         self.lsnm_found = false;
+        let mut ok = true;
         self.score = match file.map(|f| self.ver_list.parse(f)) {
             Some(Ok(s)) => {
                 self.lsnm_found = true;
@@ -461,6 +462,7 @@ impl Game {
             }
             Some(Err(e)) => {
                 log::warn!("score.dat: {e:#}; starting from defaults");
+                ok = false;
                 crate::scoredat::ScoreDat::default()
             }
             None => crate::scoredat::ScoreDat::default(),
@@ -470,6 +472,7 @@ impl Game {
             self.clear_any[i] = c.any;
         }
         self.run_clock = Some(now);
+        ok
     }
 
     // ScoreDat_Save (Result removal): 2 RNG draws. `flush` = Result mode 2 (slow mode drops this run's card credit).
