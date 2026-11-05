@@ -39,6 +39,9 @@ pub const MENU_BUTTON: usize = 8;
 // Stick deflection (of ±1000) that counts as using the pad (hides the touch overlay).
 const IN_USE: i32 = 300;
 
+// Hat axis value (−1..1) that counts as a d-pad press.
+const HAT_DEAD: f32 = 0.5;
+
 // Gamepad button index of an Android keycode.
 pub fn android_button(code: u32) -> Option<usize> {
     ANDROID_KEYS.iter().position(|&k| k == code)
@@ -52,7 +55,11 @@ fn axis_value(v: f32) -> i32 {
 // A gamepad fed by window events (Android key and joystick motion events).
 #[derive(Clone, Debug, Default)]
 pub struct EventPad {
+    // Buttons, and lX/lY: the stick, with a pressed hat direction at full deflection over it.
     pub state: PadState,
+    stick: [i32; 2],
+    // Hat direction per axis: −1, 0 or 1.
+    hat: [i32; 2],
     // Connected gamepad names (Android: InputDevice enumeration).
     pub devices: Vec<String>,
     // Any button or stick input seen since the last release.
@@ -71,13 +78,42 @@ impl EventPad {
 
     // Stick deflection, −1..1 per axis, y down-positive (Android AXIS_Y, like DirectInput lY).
     pub fn stick(&mut self, x: f32, y: f32) {
-        self.state.axis = [axis_value(x), axis_value(y)];
-        self.seen |= self.state.axis.iter().any(|v| v.abs() > IN_USE);
+        self.stick = [axis_value(x), axis_value(y)];
+        self.seen |= self.stick.iter().any(|v| v.abs() > IN_USE);
+        self.mix();
+    }
+
+    // D-pad sent as AXIS_HAT_X / AXIS_HAT_Y, −1..1 per axis, y down-positive; centred releases it.
+    pub fn hat(&mut self, x: f32, y: f32) {
+        let dir = |v: f32| {
+            if v > HAT_DEAD {
+                1
+            } else if v < -HAT_DEAD {
+                -1
+            } else {
+                0
+            }
+        };
+        self.hat = [dir(x), dir(y)];
+        self.seen |= self.hat != [0, 0];
+        self.mix();
+    }
+
+    fn mix(&mut self) {
+        for i in 0..2 {
+            self.state.axis[i] = if self.hat[i] == 0 {
+                self.stick[i]
+            } else {
+                self.hat[i] * 1000
+            };
+        }
     }
 
     // A device went away: everything held is released.
     pub fn release(&mut self) {
         self.state = PadState::default();
+        self.stick = [0, 0];
+        self.hat = [0, 0];
     }
 }
 
@@ -280,6 +316,74 @@ mod tests {
         assert_eq!(f.classify(2, Moved, 310.0, 200.0), None);
         assert_eq!(f.classify(2, Ended, 310.0, 200.0), None);
         assert_eq!(f.classify(2, Moved, -1.0, 0.0), Some((-1.0, 0.0)));
+    }
+
+    fn dirs(p: &EventPad) -> u16 {
+        use th08_core::input::{DOWN, LEFT, RIGHT, UP};
+        let cfg = th08_core::config::Config::default();
+        th08_core::input::joystick_bits(&cfg, &p.state, &mut 0) & (UP | DOWN | LEFT | RIGHT)
+    }
+
+    // Hat values past the dead zone are full d-pad presses, y down-positive; inside it nothing is pressed.
+    #[test]
+    fn hat_bits() {
+        use th08_core::input::{DOWN, LEFT, RIGHT, UP};
+        let mut p = EventPad::default();
+        for (x, y, bits) in [
+            (0.0, -1.0, UP),
+            (0.0, 1.0, DOWN),
+            (-1.0, 0.0, LEFT),
+            (1.0, 0.0, RIGHT),
+            (1.0, -1.0, RIGHT | UP),
+            (-1.0, 1.0, LEFT | DOWN),
+            (0.4, -0.4, 0),
+            (0.0, 0.0, 0),
+        ] {
+            p.hat(x, y);
+            assert_eq!(dirs(&p), bits, "hat ({x}, {y})");
+        }
+    }
+
+    // A centred hat releases its direction; the stick shows again, a device going away clears the hat.
+    #[test]
+    fn hat_release() {
+        use th08_core::input::{LEFT, UP};
+        let mut p = EventPad::default();
+        p.hat(0.0, -1.0);
+        assert_eq!(dirs(&p), UP);
+        p.hat(0.0, 0.0);
+        assert_eq!((dirs(&p), p.state.axis), (0, [0, 0]));
+        p.stick(-1.0, 0.1);
+        p.hat(0.0, -1.0);
+        assert_eq!(dirs(&p), LEFT | UP);
+        p.hat(0.0, 0.0);
+        assert_eq!((dirs(&p), p.state.axis), (LEFT, [-1000, 100]));
+        p.release();
+        p.stick(0.0, 0.0);
+        assert_eq!((dirs(&p), p.state.axis), (0, [0, 0]));
+    }
+
+    // Hat, stick and buttons (d-pad keys arrive as arrow keys) together: the hat wins on its axis, buttons stay.
+    #[test]
+    fn hat_with_stick_and_buttons() {
+        use th08_core::input::{DOWN, RIGHT, SHOT};
+        let mut p = EventPad::default();
+        p.button(0, true);
+        p.stick(1.0, -1.0);
+        p.hat(0.0, 1.0);
+        assert_eq!(p.state.axis, [1000, 1000]);
+        assert_eq!(dirs(&p), RIGHT | DOWN);
+        let cfg = th08_core::config::Config::default();
+        assert_ne!(
+            th08_core::input::joystick_bits(&cfg, &p.state, &mut 0) & SHOT,
+            0
+        );
+        p.stick(0.2, 0.0);
+        assert_eq!(dirs(&p), DOWN);
+        let mut j = Joystick::default();
+        j.events.hat(1.0, 0.0);
+        assert!(j.take_used());
+        assert_eq!(j.poll().axis, [1000, 0]);
     }
 
     // The event pad's input marks the pad as used once.

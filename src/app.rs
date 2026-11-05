@@ -348,6 +348,12 @@ impl ApplicationHandler<UserEvent> for App {
             }
             // Android: joystick motion goes to the gamepad, never to a touch consumer.
             WindowEvent::Touch(t) if cfg!(target_os = "android") => {
+                // The motion hook ran just before this event: a hat change arrives with a stick move.
+                if let Some((x, y)) = crate::platform::gamepad::take_hat()
+                    && let Some(h) = self.host()
+                {
+                    h.joystick.events.hat(x, y);
+                }
                 if let Some((x, y)) = self.sticks.classify(
                     t.device_id,
                     t.phase,
@@ -1395,6 +1401,7 @@ pub fn run_android(
     };
     crate::platform::safearea::set_app(&android);
     crate::platform::back::bind(&android);
+    crate::platform::gamepad::bind_hat();
     let el = EventLoop::<UserEvent>::with_user_event()
         .with_android_app(android)
         .build()

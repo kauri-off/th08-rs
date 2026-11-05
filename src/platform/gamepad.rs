@@ -1,4 +1,34 @@
-//! Android gamepads: the connected InputDevice list (hot-plug, the active device's name) via JNI.
+//! Android gamepads: the connected InputDevice list (hot-plug, the active device's name) via JNI, and d-pad hat axes.
+
+use std::sync::Mutex;
+
+// Last AXIS_HAT_X / AXIS_HAT_Y not yet taken by `take_hat`.
+static HAT: Mutex<Option<(f32, f32)>> = Mutex::new(None);
+
+// Hooks joystick motion events in android-activity: winit forwards only AXIS_X / AXIS_Y of them.
+#[cfg(target_os = "android")]
+pub fn bind_hat() {
+    use winit::platform::android::activity::input::{Axis, MotionEvent};
+    fn hook(m: &MotionEvent<'_>) {
+        if m.source().is_joystick_class() && m.pointer_count() > 0 {
+            let p = m.pointer_at_index(0);
+            let mut h = HAT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *h = Some((p.axis_value(Axis::HatX), p.axis_value(Axis::HatY)));
+        }
+    }
+    if !winit::platform::android::activity::input::set_motion_hook(hook) {
+        log::warn!("d-pad hat: motion hook already set");
+    }
+}
+
+// The hat values of the newest joystick motion event since the last call.
+pub fn take_hat() -> Option<(f32, f32)> {
+    HAT.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
 
 #[cfg(target_os = "android")]
 pub use android::devices;
