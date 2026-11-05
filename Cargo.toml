@@ -27,7 +27,7 @@ bool_to_int_with_if = "warn"
 
 [package]
 name = "th08"
-version = "0.1.1"
+version = "0.1.2"
 license = "GPL-3.0-or-later"
 edition = "2024"
 description = "Clean-room reimplementation of Touhou 8: Imperishable Night"
