@@ -87,7 +87,7 @@ pub fn apk(
         ),
         format!(
             "-Pth08.profile={}",
-            std::env::var("TH08_ANDROID_PROFILE").unwrap_or_else(|_| "release".into())
+            std::env::var("TH08_ANDROID_PROFILE").unwrap_or_else(|_| util::PROFILE.into())
         ),
         format!("-Pth08.channel={}", channel.name()),
         format!("-Pth08.versionCode={}", ver.code),

@@ -2,6 +2,7 @@
 // th08-repack `import::bridge`), which writes checked th08.pak + thbgm.pak into filesDir/game.
 package org.th08.port
 
+import android.app.ActivityManager
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
@@ -139,7 +140,14 @@ class GameImporter(private val act: ComponentActivity) {
             fds.add(fd)
             files.put(JSONObject().put("name", name).put("fd", fd))
         }
-        call(request("start").put("files", files))
+        call(request("start").put("files", files).put("low_ram", lowRam()))
+    }
+
+    // Fewer parallel track encodes (each holds a whole track's PCM) on phones with little memory.
+    private fun lowRam(): Boolean {
+        val am = act.getSystemService(ActivityManager::class.java) ?: return false
+        val mem = ActivityManager.MemoryInfo().also(am::getMemoryInfo)
+        return am.isLowRamDevice || mem.totalMem < 3L * 1024 * 1024 * 1024
     }
 
     // Logs the outcome once a job ended (timings for the emulator check).

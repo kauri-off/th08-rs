@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Build one package into target/dist/ (th08-<ver>-<target>[-assets[-packed]]).
+    /// Build one package into target/dist/ (th08-<ver>-<target>[-dev|-debug][-assets[-packed]]).
     Dist(DistArgs),
 }
 
@@ -147,7 +147,17 @@ fn dist(a: &DistArgs) -> Result<()> {
         Assets::Raw => "-assets",
         Assets::Packed => "-assets-packed",
     };
-    let name = format!("th08-{}-{}{suffix}", util::version()?, a.target.name());
+    // Android dev / debug builds carry their channel, so they are never taken for the public release APK.
+    let channel = match a.channel {
+        _ if a.target != Target::AndroidApk => String::new(),
+        Some(Channel::Release) => String::new(),
+        c => format!("-{}", c.unwrap_or(Channel::Dev).name()),
+    };
+    let name = format!(
+        "th08-{}-{}{channel}{suffix}",
+        util::version()?,
+        a.target.name()
+    );
     let game = assets::prepare(a, &local, &name)?;
     let out = match &a.out {
         Some(p) => util::absolute(p),

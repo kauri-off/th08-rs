@@ -36,6 +36,7 @@ jobs:
           sha256sum -c <<< "$PIN_SHA256  $RUNNER_TEMP/$d.tar.gz"
           tar xzf "$RUNNER_TEMP/$d.tar.gz"
           mkdir -p ~/.cargo/bin && mv "$d/wasm-bindgen" ~/.cargo/bin/
+      # xtask fetches its pinned, sha256-checked binaryen and runs wasm-opt on the bundle.
       - name: Build
         run: cargo xtask dist --target web --assets none --out web/dist
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1

@@ -1,4 +1,4 @@
-//! Web build: th08.wasm (lib, wasm32-unknown-unknown) + wasm-bindgen glue + web/index.html in one folder.
+//! Web build: th08.wasm (lib, wasm32-unknown-unknown) + wasm-bindgen glue, wasm-opt, web/index.html in one folder.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +7,41 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::util;
+
+// Pinned binaryen (wasm-opt), sha256-checked, cached in target/dist/tools/; other hosts need this version on PATH.
+const BINARYEN: &str = "version_133";
+const BINARYEN_LINUX: (&str, &str) = (
+    "https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz",
+    "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489",
+);
+
+fn wasm_opt() -> Result<PathBuf> {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        let tools = util::dist_dir().join("tools");
+        let tar = tools.join(format!("binaryen-{BINARYEN}-x86_64-linux.tar.gz"));
+        util::fetch(BINARYEN_LINUX, &tar)?;
+        let inner = format!("binaryen-{BINARYEN}/bin/wasm-opt");
+        util::run(
+            Command::new("tar")
+                .arg("-xzf")
+                .arg(&tar)
+                .arg("-C")
+                .arg(&tools)
+                .arg(&inner),
+        )?;
+        return Ok(tools.join(inner));
+    }
+    let want = BINARYEN.trim_start_matches("version_");
+    let out = Command::new("wasm-opt")
+        .arg("--version")
+        .output()
+        .with_context(|| format!("no wasm-opt (binaryen {BINARYEN}) on PATH"))?;
+    let have = String::from_utf8_lossy(&out.stdout);
+    if have.split_whitespace().nth(2) != Some(want) {
+        bail!("wasm-opt {} is not binaryen {BINARYEN}", have.trim());
+    }
+    Ok(PathBuf::from("wasm-opt"))
+}
 
 // wasm-bindgen-cli must match the wasm-bindgen crate in Cargo.lock (the glue format is version-locked).
 fn locked_version() -> Result<String> {
@@ -60,18 +95,31 @@ pub fn build(out: &Path) -> Result<()> {
     util::run(util::cargo().args([
         "build",
         "--lib",
-        "--release",
+        "--profile",
+        util::PROFILE,
         "--locked",
         "--target",
         "wasm32-unknown-unknown",
     ]))?;
-    let wasm = util::cargo_target().join("wasm32-unknown-unknown/release/th08.wasm");
+    let wasm = util::cargo_target()
+        .join("wasm32-unknown-unknown")
+        .join(util::PROFILE)
+        .join("th08.wasm");
     fs::create_dir_all(out)?;
     util::run(
         Command::new(&tool)
             .args(["--target", "web", "--no-typescript", "--out-dir"])
             .arg(out)
             .arg(&wasm),
+    )?;
+    // No --fast-math: float folding keeps IEEE semantics, as the native builds do.
+    let bg = out.join("th08_bg.wasm");
+    util::run(
+        Command::new(wasm_opt()?)
+            .arg("-O")
+            .arg(&bg)
+            .arg("-o")
+            .arg(&bg),
     )?;
     util::copy(
         &util::root().join("web/index.html"),

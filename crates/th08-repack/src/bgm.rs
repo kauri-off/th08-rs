@@ -8,7 +8,7 @@ use std::sync::{Mutex, mpsc};
 use std::time::Instant;
 
 use sha2::{Digest, Sha256};
-use th08_audio::bgm::{Frame, decode_vorbis, fit, pcm_frames};
+use th08_audio::bgm::{Frame, decode_vorbis, fit};
 use th08_formats::pack::{self, BgmInfo, BgmTrack, Index, Kind};
 use th08_formats::thbgm::Track;
 
@@ -67,6 +67,36 @@ impl Built {
     }
 }
 
+// Frame access shared by the decode and the thbgm.dat bytes, which are read in place (s16 LE stereo).
+trait Frames {
+    fn n(&self) -> usize;
+    fn at(&self, i: usize) -> Frame;
+}
+
+impl Frames for [Frame] {
+    fn n(&self) -> usize {
+        self.len()
+    }
+    fn at(&self, i: usize) -> Frame {
+        self[i]
+    }
+}
+
+struct Pcm<'a>(&'a [[u8; 4]]);
+
+impl Frames for Pcm<'_> {
+    fn n(&self) -> usize {
+        self.0.len()
+    }
+    fn at(&self, i: usize) -> Frame {
+        let c = self.0[i];
+        [
+            i16::from_le_bytes([c[0], c[1]]),
+            i16::from_le_bytes([c[2], c[3]]),
+        ]
+    }
+}
+
 fn sq(f: Frame) -> f64 {
     f64::from(f[0]).powi(2) + f64::from(f[1]).powi(2)
 }
@@ -75,10 +105,13 @@ fn err(a: Frame, b: Frame) -> f64 {
     (f64::from(a[0]) - f64::from(b[0])).powi(2) + (f64::from(a[1]) - f64::from(b[1])).powi(2)
 }
 
-fn snr(o: &[Frame], d: &[Frame]) -> f64 {
-    let s: f64 = o.iter().map(|&f| sq(f)).sum();
-    let e: f64 = o.iter().zip(d).map(|(&a, &b)| err(a, b)).sum();
-    10.0 * (s / e.max(1e-9)).log10()
+fn sse(o: &(impl Frames + ?Sized), d: &[Frame]) -> f64 {
+    (0..o.n().min(d.len())).map(|i| err(o.at(i), d[i])).sum()
+}
+
+fn snr(o: &(impl Frames + ?Sized), d: &[Frame]) -> f64 {
+    let s: f64 = (0..o.n()).map(|i| sq(o.at(i))).sum();
+    10.0 * (s / sse(o, d).max(1e-9)).log10()
 }
 
 // Cross-correlation peak of `d` against `o` over three windows; 0 = sample-aligned.
@@ -87,16 +120,16 @@ fn snr(o: &[Frame], d: &[Frame]) -> f64 {
     clippy::cast_possible_wrap,
     reason = "start ≥ LAG keeps i + l ≥ 0; frame indices < 2^63"
 )]
-fn lag(o: &[Frame], d: &[Frame]) -> i64 {
-    let n = o.len();
+fn lag(o: &(impl Frames + ?Sized), d: &[Frame]) -> i64 {
+    let n = o.n();
     let mut best = (i128::MIN, 0);
     for l in -LAG..=LAG {
         let mut acc: i128 = 0;
         for w in [n / 4, n / 2, 3 * n / 4] {
             let start = w.max(LAG as usize);
             let end = (start + LAG_WIN).min(n.saturating_sub(LAG as usize));
-            for (i, oi) in o.iter().enumerate().take(end).skip(start) {
-                let j = (i as i64 + l) as usize;
+            for i in start..end.min(n) {
+                let (oi, j) = (o.at(i), (i as i64 + l) as usize);
                 acc += i128::from(i32::from(oi[0]) * i32::from(d[j][0]))
                     + i128::from(i32::from(oi[1]) * i32::from(d[j][1]));
             }
@@ -108,13 +141,28 @@ fn lag(o: &[Frame], d: &[Frame]) -> i64 {
     best.1
 }
 
-// `pcm` = the track's bytes `[offset, offset + 4·loop_end)`.
-fn encode_track(t: &Track, pcm: &[u8], encode: Encoder, keep: bool) -> Result<Encoded> {
+fn splice(s: &(impl Frames + ?Sized), le: usize, ls: usize, w: usize) -> Vec<Frame> {
+    (le - w.min(le)..s.n())
+        .chain(ls..(ls + w).min(le))
+        .map(|i| s.at(i))
+        .collect()
+}
+
+fn step(s: &(impl Frames + ?Sized), le: usize, ls: usize) -> i32 {
+    (i32::from(s.at(le - 1)[0]) - i32::from(s.at(ls)[0])).abs()
+}
+
+fn rms(o: &(impl Frames + ?Sized), d: &[Frame]) -> f64 {
+    (sse(o, d) / o.n().max(1) as f64).sqrt()
+}
+
+// `pcm` = the track's bytes `[offset, offset + 4·loop_end)`; the encoder's pad is appended to it in place.
+fn encode_track(t: &Track, mut pcm: Vec<u8>, encode: Encoder, keep: bool) -> Result<Encoded> {
     let clock = Instant::now();
     let (le, ls) = (t.length, t.loop_start);
-    let mut input = pcm.to_vec();
-    input.extend_from_slice(&pcm[4 * ls..4 * (ls + PAD).min(le)]);
-    let ogg = encode(&input)?;
+    pcm.extend_from_within(4 * ls..4 * (ls + PAD).min(le));
+    let ogg = encode(&pcm)?;
+    pcm.truncate(4 * le);
     let mut dec = decode_vorbis(&ogg, usize::MAX)
         .map_err(|e| Error::Failed(format!("{}: decode of the encoded track: {e:#}", t.name)))?;
     let dec_len = dec.len();
@@ -125,32 +173,26 @@ fn encode_track(t: &Track, pcm: &[u8], encode: Encoder, keep: bool) -> Result<En
         )));
     }
     fit(&mut dec, le);
-    let o = pcm_frames(pcm);
-    let splice = |s: &[Frame], w: usize| -> Vec<Frame> {
-        let mut v = s[le - w.min(le)..].to_vec();
-        v.extend_from_slice(&s[ls..(ls + w).min(le)]);
-        v
-    };
-    let (os, ds) = (splice(&o, SEAM), splice(&dec, SEAM));
+    let o = Pcm(pcm.as_chunks::<4>().0);
+    let (os, ds) = (splice(&o, le, ls, SEAM), splice(&*dec, le, ls, SEAM));
     let j = SEAM.min(le);
-    let rms = |o: &[Frame], d: &[Frame]| {
-        (o.iter().zip(d).map(|(&a, &b)| err(a, b)).sum::<f64>() / o.len().max(1) as f64).sqrt()
-    };
     let jr = j.saturating_sub(JUNCTION)..(j + JUNCTION).min(os.len());
     let junction = rms(&os[jr.clone()], &ds[jr]) / rms(&o, &dec).max(1e-9);
-    let step = |s: &[Frame]| (i32::from(s[le - 1][0]) - i32::from(s[ls][0])).abs();
     Ok(Encoded {
         lag: lag(&o, &dec),
         snr: snr(&o, &dec),
-        seam_snr: snr(&os, &ds),
-        local_snr: snr(&splice(&o, 8 * SEAM), &splice(&dec, 8 * SEAM)),
+        seam_snr: snr(&*os, &ds),
+        local_snr: snr(
+            &*splice(&o, le, ls, 8 * SEAM),
+            &splice(&*dec, le, ls, 8 * SEAM),
+        ),
         junction,
-        step: (step(&o), step(&dec)),
+        step: (step(&o, le, ls), step(&*dec, le, ls)),
         ogg,
         dec: if keep { dec } else { Vec::new() },
         dec_len,
         secs: clock.elapsed().as_secs_f64(),
-        pcm_sha256: pack::sha256(pcm),
+        pcm_sha256: pack::sha256(&pcm),
     })
 }
 
@@ -185,7 +227,10 @@ impl Stream<'_> {
         Ok(n > 0)
     }
 
-    fn need(&mut self, end: u64, ctl: &Ctl) -> Result<()> {
+    // Reads until `end` bytes were seen; the buffer is sized once for them plus `spare` bytes.
+    fn need(&mut self, end: u64, spare: usize, ctl: &Ctl) -> Result<()> {
+        let want = (end.max(self.seen) - self.base) as usize + CHUNK + spare;
+        self.buf.reserve_exact(want.saturating_sub(self.buf.len()));
         while self.seen < end {
             ctl.check()?;
             if !self.more()? {
@@ -199,6 +244,14 @@ impl Stream<'_> {
 
     fn slice(&self, start: u64, end: u64) -> &[u8] {
         &self.buf[(start - self.base) as usize..(end - self.base) as usize]
+    }
+
+    // Moves `[start, end)` out of the buffer without copying it; everything before `end` is dropped.
+    fn take(&mut self, start: u64, end: u64) -> Vec<u8> {
+        self.drop_before(start);
+        let rest = self.buf.split_off((end - self.base) as usize);
+        self.base = end;
+        std::mem::replace(&mut self.buf, rest)
     }
 
     fn drop_before(&mut self, at: u64) {
@@ -237,7 +290,8 @@ pub fn build(
     order.sort_by_key(|&i| tracks[i].offset);
     let done: Mutex<Vec<Option<Result<Encoded>>>> =
         Mutex::new((0..tracks.len()).map(|_| None).collect());
-    let (tx, rx) = mpsc::sync_channel::<(usize, Vec<u8>)>(jobs.max(1));
+    // One read-ahead track: every queued track is a whole track's PCM in memory.
+    let (tx, rx) = mpsc::sync_channel::<(usize, Vec<u8>)>(1);
     let rx = Mutex::new(rx);
     let mut s = Stream {
         r: dat,
@@ -256,7 +310,7 @@ pub fn build(
                     let t = &tracks[i];
                     let r = ctl
                         .check()
-                        .and_then(|()| encode_track(t, &pcm, encode, keep_decoded));
+                        .and_then(|()| encode_track(t, pcm, encode, keep_decoded));
                     let n = finished.fetch_add(t.length as u64 * 4, Ordering::Relaxed);
                     ctl.report(Stage::Bgm, n + t.length as u64 * 4, total);
                     done.lock().unwrap()[i] = Some(r);
@@ -267,8 +321,16 @@ pub fn build(
             for (k, &i) in order.iter().enumerate() {
                 let t = &tracks[i];
                 let end = t.offset + t.length as u64 * 4;
-                s.need(end, &ctl)?;
-                let pcm = s.slice(t.offset, end).to_vec();
+                let pad = 4 * PAD.min(t.length - t.loop_start);
+                s.need(end, pad, &ctl)?;
+                let next = order.get(k + 1).map(|&n| tracks[n].offset);
+                let pcm = if next.is_some_and(|n| n < end) {
+                    let mut v = Vec::with_capacity(t.length * 4 + pad);
+                    v.extend_from_slice(s.slice(t.offset, end));
+                    v
+                } else {
+                    s.take(t.offset, end)
+                };
                 if tx.send((i, pcm)).is_err() {
                     break;
                 }

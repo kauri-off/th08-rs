@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
 
 use crate::assets::Game;
 use crate::util;
@@ -24,34 +23,17 @@ const WIN_GNU: &str = "x86_64-pc-windows-gnu";
 const UPDATE_INFO: &str =
     "gh-releases-zsync|kauri-off|th08-rs|latest|th08-*-linux-appimage.AppImage.zsync";
 
-fn sha256(p: &Path) -> Option<String> {
-    let bytes = fs::read(p).ok()?;
-    Some(
-        Sha256::digest(bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
-}
-
-fn fetch((url, sha): (&str, &str), dest: &Path) -> Result<()> {
-    if sha256(dest).as_deref() == Some(sha) {
-        return Ok(());
-    }
-    let part = dest.with_extension("part");
-    fs::create_dir_all(dest.parent().context("tool path")?)?;
-    util::run(Command::new("curl").args(["-sSfL", url, "-o"]).arg(&part))?;
-    if sha256(&part).as_deref() != Some(sha) {
-        bail!("sha256 mismatch for {url}");
-    }
-    fs::rename(&part, dest)?;
-    Ok(())
-}
-
-// Release build of the th08 binary; `triple` None = host.
+// Dist build of the th08 binary; `triple` None = host.
 fn build_th08(triple: Option<&str>) -> Result<PathBuf> {
     let mut c = util::cargo();
-    c.args(["build", "--release", "--locked", "--bin", "th08"]);
+    c.args([
+        "build",
+        "--profile",
+        util::PROFILE,
+        "--locked",
+        "--bin",
+        "th08",
+    ]);
     let mut dir = util::cargo_target();
     if let Some(t) = triple {
         c.args(["--target", t]);
@@ -70,7 +52,7 @@ fn build_th08(triple: Option<&str>) -> Result<PathBuf> {
     } else {
         "th08"
     };
-    Ok(dir.join("release").join(exe))
+    Ok(dir.join(util::PROFILE).join(exe))
 }
 
 // th08.exe: native on a Windows host (+crt-static from .cargo/config.toml), else cross-built and stripped.
@@ -101,8 +83,8 @@ pub fn appimage(name: &str, out: &Path, game: Option<&Game>) -> Result<()> {
         tools.join("appimagetool-x86_64.AppImage"),
         tools.join("runtime-x86_64"),
     );
-    fetch(APPIMAGETOOL, &tool)?;
-    fetch(RUNTIME, &runtime)?;
+    util::fetch(APPIMAGETOOL, &tool)?;
+    util::fetch(RUNTIME, &runtime)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

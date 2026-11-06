@@ -309,7 +309,12 @@ pub mod bridge {
         ))
     }
 
-    fn start(game: PathBuf, files: Vec<(String, File)>, s: &mut State) -> bool {
+    // `low_ram` (the launcher's ActivityManager check): at most 2 tracks encode at once.
+    fn start(game: PathBuf, files: Vec<(String, File)>, low_ram: bool, s: &mut State) -> bool {
+        let mut o = Options::default();
+        if low_ram {
+            o.jobs = o.jobs.min(2);
+        }
         spawn(s, move |cancel, progress| {
             let r = fs::create_dir_all(&game)
                 .map_err(Error::from)
@@ -317,7 +322,7 @@ pub mod bridge {
                     run(
                         files,
                         &game,
-                        &Options::default(),
+                        &o,
                         Some(cancel.clone()),
                         Ctl::new(cancel, progress),
                     )
@@ -397,7 +402,9 @@ pub mod bridge {
                     .map(|a| a.iter().filter_map(file_of).collect())
                     .unwrap_or_default();
                 match game {
-                    Some(g) if !files.is_empty() => start(g, files, &mut s),
+                    Some(g) if !files.is_empty() => {
+                        start(g, files, r["low_ram"].as_bool() == Some(true), &mut s)
+                    }
                     _ => false,
                 }
             }

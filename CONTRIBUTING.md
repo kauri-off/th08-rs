@@ -93,6 +93,9 @@ An Android build for contributors needs no key: without `--keystore` and `TH08_K
 `cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>` builds a package into
 `target/dist/`; `cargo xtask dist --help` lists the options; what each target needs is in
 [Prerequisites per target](#prerequisites-per-target).
+Packages build with the `ship` cargo profile (release plus fat LTO and one codegen unit; panic and float settings
+unchanged), and the web bundle goes through a pinned `wasm-opt -O`. Android dev / debug APKs carry the channel in
+their name (`th08-<version>-android-apk-dev.apk`); only the release channel gets the plain name.
 With `TH08_RELEASE_TAG` set (the release workflow) and no game data, the AppImage embeds the update information
 `gh-releases-zsync|kauri-off|th08-rs|latest|th08-*-linux-appimage.AppImage.zsync` and gets a `.zsync` beside it,
 so AppImageUpdate and AppImage managers can update it from the latest release; local builds carry none.

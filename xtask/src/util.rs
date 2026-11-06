@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -155,6 +156,9 @@ fn expand_home(v: &str) -> String {
 // Version name stamped into the game builds (build.rs reads TH08_VERSION); set once by `dist`.
 pub static VERSION_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+// Cargo profile of every shipped package (Cargo.toml `[profile.dist]`).
+pub const PROFILE: &str = "ship";
+
 pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     c.current_dir(root());
@@ -181,6 +185,31 @@ pub fn run(c: &mut Command) -> Result<()> {
     if !st.success() {
         bail!("failed ({st}): {line}");
     }
+    Ok(())
+}
+
+pub fn sha256(p: &Path) -> Option<String> {
+    let bytes = fs::read(p).ok()?;
+    Some(
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
+// Pinned download `(url, sha256)` to `dest`, kept while its checksum still matches.
+pub fn fetch((url, sha): (&str, &str), dest: &Path) -> Result<()> {
+    if sha256(dest).as_deref() == Some(sha) {
+        return Ok(());
+    }
+    let part = dest.with_extension("part");
+    fs::create_dir_all(dest.parent().context("tool path")?)?;
+    run(Command::new("curl").args(["-sSfL", url, "-o"]).arg(&part))?;
+    if sha256(&part).as_deref() != Some(sha) {
+        bail!("sha256 mismatch for {url}");
+    }
+    fs::rename(&part, dest)?;
     Ok(())
 }
 

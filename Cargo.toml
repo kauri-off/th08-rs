@@ -91,14 +91,15 @@ pollster = "1.0.1"
 # Desktop only: no file/message dialogs, CLI or stderr logger on wasm (page) or Android (logcat).
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "color", "string"] }
-env_logger = "0.11.11"
+# No RUST_LOG `/regex` filter: keeps regex out of the binary.
+env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
 rfd = "0.17"
 # "Open folder" on the launcher's last-error notice.
 open = "5.3"
 sys-locale = "0.3.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.15.1"
+android_logger = { version = "0.15.1", default-features = false }
 # Safe-area insets from the NativeActivity's WindowInsets (platform/safearea.rs).
 jni = "0.22.4"
 ndk-context = "0.1.1"
@@ -120,6 +121,13 @@ web-sys = { version = "0.3.106", features = ["Window", "Document", "HtmlCanvasEl
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Shipped packages (cargo xtask dist): cross-crate inlining and one codegen unit. Panic strategy and float flags stay
+# those of release (no fast-math in any profile).
+[profile.ship]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
 
 # Android: android-activity with a motion-event hook (gamepad hat axes, which winit drops); see vendor/README.md.
 [patch.crates-io]
