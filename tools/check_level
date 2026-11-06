@@ -10,7 +10,7 @@ base=${1:-HEAD}
 untracked=$(git ls-files --others --exclude-standard)
 files=$( { git diff --name-only "$base"; echo "$untracked"; } | grep -v '^$' | sort -u)
 # th08-core modules that only draw (src/emit/), trace or test; they need the full check but not the replay batch.
-draw='^crates/th08-core/src/((anmdebug|trace|testdata)\.rs|emit/.*)$'
+draw='^crates/th08-core/src/((anmdebug|trace|testdata|worldclone)\.rs|emit/.*)$'
 # True when every changed line of tracked .rs file $1 is a // comment or blank.
 comment_only() {
   [[ $1 == *.rs ]] && ! grep -qxF "$1" <<<"$untracked" || return 1
