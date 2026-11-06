@@ -1,10 +1,9 @@
-//! Bullet manager 0xF54E90: templates, patterns, ex commands, lasers, cancels (08 §1–§7, 07 §9).
+//! Bullet manager 0xF54E90: templates, patterns, ex commands, lasers, cancels, draw step (08 §1–§7, 07 §9).
 
-use crate::anmmgr::{AnmManager, Tint};
+use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::fmath::{self, polar, sin_cos_f};
-use crate::game::{Ctx, Sys, View};
+use crate::game::{Ctx, Sys};
 use crate::item::ItemManager;
 use crate::player::{GrazeEnv, Player};
 use crate::task::{self, Chain, Ret, Task};
@@ -459,7 +458,7 @@ pub struct Laser {
 
 impl Laser {
     // Emitter drawn while the tail is near the origin or the laser does not move, unless hidden during startup.
-    fn emitter_drawn(&self) -> bool {
+    pub(crate) fn emitter_drawn(&self) -> bool {
         (self.tail < 16.0 || self.speed == 0.0) && (self.hide_emitter == 0 || self.state != 0)
     }
 
@@ -497,7 +496,7 @@ pub struct BulletManager {
     pub timer: Timer,
     pub frame: i32,
     // +0x6BA554 draw lists per size class.
-    lists: [Vec<BulletIdx>; 6],
+    pub(crate) lists: [Vec<BulletIdx>; 6],
     // +0x6BA56C allocation cursor.
     cursor: usize,
     pub env: GrazeEnv,
@@ -1728,18 +1727,8 @@ impl BulletManager {
         }
     }
 
-    // Laser draw emit: body z 0.06, emitter z 0.05.
-    fn lasers_emit(&self, anm: &AnmManager, rec: &mut Recorder, tint: Option<Tint>) {
-        for l in self.lasers.iter().filter(|l| l.alive) {
-            crate::emit::anm::emit_tinted(anm, rec, &l.body, 2, 0.06, tint);
-            if l.emitter_drawn() {
-                crate::emit::anm::emit_tinted(anm, rec, &l.emitter, 2, 0.05, tint);
-            }
-        }
-    }
-
     // Bullet_Draw: the VM drawn for each state, None = not drawn.
-    fn draw_vm(b: &Bullet) -> Option<usize> {
+    pub(crate) fn draw_vm(b: &Bullet) -> Option<usize> {
         match b.state {
             1 => Some(0),
             2..=4 => Some(b.effect),
@@ -1783,33 +1772,6 @@ impl BulletManager {
             anm.tint_off();
         }
     }
-
-    pub fn emit(
-        &self,
-        anm: &AnmManager,
-        rec: &mut Recorder,
-        fx: &crate::effect::Effects,
-        p: &Player,
-        flags: u32,
-    ) {
-        rec.set_viewport(PLAYFIELD);
-        // The frozen tint is off again when the emit runs: the emit applies it to VM copies.
-        let tint = p.freeze_bullets(flags).then_some(Tint(FROZEN_TINT));
-        self.items.emit(anm, rec, tint);
-        self.lasers_emit(anm, rec, tint);
-        for c in 0..6 {
-            for &i in self.lists[c].iter().rev() {
-                let b = &self.bullets[i.idx()];
-                if let Some(v) = Self::draw_vm(b) {
-                    crate::emit::anm::emit_tinted(anm, rec, &b.vms[v], 2, 0.05, tint);
-                }
-            }
-        }
-        match tint {
-            Some(t) => fx.emit_over_bullets_with(|vm| t.vm(vm), anm, rec),
-            None => fx.draw_over_bullets(anm, rec),
-        }
-    }
 }
 
 // BulletMgr_Draw / enemy draw prio 11 global tint while bullets are frozen (06 §10.2, 07 §10.6).
@@ -1848,14 +1810,6 @@ impl Task<Ctx> for BulletTask {
         let b = ctx.w.bullets.as_deref_mut().expect("bullet manager");
         b.draw_step(&mut ctx.w.anm, p, ctx.w.game.flags);
         Ret::Next
-    }
-}
-
-impl BulletTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        let p = ctx.w.player.as_deref().expect("player");
-        let b = ctx.w.bullets.as_deref().expect("bullet manager");
-        b.emit(&ctx.w.anm, rec, &ctx.w.effects, p, ctx.w.game.flags);
     }
 }
 

@@ -1,9 +1,8 @@
-//! Item manager 0x1653648: spawn, per-frame calc, collection, draw (08 §8).
+//! Item manager 0x1653648: spawn, per-frame calc, collection, draw step (08 §8).
 
-use crate::anmmgr::{AnmManager, Tint};
+use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::bullet::ANM_SLOT;
-use crate::drawlist::Recorder;
 use crate::effect::Effects;
 use crate::game::Sys;
 use crate::player::{Player, Popup, Stats};
@@ -61,7 +60,7 @@ pub struct ItemManager {
     // +0x17ADA4 search cursor.
     cursor: usize,
     // Live-item list in spawn order (the original's doubly linked list).
-    order: Vec<ItemIdx>,
+    pub(crate) order: Vec<ItemIdx>,
     // +0x17ADA8 live count, recomputed by calc.
     pub count: usize,
     // Time-orb gauge lock 0x18B89D4 = player +0xE2ADC, frames.
@@ -581,16 +580,6 @@ impl ItemManager {
                 it.vm.pos = [it.pos[0] + 32.0, y + 16.0, 0.0];
             }
             anm.prepare(&mut it.vm, 2);
-        }
-    }
-
-    // Item draw emit: Draw2DRot at z 0.15, in list order.
-    pub fn emit(&self, anm: &AnmManager, rec: &mut Recorder, tint: Option<Tint>) {
-        for &i in &self.order {
-            let it = &self.items[i.idx()];
-            if it.alive {
-                crate::emit::anm::emit_tinted(anm, rec, &it.vm, 2, 0.15, tint);
-            }
         }
     }
 }

@@ -5,6 +5,11 @@ use crate::drawlist::{FULLSCREEN, Recorder};
 use crate::game::View;
 
 pub mod anm;
+pub mod bullet;
+pub mod effect;
+pub mod enemy;
+pub mod player;
+pub mod stage;
 
 pub struct Emit;
 
@@ -17,14 +22,14 @@ impl Emit {
             Node::Ascii => crate::ascii::AsciiTask.emit(v, rec, tag),
             Node::AnmDebug => crate::anmdebug::AnmDebugTask.emit(v, rec, tag),
             Node::GameManager | Node::Replay => {}
-            Node::Player => crate::player::PlayerTask.emit(v, rec, tag),
-            Node::Bullets => crate::bullet::BulletTask.emit(v, rec, tag),
-            Node::Enemies => crate::enemy::EnemyTask.emit(v, rec, tag),
-            Node::Stage => crate::stage::StageTask.emit(v, rec, tag),
+            Node::Player => player::node(v, rec, tag),
+            Node::Bullets => bullet::node(v, rec, tag),
+            Node::Enemies => enemy::node(v, rec, tag),
+            Node::Stage => stage::node(v, rec, tag),
             Node::Hud => crate::hud::HudTask.emit(v, rec, tag),
             Node::Gui => crate::gui::GuiTask.emit(v, rec, tag),
-            Node::Effects => crate::effect::EffectTask.emit(v, rec, tag),
-            Node::Screen { slot } => crate::effect::ScreenTask { slot }.emit(v, rec, tag),
+            Node::Effects => effect::node(v, rec, tag),
+            Node::Screen { slot } => effect::screen_node(slot, v, rec, tag),
         }
     }
 

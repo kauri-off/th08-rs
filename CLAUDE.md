@@ -30,6 +30,8 @@ A reader must be able to check spec-bound code against the specs, without the co
 Automated runs of the windowed binaries (`th08`, launcher, `launchershot`) go through `tools/offscreen <cmd>`
 (`env -u WAYLAND_DISPLAY xvfb-run -a`): winit prefers Wayland, so plain `xvfb-run` still opens a real window there.
 Android checks run on an emulator (`adb -s emulator-NNNN`).
+Wine (Windows builds, the original exe) runs only through `tools/wine_headless <cmd>` with a throwaway
+`WINEPREFIX`: plain `wine` opens windows (prefix setup, Mono / Gecko prompts, the program) on the user's desktop.
 
 ## Worktrees and heavy runs
 

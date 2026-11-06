@@ -1,7 +1,6 @@
-//! Player bullets, shot functions, options and the player laser (09 §4–§5, 14 §3–§5).
-use crate::anmmgr::{AnmManager, Tint};
+//! Player bullets, shot functions, options and the player laser; their draw steps (09 §4–§5, 14 §3–§5).
+use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::drawlist::Recorder;
 use crate::fmath;
 use crate::game::Sys;
 use crate::gamemgr::F_13;
@@ -519,16 +518,6 @@ impl Player {
         {
             o.vm.pos = [o.pos[0] + 32.0, o.pos[1] + 16.0, 0.0];
             anm.prepare(&mut o.vm, 2);
-        }
-    }
-
-    pub fn emit_options(&self, anm: &AnmManager, rec: &mut Recorder) {
-        for o in self
-            .options
-            .iter()
-            .filter(|o| o.state != 0 && o.vm.script.is_some())
-        {
-            crate::emit::anm::emit_mode_z(anm, rec, &o.vm, 2, 0.49);
         }
     }
 
@@ -1086,44 +1075,8 @@ impl Player {
         }
     }
 
-    // Emit of `step_bullets`. `tint`: the global tint the flying bullets were drawn under when a later write of the
-    // same draw node (the bomb's tint off, 14 §1.3) turned it off (05 §12.1).
-    pub fn emit_bullets(
-        &self,
-        anm: &AnmManager,
-        rec: &mut Recorder,
-        state: u8,
-        tint: Option<Tint>,
-    ) {
-        let youkai_max = self.stats.youkai_max();
-        let emit = |rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32| {
-            crate::emit::anm::emit_tinted(anm, rec, vm, mode, z, tint);
-        };
-        for b in self
-            .bullets
-            .iter()
-            .filter(|b| b.state == state && b.vm.script.is_some())
-        {
-            if state == 2 {
-                emit(rec, &b.vm, b.vm.draw_mode, 0.2);
-                continue;
-            }
-            if b.draw != 1 {
-                emit(rec, &b.vm, 2, 0.4);
-                continue;
-            }
-            // The step left the trail's last pos / red in the VM: rebuild the main draw's state on a copy.
-            let mut vm = b.vm.clone();
-            vm.pos = [b.pos[0] + 32.0, b.pos[1] + 16.0, 0.0];
-            (vm.color[anmvm::R], vm.color[anmvm::G], vm.color[anmvm::B]) =
-                (b.main_rgb[0], b.main_rgb[1], b.main_rgb[2]);
-            emit(rec, &vm, 2, 0.4);
-            Self::trail_points(&mut vm, b, youkai_max, |vm, z| emit(rec, vm, 2, z));
-        }
-    }
-
     // Trail draw 0x450AD0: every second trail point, alpha fading from 3/4 of the VM alpha; `draw` per point.
-    fn trail_points(
+    pub(crate) fn trail_points(
         vm: &mut AnmVm,
         b: &PBullet,
         youkai_max: bool,

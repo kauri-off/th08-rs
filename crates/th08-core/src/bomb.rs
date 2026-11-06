@@ -1,8 +1,7 @@
-//! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint (09 §7, 14 §1–§2); areas (09 §8).
+//! Bombs: Player_UpdateBomb, Bomb_Start, the 16 bombs + dissolve spell, tint, draw step (09 §7, 14 §1–§2; areas 09 §8).
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer, table_index};
 use crate::builtin::Builtin;
-use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect::{self, FxEnv, WHITE};
 use crate::game::Sys;
 use crate::gamemgr::{F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
@@ -403,8 +402,8 @@ const YOUMU_FLASH: D3dColor = D3dColor(0xEFFF_FFFF);
 // Yuyuko LS butterfly-ring flash.
 const YUYUKO_LS_FLASH: D3dColor = D3dColor(0xE0F0_F0F0);
 // RGB only (alpha byte 0): spark-ring colour interpolation white → red, playfield rectangles.
-const RGB_WHITE: D3dColor = D3dColor(0x00FF_FFFF);
-const RGB_RED: D3dColor = D3dColor(0x00FF_0000);
+pub(crate) const RGB_WHITE: D3dColor = D3dColor(0x00FF_FFFF);
+pub(crate) const RGB_RED: D3dColor = D3dColor(0x00FF_0000);
 // Background tints C; alpha 0x80.
 const TINT_ALPHA: u32 = 0x8000_0000;
 const TINT: D3dColor = D3dColor(0x8040_4040);
@@ -1124,15 +1123,6 @@ impl Player {
         }
     }
 
-    fn emit_objs(&self, anm: &AnmManager, rec: &mut Recorder, n: usize, mode: i32) {
-        for o in self.bomb.objs[..n]
-            .iter()
-            .filter(|o| o.state != ObjState::Free)
-        {
-            crate::emit::anm::emit_mode_z(anm, rec, &o.vm, mode, 0.0);
-        }
-    }
-
     // 14 §2.3 / §2.4 Alice 0x40D430 / 0x40D970: the doll is option 0.
     fn bomb_alice(&mut self, anm: &mut AnmManager, b: Bf, sys: &mut Sys) {
         let ls = b.ls;
@@ -1745,18 +1735,6 @@ impl Player {
         anm.bomb_drew = true;
     }
 
-    // Alpha-blended playfield rectangle (Alice LS, Youmu draw fns).
-    fn playfield_rect(rec: &mut Recorder, rgb: D3dColor, a: i32) {
-        let r = PLAYFIELD;
-        rec.rect(
-            r.x,
-            r.y,
-            r.w,
-            r.h,
-            [rgb.r(), rgb.g(), rgb.b(), lo8(a.clamp(0, 255))],
-        );
-    }
-
     // Bomb draw functions (table 0x4C7AD0 fns 5–9), called from the player draw (prio 9). Step: tint requests
     // and VM writes; every tint call precedes the draws of its branch, so the emit sees the same tint.
     pub fn step_bomb(&mut self, anm: &mut AnmManager) {
@@ -1841,43 +1819,6 @@ impl Player {
                     Some(crate::fmath::atan2_f(o.disp[1], o.disp[0]))
                 });
             }
-        }
-    }
-
-    // Emit of `step_bomb`. Quirk kept: Sakuya LS draws only knives 0–95 (96–127 are invisible but damage).
-    pub fn emit_bomb(&self, anm: &AnmManager, rec: &mut Recorder) {
-        if !self.bombing || self.bomb.index == 4 {
-            return;
-        }
-        let t = self.bomb.timer.cur;
-        let ls = self.bomb.index & 2 != 0;
-        match self.bomb.ch {
-            0 => self.emit_objs(anm, rec, if ls { OBJS } else { 16 }, 0),
-            1 if ls => {
-                for (vm, z) in self.bomb.vms[..2].iter().zip([0.01, 0.0]) {
-                    crate::emit::anm::emit_mode_z(anm, rec, vm, 2, z);
-                }
-            }
-            2 => self
-                .bomb
-                .vms
-                .iter()
-                .for_each(|vm| crate::emit::anm::emit_mode_z(anm, rec, vm, 2, 0.0)),
-            3 if ls && (90..=120).contains(&t) => {
-                Self::playfield_rect(rec, RGB_WHITE, (t - 90) * 255 / 30);
-            }
-            3 if ls && (121..=220).contains(&t) => Self::playfield_rect(rec, RGB_WHITE, 0x70),
-            4 => self.emit_objs(anm, rec, 96, 2),
-            6 if (70..160).contains(&t) => {
-                let a = if t <= 100 {
-                    255
-                } else {
-                    255 - (t - 100) * 255 / 60
-                };
-                Self::playfield_rect(rec, if ls { RGB_RED } else { RGB_WHITE }, a);
-            }
-            7.. => self.emit_objs(anm, rec, if ls { OBJS } else { 96 }, 2),
-            _ => {}
         }
     }
 }

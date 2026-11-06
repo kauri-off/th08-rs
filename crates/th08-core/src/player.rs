@@ -1,9 +1,8 @@
-//! Player 0x17D5EF8 and the stats block (09 §1–§3, §6, §9; 11 §5); shots in pshot.rs, bombs in bomb.rs.
+//! Player 0x17D5EF8, stats block, draw step (09 §1–§3, §6, §9; 11 §5); shots in pshot.rs, bombs in bomb.rs.
 use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
-use crate::drawlist::{PLAYFIELD, Recorder};
 use crate::effect::Effects;
-use crate::game::{Ctx, Sys, View};
+use crate::game::{Ctx, Sys};
 use crate::gamemgr::{self, F_LAST_CAPTURED, F_LAST_SPELL, F_SPELL_PRACTICE};
 use crate::input;
 use crate::item::ItemManager;
@@ -1445,12 +1444,6 @@ impl Player {
         self.vm.pos = [self.pos[0] + 32.0, self.pos[1] + 16.0, 0.0];
         anm.prepare(&mut self.vm, 0);
     }
-
-    fn emit_sprite(&self, anm: &AnmManager, rec: &mut Recorder, game_over: bool) {
-        if self.vm.script.is_some() && !game_over {
-            crate::emit::anm::emit_mode_z(anm, rec, &self.vm, 0, 0.1);
-        }
-    }
 }
 
 // The player's chain nodes; they reach the player through its owner (`ctx.w.player`).
@@ -1520,22 +1513,6 @@ impl Task<Ctx> for PlayerTask {
             p.step_bullets(anm, 2);
         }
         Ret::Next
-    }
-}
-
-impl PlayerTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        let anm = &ctx.w.anm;
-        let p = ctx.w.player.as_deref().expect("player");
-        rec.set_viewport(PLAYFIELD);
-        if tag == 0 {
-            p.emit_bullets(anm, rec, 1, p.bullet_tint);
-            p.emit_bomb(anm, rec);
-            p.emit_sprite(anm, rec, ctx.w.game.game_over != 0);
-            p.emit_options(anm, rec);
-        } else {
-            p.emit_bullets(anm, rec, 2, None);
-        }
     }
 }
 

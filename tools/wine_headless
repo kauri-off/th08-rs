@@ -1,0 +1,10 @@
+#!/bin/bash
+# usage: tools/wine_headless CMD… — wine (or wineboot / wineserver …) with no window on the user's display: xvfb, Wayland
+# hidden, no Mono / Gecko install prompts; stops the prefix's wineserver afterwards so no process outlives the run.
+# Set WINEPREFIX to a throwaway dir; never a user prefix.
+export WINEDEBUG=${WINEDEBUG:--all} WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
+[[ $1 == wine* ]] || set -- wine "$@"
+"$(dirname "$0")/offscreen" "$@"
+rc=$?
+env -u WAYLAND_DISPLAY -u DISPLAY wineserver -k 2>/dev/null
+exit $rc
