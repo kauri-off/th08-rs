@@ -1879,6 +1879,11 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let mut s = base;
         s.replay = Some(path.to_string_lossy().into_owned());
+        // Own save dir per test: parallel tests would otherwise overwrite each other's score.dat.
+        let saves =
+            std::env::temp_dir().join(format!("th08_transport_{}_{tag}", std::process::id()));
+        std::fs::create_dir_all(&saves).unwrap();
+        s.save_dir = Some(saves);
         let ctx = load(&s);
         Some(Running {
             ctx,
