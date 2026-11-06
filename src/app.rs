@@ -1970,7 +1970,13 @@ mod tests {
         assert_eq!(format!("{:?}", r.ctx.w.rng), format!("{rng:?}"));
         assert!(!saved.is_empty());
         // Play time comes from the wall clock, so a second save may differ; the written file must be these bytes.
-        assert_eq!(r.ctx.host.read("score.dat").as_deref(), Some(&saved[..]));
+        let file = r.ctx.host.read("score.dat");
+        assert!(
+            file.as_deref() == Some(&saved[..]),
+            "score.dat {:?} bytes, saved {} bytes",
+            file.as_ref().map(Vec::len),
+            saved.len()
+        );
         r.settings.shot = Some(1);
         assert!(close_save(&mut r).is_none());
     }
