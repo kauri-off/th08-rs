@@ -1876,7 +1876,8 @@ mod tests {
         assert_eq!(state(&r), before);
         assert_eq!(format!("{:?}", r.ctx.w.rng), format!("{rng:?}"));
         assert!(!saved.is_empty());
-        assert_eq!(saved.len(), r.ctx.save_from_clone().len());
+        // Play time comes from the wall clock, so a second save may differ; the written file must be these bytes.
+        assert_eq!(r.ctx.host.read("score.dat").as_deref(), Some(&saved[..]));
         r.settings.shot = Some(1);
         assert!(close_save(&mut r).is_none());
     }
