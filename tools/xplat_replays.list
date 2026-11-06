@@ -1,0 +1,25 @@
+# tools/xplat_replays inputs: session DIR (repo-relative), demo N, ext SET/NAME (under $TH08_EXT_REPLAYS).
+session specs/data/sessions/selftest1
+session specs/data/sessions/golden
+session specs/data/sessions/fullrun_noclip
+session specs/data/sessions/gameover_save
+session specs/data/sessions/musicroom_practice
+session specs/data/sessions/options_cfg
+demo 0
+demo 1
+demo 2
+demo 3
+ext ref_b2/gensokyou_th8_udSi240       # Youmu Extra All Clear
+ext ref500/silentselene_51253          # Marisa Lunatic Final A
+ext ref_b2/silentselene_51736          # Marisa & Alice Hard Final B
+ext ref_b2/silentselene_54584          # Remilia Easy Final B
+ext ref_b2/gensokyou_th8_udAn27        # Reimu & Yukari Normal
+ext ref_b2/silentselene_80717          # Sakuya & Remilia Lunatic Final A
+ext ref500/silentselene_52233          # Youmu & Yuyuko Easy Final B
+ext ref500/gensokyou_th8_udRo82        # Reimu Hard
+ext ref500/silentselene_54956          # Yukari Easy Final A
+ext ref500/gensokyou_th8_udSl10        # Yuyuko Easy All Clear
+ext ref_b2/gensokyou_th8_udMn38        # Alice Normal
+ext ref500/silentselene_54375          # Sakuya Easy Final A
+ext ref_b2/gensokyou_th8_udAy01        # Reimu & Yukari All Clear
+ext ref500/silentselene_51294          # Youmu Easy Final B

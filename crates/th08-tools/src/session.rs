@@ -1,167 +1,10 @@
 //! Session replay: recorded input, boot seed and loader timing of the original, the port's trace and its comparison.
 
-use th08_core::trace::{Row, Sched, sample};
-
-// `polls.txt`: `poll present scene src mask` per Input_Poll call; the mask by poll index.
-pub fn parse_polls(text: &str) -> Option<Vec<u16>> {
-    let mut v = Vec::new();
-    for l in text
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-    {
-        let t: Vec<&str> = l.split_whitespace().collect();
-        let (poll, mask) = (t.first()?.parse::<usize>().ok()?, t.get(4)?);
-        if poll != v.len() {
-            return None;
-        }
-        v.push(u16::from_str_radix(mask, 16).ok()?);
-    }
-    Some(v)
-}
-
-pub const COLUMNS: [&str; 36] = [
-    "frame",
-    "demo_frame",
-    "input",
-    "rng",
-    "rng_ctr",
-    "px",
-    "py",
-    "pstate",
-    "score",
-    "graze",
-    "points",
-    "lives",
-    "bombs",
-    "power",
-    "gauge",
-    "time",
-    "bullets",
-    "enemies",
-    "rank",
-    "spell",
-    "boss",
-    "flags",
-    "ff",
-    "present",
-    "calc",
-    "poll",
-    "scene",
-    "scene_frame",
-    "menu",
-    "cursor",
-    "result",
-    "pause",
-    "rawinput",
-    "stage",
-    "loading",
-    "demo",
-];
-
-// Hex columns and their print width.
-const HEX: [(usize, usize); 10] = [
-    (2, 4),
-    (3, 4),
-    (5, 8),
-    (6, 8),
-    (11, 8),
-    (12, 8),
-    (13, 8),
-    (20, 0),
-    (21, 0),
-    (32, 4),
-];
-
-pub fn parse_trace(text: &str) -> Vec<Row> {
-    text.lines()
-        .filter(|l| !l.starts_with('#'))
-        .filter_map(|l| {
-            let t: Vec<&str> = l.split_whitespace().collect();
-            if t.len() < 36 {
-                return None;
-            }
-            let mut row = [0i64; 36];
-            for (i, v) in t[..36].iter().enumerate() {
-                row[i] = if HEX.iter().any(|h| h.0 == i) {
-                    i64::from_str_radix(v, 16).ok()?
-                } else {
-                    v.parse().ok()?
-                };
-            }
-            Some(row)
-        })
-        .collect()
-}
-
-// Low 32 bits of a trace value (hex columns, schedule numbers): exactly `as u32`.
-#[expect(
-    clippy::cast_sign_loss,
-    reason = "two's-complement low word, `as u32` kept"
-)]
-const fn lo32(v: i64) -> u32 {
-    v as u32
-}
-
-pub fn format_row(r: &Row) -> String {
-    let mut s = String::new();
-    for (i, v) in r.iter().enumerate() {
-        if i > 0 {
-            s.push(' ');
-        }
-        match HEX.iter().find(|h| h.0 == i) {
-            Some(&(_, w)) => s.push_str(&format!("{:0w$x}", lo32(*v))),
-            None => s.push_str(&v.to_string()),
-        }
-    }
-    s
-}
-
-pub fn trace_header() -> String {
-    format!("# {}\n", COLUMNS.join(" "))
-}
-
-// `events.txt`: (boot seed, schedule).
-pub fn parse_events(text: &str) -> anyhow::Result<(u32, Sched)> {
-    let mut seed = None;
-    let mut s = Sched {
-        poll: -1,
-        ..Default::default()
-    };
-    let (mut gauge, mut wait) = (None, None);
-    let mut first_gauge = true;
-    for l in text.lines() {
-        let t: Vec<&str> = l.split_whitespace().collect();
-        let num = |i: usize| t.get(i).and_then(|v| v.parse::<i64>().ok());
-        match t.as_slice() {
-            ["seed", h, ..] => seed = u32::from_str_radix(h, 16).ok(),
-            ["release", "boot", "calc", ..] => s.boot_calc = lo32(num(3).unwrap_or(12)) + 2,
-            ["release", "menu", "poll", ..] => s.menu.extend(num(3)),
-            ["loader", "gauge", "poll", ..] => {
-                gauge = num(3);
-                let calc = t
-                    .iter()
-                    .position(|w| *w == "asciicalc")
-                    .and_then(|i| num(i + 1));
-                if std::mem::take(&mut first_gauge)
-                    && let (Some(b), Some(c)) = (gauge, calc)
-                    && c > b
-                {
-                    s.ascii_offset = lo32(c - b);
-                }
-            }
-            ["loader", "lwait", "poll", ..] => wait = num(3),
-            ["release", "stage", "poll", ..] => {
-                let p = num(3).unwrap_or(0);
-                s.stages
-                    .push_back([gauge.take().unwrap_or(p), wait.take().unwrap_or(p), p]);
-            }
-            _ => {}
-        }
-    }
-    let seed = seed.ok_or_else(|| anyhow::anyhow!("events.txt: no seed line"))?;
-    anyhow::ensure!(s.boot_calc > 0, "events.txt: no `release boot calc` line");
-    Ok((seed, s))
-}
+use th08_core::trace::Row;
+pub use th08_replay::session::{
+    COLUMNS, Recording, format_row, menu_rows, parse_events, parse_local_time, parse_polls,
+    parse_trace, trace_header,
+};
 
 // Columns not compared.
 pub const SKIP: [usize; 0] = [];
@@ -312,66 +155,26 @@ impl std::fmt::Display for Comparison {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
 
-// "YYYY-MM-DDTHH:MM:SS[+zone]" (meta.txt `recorded:`): the recorder's local wall-clock fields.
-fn parse_local_time(s: &str) -> Option<th08_core::host::LocalTime> {
-    let n = |r: std::ops::Range<usize>| s.get(r)?.parse().ok();
-    Some(th08_core::host::LocalTime {
-        year: u32::cast_signed(n(0..4)?),
-        month: n(5..7)?,
-        day: n(8..10)?,
-        hour: n(11..13)?,
-        minute: n(14..16)?,
-        second: n(17..19)?,
-    })
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
     use std::path::{Path, PathBuf};
 
     pub struct Session {
-        pub dir: PathBuf,
-        pub input: Vec<u16>,
-        pub seed: u32,
-        pub sched: Sched,
-        pub noclip: bool,
-        // meta.txt `recorded:` local date and time, the session's `localtime` answer (replay / score dates).
-        pub recorded_at: Option<th08_core::host::LocalTime>,
-        // meta.txt `fingerprint:` logic-content fingerprint; absent = vanilla (empty).
-        pub fingerprint: String,
+        pub rec: Recording,
+    }
+
+    impl std::ops::Deref for Session {
+        type Target = Recording;
+        fn deref(&self) -> &Recording {
+            &self.rec
+        }
     }
 
     impl Session {
         pub fn load(dir: &Path) -> anyhow::Result<Self> {
-            let events = std::fs::read_to_string(dir.join("events.txt"))?;
-            let (seed, sched) = parse_events(&events)?;
-            // Raw input per poll (polls.txt, not the per-present input.txt, which loses restart polls).
-            let input = if let Ok(t) = std::fs::read_to_string(dir.join("polls.txt")) {
-                parse_polls(&t).ok_or_else(|| anyhow::anyhow!("bad polls.txt"))?
-            } else {
-                let t = std::fs::read_to_string(dir.join("input.txt"))?;
-                th08_core::input::parse_script(&t)
-                    .ok_or_else(|| anyhow::anyhow!("bad input.txt"))?
-            };
-            let meta = std::fs::read_to_string(dir.join("meta.txt")).unwrap_or_default();
-            let noclip = meta.lines().any(|l| l.trim() == "noclip: 1");
-            let recorded_at = meta
-                .lines()
-                .find_map(|l| l.strip_prefix("recorded:"))
-                .and_then(|v| parse_local_time(v.trim()));
-            let fingerprint = meta
-                .lines()
-                .find_map(|l| l.strip_prefix("fingerprint:"))
-                .map_or_else(String::new, |v| v.trim().to_string());
             Ok(Self {
-                dir: dir.to_path_buf(),
-                input,
-                seed,
-                sched,
-                noclip,
-                recorded_at,
-                fingerprint,
+                rec: Recording::load(dir)?,
             })
         }
 
@@ -384,13 +187,7 @@ mod native {
 
         // Start state: private save dir with start/score.dat, th08.cfg, replays; boot seed; loader schedule.
         pub fn start(&self, ctx: &mut th08_core::game::Ctx) -> anyhow::Result<()> {
-            // A session replays only on the logic content it was recorded with.
-            let fp = ctx.archive.fingerprint().to_string();
-            anyhow::ensure!(
-                fp == self.fingerprint,
-                "session fingerprint '{}' ≠ content fingerprint '{fp}'",
-                self.fingerprint
-            );
+            let files = self.rec.start(ctx)?;
             let save = th08::settings::temp_dir().join(format!(
                 "th08_session_{}_{:?}",
                 std::process::id(),
@@ -398,37 +195,14 @@ mod native {
             ));
             let _ = std::fs::remove_dir_all(&save);
             std::fs::create_dir_all(save.join("replay"))?;
-            let start = self.dir.join("start");
-            let score = std::fs::read(start.join("score.dat")).ok();
-            let now = ctx.host.ticks_ms();
-            ctx.w.game.load_score(score.as_deref(), now);
-            if let Some(b) = &score {
-                std::fs::write(save.join("score.dat"), b)?;
-            }
-            if let Some(c) = std::fs::read(start.join("th08.cfg"))
-                .ok()
-                .and_then(|b| th08_core::config::Config::from_bytes(&b))
-            {
-                ctx.w.game.cfg = c;
-            }
-            for e in std::fs::read_dir(start.join("replay"))
-                .into_iter()
-                .flatten()
-                .flatten()
-            {
-                std::fs::copy(e.path(), save.join("replay").join(e.file_name()))?;
+            for (name, b) in files {
+                std::fs::write(save.join(name), b)?;
             }
             // The session's host: its save dir and the recorded Input_Poll returns (polls.txt), one per poll.
             let host = th08::platform::tool_host(ctx);
             host.storage.set_save_dir(Some(save));
             host.polls = Some(self.input.as_slice().into());
             host.fixed_time = self.recorded_at;
-            // The private save dir takes the session's saves (replays the menus list again).
-            ctx.w.game.persist = true;
-            ctx.w.rng = th08_core::rng::Rng::seeded(self.seed as u16);
-            ctx.w.overlays.set_frame_counter(self.sched.ascii_offset);
-            ctx.w.game.sched = Some(self.sched.clone());
-            ctx.w.game.noclip = self.noclip;
             Ok(())
         }
 
@@ -438,7 +212,7 @@ mod native {
             &self,
             ctx: &mut th08_core::game::Ctx,
             to: usize,
-            mut row: impl FnMut(&Row, &th08_core::game::Ctx) -> bool,
+            row: impl FnMut(&Row, &th08_core::game::Ctx) -> bool,
             mut draw: Option<&mut dyn FnMut(String)>,
         ) {
             if draw.is_some() {
@@ -446,22 +220,7 @@ mod native {
             }
             // Debug `TH08_SESSION_RNG=<row>`: RNG call sites of that menu frame.
             let rng_row = th08::settings::get().session_rng;
-            let boot = i64::from(self.sched.boot_calc);
-            let (mut scene, mut scene_frame) = (i32::MIN, 0i64);
-            let to = crate::int(to.min(self.input.len()));
-            // Poll index of the next frame's first pass (restarted passes take one each).
-            let mut next_poll = 0i64;
-            // Presents made inside a calc (Device_ClearPresentTwice) so far; `n` counts Frame_Runs.
-            let mut extra = 0i64;
-            for n in 1i64.. {
-                let poll = if n < boot { n - boot } else { next_poll };
-                if poll >= to {
-                    break;
-                }
-                if let Some(s) = &mut ctx.w.game.sched {
-                    s.poll = poll;
-                    s.pass_rows.clear();
-                }
+            let frame = |ctx: &mut th08_core::game::Ctx, poll: i64| {
                 // This frame's first poll (Supervisor_Calc or Info_Show) reads recorded poll `poll`; each restarted
                 // pass polls the next one.
                 th08::platform::tool_host(ctx).cursor = poll;
@@ -469,10 +228,8 @@ mod native {
                 ctx.w.rng.trace = tr.then(Vec::new);
                 let flow = match &mut draw {
                     Some(out) => {
-                        let Some((flow, frames)) = crate::drawlog::step(ctx) else {
-                            break;
-                        };
-                        frames.into_iter().for_each(out);
+                        let (flow, frames) = crate::drawlog::step(ctx)?;
+                        frames.into_iter().for_each(&mut **out);
                         flow
                     }
                     None => ctx.run_frame(),
@@ -480,55 +237,9 @@ mod native {
                 if let Some(calls) = ctx.w.rng.trace.take() {
                     print_rng_calls(poll + 1, calls);
                 }
-                let (last, rows) = match &mut ctx.w.game.sched {
-                    Some(s) => (s.poll, std::mem::take(&mut s.pass_rows)),
-                    None => (poll, Vec::new()),
-                };
-                if n >= boot {
-                    next_poll = last + 1;
-                }
-                // Rows written inside this calc: pass rows ff = 1…k before the final row ff = k,
-                // ff = −1 rows for in-calc presents; `calc` (Frame_Runs) increments only on the final row; present and
-                // scene_frame count presents, the in-calc ones included.
-                let base = n + extra;
-                let sf_base = scene_frame + 1;
-                let k_in = crate::int(rows.iter().filter(|r| r[22] < 0).count());
-                let present = base + k_in;
-                let (mut passes, mut ins, mut stop) = (0, 0, false);
-                for mut r in rows {
-                    if r[22] < 0 {
-                        ins += 1;
-                        r[23] = base + ins;
-                        r[27] = sf_base + ins;
-                    } else {
-                        passes += 1;
-                        r[22] = passes;
-                        r[23] = present;
-                        r[27] = sf_base + k_in;
-                    }
-                    r[24] = n - 3;
-                    if !row(&r, ctx) {
-                        stop = true;
-                        break;
-                    }
-                }
-                extra += k_in;
-                if ctx.w.game.scene as i32 == scene {
-                    scene_frame = sf_base + k_in;
-                } else {
-                    (scene, scene_frame) = (ctx.w.game.scene as i32, 1);
-                }
-                let mut r = sample(ctx, present, last.max(-1), scene_frame);
-                r[22] = passes;
-                r[24] = n - 2;
-                // The exit save follows the quitting frame's sample.
-                if flow == th08_core::task::Flow::Quit {
-                    ctx.exit_save();
-                }
-                if stop || !row(&r, ctx) || flow != th08_core::task::Flow::Continue {
-                    break;
-                }
-            }
+                Some(flow)
+            };
+            self.rec.run(ctx, to, frame, row);
         }
     }
 
@@ -560,12 +271,6 @@ mod native {
         for (g, n) in groups {
             println!("  {n:4} x {g}");
         }
-    }
-
-    // Rows from the first main-menu row (scene 1) on.
-    pub fn menu_rows(mut rows: Vec<Row>) -> Vec<Row> {
-        let k = rows.iter().position(|r| r[26] == 1).unwrap_or(rows.len());
-        rows.split_off(k)
     }
 
     pub fn data_dir(name: &str) -> PathBuf {

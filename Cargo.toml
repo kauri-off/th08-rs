@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "xtask"]
+members = [".", "crates/th08-formats", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "crates/th08-replay", "xtask"]
 resolver = "3"
 exclude = ["vendor"]
 

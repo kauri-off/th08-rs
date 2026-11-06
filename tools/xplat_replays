@@ -1,0 +1,120 @@
+#!/bin/bash
+# usage: tools/xplat_replays [OUTDIR] — plays every entry of tools/xplat_replays.list with th08-replay on x86_64-linux,
+# aarch64-linux-android (qemu-aarch64), wasm32-wasip1 (wasmtime) and x86_64-pc-windows-gnu (tools/wine_headless), and
+# compares each target's per-row hash stream with x86_64. Prints a table; exit 1 on any mismatch or failed run.
+# Env: J (parallel runs, default 8), TH08_DIR / TH08_GAME_SRC, TH08_EXT_REPLAYS, XPLAT_TARGETS (default "arm wasm win"),
+# XPLAT_LIMIT=N (first N entries only), WINE_HEADLESS (default tools/wine_headless).
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+[[ -f $ROOT/re/tools/localenv.sh ]] && source "$ROOT/re/tools/localenv.sh"
+OUT=$(realpath -m "${1:-$ROOT/target/xplat/run}")
+GAME=${TH08_DIR:-${TH08_GAME_SRC:-}}
+[[ -n $GAME ]] || { echo "no game dir: set TH08_DIR or TH08_GAME_SRC"; exit 2; }
+GAME=$(realpath "$GAME")
+J=${J:-8} TARGETS=${XPLAT_TARGETS:-arm wasm win}
+for v in $(compgen -e); do [[ $v == TH08_* && $v != TH08_EXT_REPLAYS ]] && unset "$v"; done
+X=$ROOT/target/xplat
+export CARGO_TARGET_DIR=$X
+
+SDK=${ANDROID_SDK:-${ANDROID_HOME:-$HOME/.local/share/android-sdk/Sdk}}
+NDK=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/*/ 2> /dev/null | sort -V | tail -1)}; NDK=${NDK%/}
+NBIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+cd "$ROOT"
+build() { cargo build -q --locked --release -p th08-replay "$@" || { echo "build failed: $*"; exit 2; }; }
+build
+for t in $TARGETS; do
+  case $t in
+    arm)
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NBIN/aarch64-linux-android26-clang \
+        CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C target-feature=+crt-static" \
+        build --target aarch64-linux-android 2> >(grep -v 'no-pie\|linker_messages\|^ *|\|^ *=\|^$' >&2) ;;
+    wasm)
+      rustup target list --installed | grep -qx wasm32-wasip1 || rustup target add wasm32-wasip1
+      build --target wasm32-wasip1 ;;
+    win) build --target x86_64-pc-windows-gnu ;;
+    *) echo "unknown target $t"; exit 2 ;;
+  esac
+done
+
+rm -rf "$OUT"; mkdir -p "$OUT"
+grep -v '^#' "$ROOT/tools/xplat_replays.list" | sed 's/ *#.*//' | awk 'NF' | head -n "${XPLAT_LIMIT:-1000000}" > "$OUT/list.txt"
+winpath() { local p; p=$(realpath -m "$1"); echo "Z:${p//\//\\}"; }
+WINE_HEADLESS=${WINE_HEADLESS:-$ROOT/tools/wine_headless}
+[[ " $TARGETS " != *" win "* || -x $WINE_HEADLESS ]] || { echo "no $WINE_HEADLESS"; exit 2; }
+export X GAME OUT ROOT WINE_HEADLESS
+export -f winpath
+
+# One run: KIND ARG TARGET → $OUT/<id>.<target>.hash, stderr in .err.
+run_one() {
+  local kind=$1 arg=$2 t=$3 id src=() dir
+  id=$(echo "$kind-$arg" | tr '/' '_')
+  case $kind in
+    session) dir=$ROOT/$arg ;;
+    ext) dir=$TH08_EXT_REPLAYS/$arg ;;
+  esac
+  local o=$OUT/$id.$t.hash e=$OUT/$id.$t.err
+  case $t in
+    x86)
+      [[ $kind == demo ]] && src=(--demo "$arg") || src=("$dir")
+      nice -n 10 timeout 7200 "$X/release/th08-replay" --game "$GAME" "${src[@]}" --out "$o" 2> "$e" ;;
+    arm)
+      [[ $kind == demo ]] && src=(--demo "$arg") || src=("$dir")
+      nice -n 10 timeout 7200 qemu-aarch64 "$X/aarch64-linux-android/release/th08-replay" --game "$GAME" "${src[@]}" \
+        --out "$o" 2> "$e" ;;
+    wasm)
+      local mnt=()
+      if [[ $kind == demo ]]; then src=(--demo "$arg"); else src=(/rec); mnt=(--dir "$dir::/rec"); fi
+      nice -n 10 timeout 7200 wasmtime run --dir "$GAME::/game" "${mnt[@]}" --dir "$OUT::/out" \
+        "$X/wasm32-wasip1/release/th08-replay.wasm" --game /game "${src[@]}" --out "/out/$id.$t.hash" 2> "$e" ;;
+    win)
+      [[ $kind == demo ]] && src=(--demo "$arg") || src=("$(winpath "$dir")")
+      WINEPREFIX=$X/wine nice -n 10 timeout 7200 "$WINE_HEADLESS" "$X/x86_64-pc-windows-gnu/release/th08-replay.exe" \
+        --game "$(winpath "$GAME")" "${src[@]}" --out "$(winpath "$o")" > "$e" 2>&1 ;;
+  esac
+  echo "$?" > "$OUT/$id.$t.rc"
+}
+export -f run_one
+
+echo "$(wc -l < "$OUT/list.txt") replays × x86 $TARGETS, J=$J, game $GAME"
+t0=$(date +%s)
+# wine_headless stops the prefix's wineserver after each run, so Windows runs go one at a time.
+if [[ " $TARGETS " == *" win "* ]]; then
+  mkdir -p "$X/wine"
+  (while read -r k a; do run_one "$k" "$a" win; done < "$OUT/list.txt") &
+  winpid=$!
+fi
+for t in x86 $TARGETS; do
+  [[ $t == win ]] && continue
+  while read -r k a; do echo "$k $a $t"; done < "$OUT/list.txt"
+done | xargs -P "$J" -L1 bash -c 'run_one "$@"' _
+[[ -n ${winpid:-} ]] && wait "$winpid"
+
+# Table: per target "=" (identical stream), "row N" (first differing row), "rc N" (run failed).
+rc=0
+{
+  printf '%-46s %8s %-16s' replay rows "x86 digest"
+  for t in $TARGETS; do printf ' %-10s' "$t"; done; echo
+  while read -r k a; do
+    id=$(echo "$k-$a" | tr '/' '_') ref=$OUT/$id.x86.hash
+    last=$(tail -1 "$ref" 2> /dev/null)
+    if [[ $(cat "$OUT/$id.x86.rc") != 0 || $last != digest* ]]; then
+      printf '%-46s %8s %-16s' "$id" - "rc $(cat "$OUT/$id.x86.rc")"; rc=1
+    else
+      printf '%-46s %8s %-16s' "$id" "${last##* }" "$(cut -d' ' -f2 <<< "$last")"
+    fi
+    for t in $TARGETS; do
+      f=$OUT/$id.$t.hash r=$(cat "$OUT/$id.$t.rc" 2> /dev/null || echo -)
+      if [[ $r != 0 ]]; then s="rc $r"; rc=1
+      elif cmp -s "$ref" "$f"; then s="="
+      else
+        n=$(cmp "$ref" "$f" 2> /dev/null | grep -o 'line [0-9]*' | cut -d' ' -f2)
+        s="row $(( ${n:-1} - 1 ))"; rc=1
+      fi
+      printf ' %-10s' "$s"
+    done
+    echo
+  done < "$OUT/list.txt"
+} > "$OUT/table.txt"
+cat "$OUT/table.txt"
+echo "wall $(( $(date +%s) - t0 )) s; $( ((rc)) && echo "MISMATCH or failed run (see $OUT)" || echo "all targets identical")"
+exit $rc

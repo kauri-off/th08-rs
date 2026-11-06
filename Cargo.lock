@@ -3373,6 +3373,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "th08-replay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "th08-core",
+]
+
+[[package]]
 name = "th08-thcrap"
 version = "0.1.0"
 dependencies = [
@@ -3407,6 +3415,7 @@ dependencies = [
  "th08-formats",
  "th08-render",
  "th08-repack",
+ "th08-replay",
  "th08-thcrap",
 ]
 

@@ -1,0 +1,14 @@
+[package]
+name = "th08-replay"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+description = "Headless session / demo replay on th08-core only, for cross-target determinism runs"
+
+[lints]
+workspace = true
+
+[dependencies]
+th08-core = { path = "../th08-core" }
+anyhow = "1.0.104"

@@ -15,6 +15,7 @@ th08-audio = { path = "../th08-audio" }
 th08-core = { path = "../th08-core" }
 th08-formats = { path = "../th08-formats" }
 th08-render = { path = "../th08-render" }
+th08-replay = { path = "../th08-replay" }
 th08-thcrap = { path = "../th08-thcrap" }
 anyhow = "1.0.104"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
