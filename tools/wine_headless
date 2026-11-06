@@ -1,8 +1,14 @@
 #!/bin/bash
-# usage: tools/wine_headless CMD… — wine (or wineboot / wineserver …) with no window on the user's display: xvfb, Wayland
-# hidden, no Mono / Gecko install prompts; stops the prefix's wineserver afterwards so no process outlives the run.
-# Set WINEPREFIX to a throwaway dir; never a user prefix.
-export WINEDEBUG=${WINEDEBUG:--all} WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
+# usage: tools/wine_headless CMD… — wine (or wineboot / wineserver …) with no window on the user's display and nothing
+# written outside WINEPREFIX: xvfb, Wayland hidden, no Mono / Gecko prompts, no winemenubuilder (menu entries, file
+# associations), a throwaway HOME so the prefix's Desktop / Documents never link to the user's folders; stops the
+# prefix's wineserver afterwards. WINEPREFIX must be set to a throwaway dir; never a user prefix.
+[[ -n ${WINEPREFIX:-} ]] || { echo "wine_headless: set WINEPREFIX to a throwaway dir" >&2; exit 2; }
+h="${WINEPREFIX%/}.home"
+mkdir -p "$h"
+export HOME=$h XDG_CONFIG_HOME=$h/.config XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache
+export WINEDEBUG=${WINEDEBUG:--all}
+export WINEDLLOVERRIDES="winemenubuilder.exe=d;${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 [[ $1 == wine* ]] || set -- wine "$@"
 "$(dirname "$0")/offscreen" "$@"
 rc=$?
