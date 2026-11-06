@@ -332,6 +332,7 @@ pub struct Settings {
     pub shot: Option<u64>,
     pub shot_size: Option<(u32, u32)>,
     pub turbo: u32,
+    pub present_hz: Option<u32>,
     pub slot_test: Option<usize>,
     pub anm: Option<String>,
     pub anm_int: Vec<(u64, u16)>,
@@ -409,6 +410,7 @@ impl Settings {
             shot: None,
             shot_size: None,
             turbo: 0,
+            present_hz: None,
             slot_test: None,
             anm: None,
             anm_int: Vec::new(),
@@ -613,7 +615,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
-        help: "present with vsync (default on); frame pacing is separate",
+        help: "present with vsync (default on); on displays below 60 Hz logic still runs at 60 frames per second",
         set: |s, v| {
             s.vsync = parse_bool(v)?;
             Ok(())
@@ -1643,6 +1645,25 @@ pub const ENTRIES: &[Entry] = &[
         help: "N logic frames per drawn frame, no frame pacing",
         set: |s, v| {
             s.turbo = num(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "present_hz",
+        env: "TH08_PRESENT_HZ",
+        kind: Kind::Int { min: 1, max: 240 },
+        default: "",
+        group: Group::Tools,
+        label: "Simulated display",
+        summary: "Present as on a display of this refresh rate",
+        unit: " Hz",
+        words: &[("", "Off")],
+        audience: Audience::Dev,
+        platforms: Platforms::NATIVE,
+        persist: false,
+        help: "each present waits for the next tick of an N Hz grid (test pacing on slow displays); pace is logged",
+        set: |s, v| {
+            s.present_hz = Some(num(v)?);
             Ok(())
         },
     },

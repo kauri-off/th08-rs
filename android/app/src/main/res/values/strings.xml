@@ -91,4 +91,24 @@
   <string name="update_available">Version %1$s is available</string>
   <string name="update_notes">What is new</string>
   <string name="update_download">Download</string>
+  <string name="update_install">Update</string>
+  <string name="update_cancel">Cancel</string>
+  <string name="update_retry">Try again</string>
+  <string name="update_dismiss">Dismiss</string>
+  <string name="update_downloading">Downloading version %1$s… %2$s</string>
+  <string name="update_verifying">Checking the download…</string>
+  <string name="update_installing">Installing… The app closes when the update is in; open it again.</string>
+  <string name="update_permission">Allow th08 to install apps in the settings page, then come back here.</string>
+  <string name="update_permission_open">Open settings</string>
+  <string name="update_game_running">Close the game first, then update.</string>
+  <string name="update_fail_network">Download failed: %1$s</string>
+  <string name="update_fail_sums">The release has no checksum for the APK; use the browser download.</string>
+  <string name="update_fail_hash">The download does not match its SHA-256 checksum and was deleted.</string>
+  <string name="update_fail_package">The downloaded file is not an update of this app.</string>
+  <string name="update_fail_version">The downloaded APK is not newer than the installed one.</string>
+  <string name="update_fail_signer">The downloaded APK is signed with a different key and was not installed.</string>
+  <string name="update_fail_permission">Installing apps from th08 is not allowed.</string>
+  <string name="update_fail_install">Install failed: %1$s</string>
+  <string name="update_cancelled">The update was cancelled.</string>
+  <string name="update_done">Updated to version %1$s.</string>
 </resources>

@@ -11,10 +11,10 @@ const BASELINE: f32 = 0.86;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct Raster {
-    font: Option<ab_glyph::FontVec>,
+    font: Option<Face>,
     // Presentation-pack FileFont chain (ARCH_B §1.6, I18N §2.3): translated text only, first font with the glyph
     // wins, the system font last.
-    pack: Vec<ab_glyph::FontVec>,
+    pack: Vec<Face>,
 }
 
 // Port-only font search order; TH08_FONT overrides it.
@@ -40,10 +40,43 @@ pub const FONT_PATHS: &[&str] = &[
 ];
 
 // A pack font file (TTF / OTF, first face of a collection); None with a warning when it does not parse.
-pub fn file_font(data: Vec<u8>) -> Option<ab_glyph::FontVec> {
+pub fn file_font(data: Vec<u8>) -> Option<Face> {
     ab_glyph::FontVec::try_from_vec_and_index(data, 0)
+        .map(Face::new)
         .map_err(|e| log::warn!("pack font: {e}"))
         .ok()
+}
+
+// A parsed face; system fonts borrow the process-wide bytes, pack fonts own theirs.
+pub type Face = ab_glyph::FontArc;
+
+// Each system font file is read once per process and kept for its lifetime: the launcher, the overlays and game
+// text share the bytes.
+#[cfg(not(target_arch = "wasm32"))]
+static READ: std::sync::Mutex<Vec<(String, &'static [u8])>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_once(path: &str) -> Option<&'static [u8]> {
+    let mut read = READ
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, b)) = read.iter().find(|(p, _)| p == path) {
+        return Some(b);
+    }
+    let bytes: &'static [u8] = Vec::leak(std::fs::read(path).ok()?);
+    log::info!("CJK font: {path} ({} KiB)", bytes.len() / 1024);
+    read.push((path.to_owned(), bytes));
+    Some(bytes)
+}
+
+// The first of `font` (TH08_FONT) and FONT_PATHS that reads and parses; the file stays in memory once read.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn system_font(font: Option<&str>) -> Option<&'static [u8]> {
+    font.into_iter()
+        .chain(FONT_PATHS.iter().copied())
+        .find_map(|p| {
+            read_once(p).filter(|b| ab_glyph::FontRef::try_from_slice_and_index(b, 0).is_ok())
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,13 +84,9 @@ impl Raster {
     // `font` = TH08_FONT (`CoreConfig::font`, via `Renderer::set_font`), tried before FONT_PATHS; `pack` = the
     // mounted pack's font files in chain order.
     pub fn new(font: Option<&str>, pack: Vec<Vec<u8>>) -> Self {
-        let font = font
-            .into_iter()
-            .chain(FONT_PATHS.iter().copied())
-            .find_map(|p| {
-                let data = std::fs::read(p).ok()?;
-                ab_glyph::FontVec::try_from_vec_and_index(data, 0).ok()
-            });
+        let font = system_font(font)
+            .and_then(|b| ab_glyph::FontRef::try_from_slice_and_index(b, 0).ok())
+            .map(Face::new);
         if font.is_none() {
             log::warn!("no Japanese font found (set TH08_FONT); dialogue text stays blank");
         }
@@ -70,7 +99,7 @@ impl Raster {
     // Vanilla text: the system font only, exactly as before packs existed.
     fn mask(&mut self, s: &str, cell: f32, x: f32, y: f32, w: usize, h: usize) -> Vec<u8> {
         let mut out = vec![0u8; w * h];
-        let fonts: Vec<&ab_glyph::FontVec> = self.font.iter().collect();
+        let fonts: Vec<&Face> = self.font.iter().collect();
         glyph_mask(&fonts, &Run::plain(s, cell, x, y), &mut out, w, h);
         out
     }
@@ -78,7 +107,7 @@ impl Raster {
     // Translated text: pack font first, the system font for the glyphs it lacks.
     fn mask_runs(&mut self, runs: &[Run], w: usize, h: usize) -> Vec<u8> {
         let mut out = vec![0u8; w * h];
-        let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().chain(self.font.iter()).collect();
+        let fonts: Vec<&Face> = self.pack.iter().chain(self.font.iter()).collect();
         for r in runs {
             glyph_mask(&fonts, r, &mut out, w, h);
         }
@@ -86,7 +115,7 @@ impl Raster {
     }
 
     fn measure(&mut self, s: &str, cell: f32) -> f32 {
-        let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().chain(self.font.iter()).collect();
+        let fonts: Vec<&Face> = self.pack.iter().chain(self.font.iter()).collect();
         glyph_width(&fonts, s, cell)
     }
 
@@ -94,7 +123,7 @@ impl Raster {
     // one (None = no system font).
     pub fn has_glyph(&self, ch: char) -> (Option<usize>, Option<bool>) {
         use ab_glyph::Font;
-        let has = |f: &ab_glyph::FontVec| f.glyph_id(ch).0 != 0;
+        let has = |f: &Face| f.glyph_id(ch).0 != 0;
         (self.pack.iter().position(has), self.font.as_ref().map(has))
     }
 
@@ -135,7 +164,7 @@ impl<'a> Run<'a> {
 }
 
 // The first font of the stack that has a glyph for `ch` (else the first font's .notdef).
-fn pick<'f>(fonts: &[&'f ab_glyph::FontVec], ch: char) -> Option<&'f ab_glyph::FontVec> {
+fn pick<'f>(fonts: &[&'f Face], ch: char) -> Option<&'f Face> {
     use ab_glyph::Font;
     fonts
         .iter()
@@ -145,7 +174,7 @@ fn pick<'f>(fonts: &[&'f ab_glyph::FontVec], ch: char) -> Option<&'f ab_glyph::F
 }
 
 // Glyph scale of `font` for a cell `cell` px high (the em box fills the cell like GDI's character height).
-fn font_scale(font: &ab_glyph::FontVec, cell: f32, sx: f32) -> ab_glyph::PxScale {
+fn font_scale(font: &Face, cell: f32, sx: f32) -> ab_glyph::PxScale {
     use ab_glyph::Font;
     let em = font.units_per_em().unwrap_or(1000.0);
     let v = cell * font.height_unscaled() / em;
@@ -153,7 +182,7 @@ fn font_scale(font: &ab_glyph::FontVec, cell: f32, sx: f32) -> ab_glyph::PxScale
 }
 
 // Advance width of `s` at cell height `cell`, in the same pixels.
-fn glyph_width(fonts: &[&ab_glyph::FontVec], s: &str, cell: f32) -> f32 {
+fn glyph_width(fonts: &[&Face], s: &str, cell: f32) -> f32 {
     use ab_glyph::{Font, ScaleFont};
     s.chars()
         .filter_map(|ch| {
@@ -167,7 +196,7 @@ fn glyph_width(fonts: &[&ab_glyph::FontVec], s: &str, cell: f32) -> f32 {
 }
 
 // Coverage of run `r` max-blended into the w×h buffer `out`.
-fn glyph_mask(fonts: &[&ab_glyph::FontVec], r: &Run, out: &mut [u8], w: usize, h: usize) {
+fn glyph_mask(fonts: &[&Face], r: &Run, out: &mut [u8], w: usize, h: usize) {
     use ab_glyph::{Font, ScaleFont, point};
     let mut pen = r.x;
     for ch in r.s.chars() {
@@ -210,7 +239,7 @@ pub struct Raster {
         web_sys::CanvasRenderingContext2d,
     )>,
     // Presentation-pack FileFont chain: the same pixels as native for translated text (ARCH_B §1.6).
-    pack: Vec<ab_glyph::FontVec>,
+    pack: Vec<Face>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -281,7 +310,7 @@ impl Raster {
         if self.pack.is_empty() {
             return self.canvas_runs(runs, w, h);
         }
-        let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().collect();
+        let fonts: Vec<&Face> = self.pack.iter().collect();
         let mut out = vec![0u8; w * h];
         for r in runs {
             glyph_mask(&fonts, r, &mut out, w, h);
@@ -291,7 +320,7 @@ impl Raster {
 
     fn measure(&mut self, s: &str, cell: f32) -> f32 {
         if !self.pack.is_empty() {
-            let fonts: Vec<&ab_glyph::FontVec> = self.pack.iter().collect();
+            let fonts: Vec<&Face> = self.pack.iter().collect();
             return glyph_width(&fonts, s, cell);
         }
         let Some(ctx) = self.ctx(1, 1) else {
@@ -731,5 +760,16 @@ mod tests {
         assert_eq!(dib[1].rgb, [0; 3]);
         assert_eq!(dib[(h - 1) * w].rgb, [0, 16, 16]);
         assert_eq!(dib[(h - 1) * w + 1].rgb, [11, 11, 0]);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod font_tests {
+    // The second lookup returns the same bytes, so the file was read once.
+    #[test]
+    fn system_font_read_once() {
+        if let Some(a) = super::system_font(None) {
+            assert!(std::ptr::eq(a, super::system_font(None).unwrap()));
+        }
     }
 }

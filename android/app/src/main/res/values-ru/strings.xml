@@ -90,4 +90,24 @@
   <string name="update_available">Доступна версия %1$s</string>
   <string name="update_notes">Что нового</string>
   <string name="update_download">Скачать</string>
+  <string name="update_install">Обновить</string>
+  <string name="update_cancel">Отмена</string>
+  <string name="update_retry">Повторить</string>
+  <string name="update_dismiss">Закрыть</string>
+  <string name="update_downloading">Загрузка версии %1$s… %2$s</string>
+  <string name="update_verifying">Проверка загрузки…</string>
+  <string name="update_installing">Установка… Приложение закроется после обновления; откройте его снова.</string>
+  <string name="update_permission">Разрешите th08 устанавливать приложения на странице настроек и вернитесь сюда.</string>
+  <string name="update_permission_open">Открыть настройки</string>
+  <string name="update_game_running">Сначала закройте игру, затем обновите.</string>
+  <string name="update_fail_network">Ошибка загрузки: %1$s</string>
+  <string name="update_fail_sums">В релизе нет контрольной суммы APK; скачайте его через браузер.</string>
+  <string name="update_fail_hash">Загрузка не совпала с контрольной суммой SHA-256 и удалена.</string>
+  <string name="update_fail_package">Загруженный файл — не обновление этого приложения.</string>
+  <string name="update_fail_version">Загруженный APK не новее установленного.</string>
+  <string name="update_fail_signer">Загруженный APK подписан другим ключом и не установлен.</string>
+  <string name="update_fail_permission">Установка приложений из th08 не разрешена.</string>
+  <string name="update_fail_install">Ошибка установки: %1$s</string>
+  <string name="update_cancelled">Обновление отменено.</string>
+  <string name="update_done">Обновлено до версии %1$s.</string>
 </resources>

@@ -153,7 +153,7 @@ help = "フルスクリーンで起動（ネイティブ版。F11 か Alt+Enter 
 [entry.vsync]
 label = "垂直同期"
 summary = "フレームをディスプレイに同期"
-help = "垂直同期して表示（初期値はオン）。フレームレート制御とは別です"
+help = "垂直同期して表示（初期値はオン）。60 Hz より低いディスプレイでも処理速度は 60 フレーム／s のまま"
 
 [entry.screen_margin]
 label = "画面の余白 (dp)"
@@ -554,6 +554,15 @@ help = "描画 1 フレームごとに N フレーム処理する。フレーム
 
 [entry.turbo.words]
 0 = "オフ"
+
+[entry.present_hz]
+label = "表示のシミュレーション"
+summary = "このリフレッシュレートのディスプレイのように表示"
+help = "表示ごとに N Hz の次のタイミングまで止める（低リフレッシュレートでのフレーム制御の確認用）。速度をログに記録"
+unit = " Hz"
+
+[entry.present_hz.words]
+"" = "オフ"
 
 [entry.slot_test]
 label = "ANM スロットテスト"

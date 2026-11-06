@@ -12,10 +12,14 @@ object UpdateCheck {
     external fun call(request: String): String
 }
 
-data class UpdateInfo(val version: String, val page: String, val download: String)
+// `asset` (the APK's file name) and `sums` (the SHA256SUMS URL) are null when the release has none.
+data class UpdateInfo(val version: String, val page: String, val download: String, val asset: String? = null,
+    val sums: String? = null)
 
 // `{}` (no newer release, off, offline) or garbage → null.
 fun parseUpdateReply(s: String): UpdateInfo? = runCatching {
     val o = JSONObject(s)
-    if (!o.has("version")) null else UpdateInfo(o.getString("version"), o.getString("page"), o.getString("download"))
+    fun opt(k: String) = if (o.isNull(k)) null else o.optString(k).takeIf { it.isNotEmpty() }
+    if (!o.has("version")) null
+    else UpdateInfo(o.getString("version"), o.getString("page"), o.getString("download"), opt("asset"), opt("sums"))
 }.getOrNull()

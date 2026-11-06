@@ -395,13 +395,7 @@ pub fn source_strings() -> Vec<(String, &'static str)> {
 // The CJK face egui falls back to after its default fonts (Japanese text and the 日本語 choice in every language).
 #[cfg(not(target_arch = "wasm32"))]
 fn cjk_font(font: Option<&str>) -> Option<egui::FontData> {
-    font.into_iter()
-        .chain(th08_render::text::FONT_PATHS.iter().copied())
-        .find_map(|p| {
-            let data = std::fs::read(p).ok()?;
-            log::info!("launcher CJK font: {p}");
-            Some(egui::FontData::from_owned(data))
-        })
+    th08_render::text::system_font(font).map(egui::FontData::from_static)
 }
 
 // Web: a Noto Sans CJK JP subset (OFL) holding the glyphs of ja.toml; `tools/i18n_font_subset` makes it.

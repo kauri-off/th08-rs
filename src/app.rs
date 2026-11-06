@@ -25,6 +25,9 @@ use winit::window::{Window, WindowId};
 struct Running {
     ctx: Ctx,
     pacer: Pacer,
+    // Grid origin of the debug `present_hz` vsync.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    vsync_epoch: Instant,
     settings: Settings,
     // The touch overlay while a gamepad is in use; back on the next touch.
     hidden_overlay: Option<Box<dyn th08_render::gfx::Overlay>>,
@@ -127,6 +130,8 @@ struct App {
     replay_held: bool,
     // Last safe-area read (`refresh_safe`).
     safe_at: Option<Instant>,
+    // The refresh rate the window's monitor last reported (Hz), logged on change.
+    refresh_hz: Option<Option<f64>>,
     // Window focus, and whether audio pauses while unfocused: Android only (focus goes at Home / recents, before
     // `Suspended`); the desktop has the `mute_unfocused` row.
     focus: Focus,
@@ -164,6 +169,14 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let drawlog = s.drawlog.as_deref().and_then(open_drawlog);
     #[cfg(target_arch = "wasm32")]
     let drawlog = None;
+    // The system CJK font is read off the main thread while the game loads, so the first text frame does not wait.
+    #[cfg(not(target_arch = "wasm32"))]
+    let font = {
+        let f = s.font.clone();
+        std::thread::spawn(move || {
+            th08_render::text::system_font(f.as_deref());
+        })
+    };
     th08_core::assets::yield_now().await;
     let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(gfx);
     let overlay = s.mount_pack(renderer.as_mut());
@@ -178,6 +191,13 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         overlay,
     };
     let mut ctx = Ctx::load_with(source, io, s.core(), s.uses_saves()).await?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        while !font.is_finished() {
+            th08_core::assets::yield_now().await;
+        }
+        let _ = font.join();
+    }
     let cheats = s.active_cheats();
     if !cheats.is_empty() {
         log::warn!(
@@ -189,6 +209,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     Ok(Box::new(Running {
         ctx,
         pacer: Pacer::new(s.turbo),
+        vsync_epoch: Instant::now(),
         settings: s,
         hidden_overlay: None,
         replay: ReplayTransport::default(),
@@ -283,11 +304,13 @@ impl ApplicationHandler<UserEvent> for App {
                     self.window().request_redraw();
                 }
                 self.shell = Shell::Running(r);
+                self.refresh_display();
                 self.sync_audio();
             }
             UserEvent::Gfx(mut gfx) => {
                 self.fix_surface(&mut gfx, fix);
                 crate::platform::framerate::request_60(self.window());
+                self.refresh_display();
                 gfx.safe = self.read_safe();
                 if self.launcher {
                     let view = {
@@ -405,7 +428,10 @@ impl ApplicationHandler<UserEvent> for App {
         match &ev {
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 self.refresh_safe(true);
+                self.refresh_display();
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            WindowEvent::Moved(_) => self.refresh_display(),
             WindowEvent::Focused(f) => {
                 self.focus.focused = *f;
                 if *f {
@@ -477,6 +503,7 @@ impl App {
             suspended: false,
             replay_held: false,
             safe_at: None,
+            refresh_hz: None,
             sticks: crate::joystick::StickFilter::default(),
             pads_at: None,
             focus: Focus {
@@ -683,6 +710,26 @@ impl App {
     // The window's safe area now (platform insets + `screen_margin`).
     fn read_safe(&self) -> crate::platform::safearea::SafeArea {
         crate::platform::safearea::read(self.window(), self.setup.screen_margin)
+    }
+
+    // The window's monitor refresh rate: logged when it changes, handed to the game's pacer (`present_hz` overrides).
+    fn refresh_display(&mut self) {
+        let Some(w) = &self.window else { return };
+        let hz = w
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map(|mhz| f64::from(mhz) / 1000.0);
+        if self.refresh_hz != Some(hz) {
+            match hz {
+                Some(hz) => log::info!("display: {hz:.2} Hz"),
+                None => log::info!("display: refresh rate unknown"),
+            }
+            self.refresh_hz = Some(hz);
+        }
+        if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
+            let sim = r.settings.present_hz.map(f64::from);
+            r.pacer.set_display_hz(sim.or(hz));
+        }
     }
 
     // Re-reads the safe area into the current Gfx: forced on resize / rotation / resume / focus; Android insets can
@@ -1378,14 +1425,53 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
             .expect("save shot");
         return Frame::Exit;
     }
+    r.pacer
+        .record_work(now.elapsed().as_secs_f64(), per_draw * draws);
     r.ctx.present();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(hz) = r.settings.present_hz {
+        sim_vsync(r.vsync_epoch, f64::from(hz));
+    }
+    pace_log(r, now);
     th08_core::ascii::apply_pending_captures(&mut r.ctx.w.anm, &mut r.ctx.rec);
     window.request_redraw();
     Frame::Continue
 }
 
-// Replay transport above 1×: `draws` × (`per_draw` logic frames, draw); every draw but the last runs with emit off
-// (draw-phase steps only), the last is the caller's, recorded and presented. Fewer when playback ends inside.
+// Debug `present_hz`: the present blocks until the next tick of an `hz` grid, like Fifo on such a display.
+#[cfg(not(target_arch = "wasm32"))]
+fn sim_vsync(epoch: Instant, hz: f64) {
+    let t = epoch.elapsed().as_secs_f64();
+    let next = ((t * hz + 1e-6).floor() + 1.0) / hz;
+    std::thread::sleep(std::time::Duration::from_secs_f64(next - t));
+}
+
+// Logic frames and presents per wall second, every 10 s (info with `present_hz`, else debug).
+fn pace_log(r: &mut Running, now: Instant) {
+    let Some((secs, frames, runs)) = r.pacer.take_stats(now, 10.0) else {
+        return;
+    };
+    let level = if r.settings.present_hz.is_some() {
+        log::Level::Info
+    } else {
+        log::Level::Debug
+    };
+    log::log!(
+        level,
+        "pace: {:.2} logic frames/s, {:.2} presents/s over {secs:.1} s{}",
+        frames as f64 / secs,
+        runs as f64 / secs,
+        if r.pacer.is_catching_up() {
+            " (catch-up)"
+        } else {
+            ""
+        }
+    );
+}
+
+// Replay transport above 1× or the pacer's catch-up below 60 Hz: `draws` × (`per_draw` logic frames, draw); every draw
+// but the last runs with emit off (draw-phase steps only), the last is the caller's, recorded and presented. Above 1×
+// fewer when playback ends inside.
 fn run_batch(
     r: &mut Running,
     per_draw: u32,
@@ -1397,7 +1483,8 @@ fn run_batch(
         if let Some(f) = logic_frames(r, per_draw, frozen, touch) {
             return Some(f);
         }
-        if !replay_active(&r.ctx) {
+        // Above 1× the batch ends with playback; at 1× it is the pacer's catch-up and every frame runs.
+        if !replay_active(&r.ctx) && !r.pacer.is_original() {
             break;
         }
         if let Some(p) = r.ctx.w.player.as_deref() {
@@ -1796,6 +1883,7 @@ mod tests {
         Some(Running {
             ctx,
             pacer: Pacer::new(0),
+            vsync_epoch: Instant::now(),
             settings: s,
             hidden_overlay: None,
             replay: ReplayTransport::default(),

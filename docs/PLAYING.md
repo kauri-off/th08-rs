@@ -87,6 +87,20 @@ time of the last check is kept in `update_check.json` next to `port.cfg`. Turn i
 the Display section (`update_check = off` in `port.cfg`). Besides translation downloads it is the only network
 request the port makes. Local builds and the browser build never check.
 
+On Android the release app (`org.th08.port`) also offers **Update**, which installs the new version from the
+launcher itself:
+
+- It downloads the release's APK into the app's cache (with progress and **Cancel**) and the release's `SHA256SUMS`,
+  and refuses the file unless its SHA-256 matches. It then checks that the APK is this app, has a higher version and
+  is **signed with the same key** as the installed one; anything else is refused and deleted. A failed, cancelled or
+  interrupted download is deleted, at the latest on the next start.
+- The first time, Android asks you to allow installs from th08: **Open settings**, turn on "Allow from this source",
+  go back, and the install goes on. Android then asks you to confirm the update; the app closes when it is in, and
+  the launcher says "Updated to version X" when you open it again.
+- It is an in-place update: saves (`score.dat`, replays), settings, the imported game files and translations stay.
+- Any failure shows the reason and the **Download** button, which opens the APK in your browser as before. It works
+  only from the launcher screen, never while the game is running.
+
 On Android, [Obtainium](https://github.com/ImranR98/Obtainium) can track the GitHub releases and install new APKs;
 the Linux AppImage updates itself with AppImageUpdate (see Downloads).
 

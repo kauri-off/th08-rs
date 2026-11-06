@@ -238,4 +238,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -90,4 +90,24 @@
   <string name="update_available">バージョン %1$s が公開されています</string>
   <string name="update_notes">更新内容</string>
   <string name="update_download">ダウンロード</string>
+  <string name="update_install">アップデート</string>
+  <string name="update_cancel">キャンセル</string>
+  <string name="update_retry">再試行</string>
+  <string name="update_dismiss">閉じる</string>
+  <string name="update_downloading">バージョン %1$s をダウンロード中… %2$s</string>
+  <string name="update_verifying">ダウンロードを確認中…</string>
+  <string name="update_installing">インストール中… 更新が終わるとアプリが閉じるので、もう一度開いてください。</string>
+  <string name="update_permission">設定画面で th08 にアプリのインストールを許可してから、ここに戻ってください。</string>
+  <string name="update_permission_open">設定を開く</string>
+  <string name="update_game_running">先にゲームを終了してから更新してください。</string>
+  <string name="update_fail_network">ダウンロードに失敗しました: %1$s</string>
+  <string name="update_fail_sums">リリースに APK のチェックサムがありません。ブラウザでダウンロードしてください。</string>
+  <string name="update_fail_hash">ダウンロードが SHA-256 チェックサムと一致しないため削除しました。</string>
+  <string name="update_fail_package">ダウンロードしたファイルはこのアプリの更新ではありません。</string>
+  <string name="update_fail_version">ダウンロードした APK はインストール済みのものより新しくありません。</string>
+  <string name="update_fail_signer">ダウンロードした APK は別の鍵で署名されているため、インストールしませんでした。</string>
+  <string name="update_fail_permission">th08 からのアプリのインストールが許可されていません。</string>
+  <string name="update_fail_install">インストールに失敗しました: %1$s</string>
+  <string name="update_cancelled">更新はキャンセルされました。</string>
+  <string name="update_done">バージョン %1$s に更新しました。</string>
 </resources>

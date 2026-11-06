@@ -136,13 +136,22 @@ interface LauncherActions {
     fun shareError() {}
     fun dismissError() {}
     fun openUrl(url: String) {}
+    fun updateStart() {}
+    fun updateCancel() {}
+    fun updatePermission() {}
+    fun updateDismiss() {}
 }
 
 // The previous run's last_error.txt (written by the game process), null when there is none.
 val LocalLastError = compositionLocalOf<String?> { null }
 
-// A newer release found by the update check (UpdateCheck.kt), null when there is none.
-val LocalUpdate = compositionLocalOf<UpdateInfo?> { null }
+// A newer release found by the update check (UpdateCheck.kt, null when there is none), the in-app update's step
+// (AppUpdate.kt) and whether this build installs it itself.
+data class UpdateUi(val info: UpdateInfo?, val step: UpdateStep, val inApp: Boolean) {
+    val shown get() = info != null || step !is UpdateStep.Idle
+}
+
+val LocalUpdate = compositionLocalOf { UpdateUi(null, UpdateStep.Idle, false) }
 
 // Save export / import state (Saves.kt).
 val LocalSaves = compositionLocalOf { SaveState() }
@@ -207,7 +216,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                         }
                         ResetMenu(act)
                     }
-                    LocalUpdate.current?.let { Block { UpdateRow(it, act) } }
+                    LocalUpdate.current.takeIf { it.shown }?.let { Block { UpdateRow(it, act) } }
                     LocalLastError.current?.let { Block { LastErrorRow(it, act) } }
                     Block { StatusRow(data, act, showInfo) }
                     PlayButton(canPlay, act)
@@ -253,7 +262,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
             Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.TopCenter) {
                 SettingsList(groups, rows, act, showInfo, PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     status = {
-                        LocalUpdate.current?.let { UpdateRow(it, act) }
+                        LocalUpdate.current.takeIf { it.shown }?.let { UpdateRow(it, act) }
                         LocalLastError.current?.let { LastErrorRow(it, act) }
                         StatusRow(data, act, showInfo)
                     })
@@ -403,20 +412,63 @@ private fun headline(report: String): String {
 }
 
 @Composable
-private fun UpdateRow(u: UpdateInfo, act: LauncherActions) {
+private fun UpdateRow(u: UpdateUi, act: LauncherActions) {
+    val info = u.info
+    val step = u.step
+    val fg = MaterialTheme.colorScheme.onSecondaryContainer
     Column(
         Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.secondaryContainer)
             .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
     ) {
+        val line = when (step) {
+            is UpdateStep.Downloading -> str(R.string.update_downloading, info?.version ?: "",
+                if (step.total > 0) "${step.done * 100 / step.total}%" else "${step.done shr 20} MiB")
+            UpdateStep.Verifying -> str(R.string.update_verifying)
+            UpdateStep.NeedPermission -> str(R.string.update_permission)
+            UpdateStep.Installing -> str(R.string.update_installing)
+            is UpdateStep.Failed -> str(step.msg, step.detail)
+            is UpdateStep.Updated -> str(R.string.update_done, step.version)
+            UpdateStep.Idle -> str(R.string.update_available, info?.version ?: "")
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Icon(if (step is UpdateStep.Failed) Icons.Default.Warning else Icons.Default.Info, null, tint = fg)
             Spacer(Modifier.width(16.dp))
-            Text(str(R.string.update_available, u.version), style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(line, style = MaterialTheme.typography.bodyLarge, color = fg)
+        }
+        when (step) {
+            is UpdateStep.Downloading -> if (step.total > 0) {
+                LinearProgressIndicator(progress = { step.done.toFloat() / step.total }, Modifier.fillMaxWidth().padding(top = 8.dp))
+            } else {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            }
+            UpdateStep.Verifying, UpdateStep.Installing -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            else -> {}
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { act.openUrl(u.page) }) { Text(str(R.string.update_notes)) }
-            TextButton(onClick = { act.openUrl(u.download) }) { Text(str(R.string.update_download)) }
+            when (step) {
+                is UpdateStep.Downloading, UpdateStep.Verifying ->
+                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel)) }
+                UpdateStep.NeedPermission -> {
+                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel)) }
+                    TextButton(onClick = act::updatePermission) { Text(str(R.string.update_permission_open)) }
+                }
+                UpdateStep.Installing -> {}
+                is UpdateStep.Updated -> TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss)) }
+                UpdateStep.Idle, is UpdateStep.Failed -> if (info != null) {
+                    TextButton(onClick = { act.openUrl(info.page) }) { Text(str(R.string.update_notes)) }
+                    val inApp = u.inApp && info.asset != null && info.sums != null
+                    // A failed in-app update keeps the browser download as fallback.
+                    if (!inApp || step is UpdateStep.Failed) {
+                        TextButton(onClick = { act.openUrl(info.download) }) { Text(str(R.string.update_download)) }
+                    }
+                    if (inApp) {
+                        val label = if (step is UpdateStep.Failed) R.string.update_retry else R.string.update_install
+                        TextButton(onClick = act::updateStart) { Text(str(label)) }
+                    }
+                } else {
+                    TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss)) }
+                }
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
@@ -69,6 +70,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             runCatching { copyBundledPacks() }.onFailure { Log.e("th08", "bundled packs: $it") }
             runOnUiThread { packCall("status") }
         }.start()
+        AppUpdate.onStart(this)
         checkUpdate()
         // A job started before a configuration change keeps running in this process.
         importer.poll()
@@ -116,13 +118,19 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                     uri?.let { copyPicked(it) }?.let { change(r, it.path) }
                 }
                 pickFile = { r -> picking = r; pick.launch(arrayOf("*/*")) }
+                val allow = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+                    AppUpdate.permissionResult(this)
+                }
+                openInstallSettings = {
+                    allow.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                }
                 // The `language` row picks the texts and switches the screen live; the game reads the same value from
                 // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
                 val lang = currentLang()
                 val res = remember(lang) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
                     LocalSaves provides saves, LocalImport provides importer.state, LocalLastError provides lastError,
-                    LocalUpdate provides update) {
+                    LocalUpdate provides UpdateUi(update, AppUpdate.step, inAppUpdate)) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -131,6 +139,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     private var pickFile: (Setting) -> Unit = {}
     private var openGamePicker: () -> Unit = {}
+    private var openInstallSettings: () -> Unit = {}
+    private val inAppUpdate get() = inAppUpdateAllowed(BuildConfig.CHANNEL, File(filesDir, "update_test.json").isFile)
 
     // As android_main: imported files, then bundled assets, then the old <external files>/game (adb push target).
     private fun checkData(): GameData {
@@ -355,6 +365,20 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             .onFailure { Log.w("th08", "cannot open $url: $it") }
     }
 
+    // Launcher only, never with the game process alive: the install replaces the app and ends its processes.
+    override fun updateStart() {
+        val u = update ?: return
+        if (!inAppUpdate) return
+        if (gameRunning()) return run { AppUpdate.fail(R.string.update_game_running) }
+        AppUpdate.start(this, u, https = BuildConfig.CHANNEL == "release")
+    }
+
+    override fun updateCancel() = AppUpdate.cancel(this)
+
+    override fun updatePermission() = openInstallSettings()
+
+    override fun updateDismiss() = AppUpdate.dismiss()
+
     override fun shareError() {
         val text = lastError ?: return
         val send = Intent(Intent.ACTION_SEND).apply {
@@ -374,6 +398,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     override fun play() {
         dismissError()
+        if (AppUpdate.busy || AppUpdate.step == UpdateStep.NeedPermission) AppUpdate.cancel(this)
         val once = rows
             .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
             .map { it.e.key to it.value }

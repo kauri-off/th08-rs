@@ -974,6 +974,8 @@ impl Gfx {
         if let Some(f) = caps.formats.iter().find(|f| want.contains(f)) {
             config.format = *f;
         }
+        // One queued frame: a full FIFO queue would add up to two refreshes of latency.
+        config.desired_maximum_frame_latency = 1;
         config.present_mode = if vsync {
             wgpu::PresentMode::AutoVsync
         } else {

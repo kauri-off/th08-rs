@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug build only: plain HTTP to the emulator's host, for a locally served test release (update_test.json). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:networkSecurityConfig="@xml/debug_network"/>
+</manifest>

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- Translation downloads from srv.thpatch.net (settings screen, Packs.kt). -->
   <uses-permission android:name="android.permission.INTERNET"/>
+  <!-- In-app update (AppUpdate.kt): used by the release channel only, but the dev channel shares the release build
+       type, so it cannot be scoped to one manifest; Android grants it only after "allow from this source". -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
   <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
       android:extractNativeLibs="false" android:allowBackup="true" android:hasFragileUserData="true"
       android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules">
@@ -13,6 +16,7 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
+    <receiver android:name=".UpdateReceiver" android:exported="false"/>
     <!-- The Rust game (lib th08, GameActivity.kt); own process, ended by the game on Quit so the next Play starts
          fresh. Back goes to the game only, through its OnBackInvokedCallback (API 33+) or KEYCODE_BACK. -->
     <activity android:name=".GameActivity" android:exported="false" android:process=":game"

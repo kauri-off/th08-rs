@@ -20,6 +20,10 @@ pub struct Release {
     pub page: String,
     // This platform's asset, else the release page.
     pub download: String,
+    // That asset's file name, as SHA256SUMS lists it.
+    pub asset: Option<String>,
+    // The release's SHA256SUMS asset.
+    pub sums: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,22 +97,27 @@ pub fn parse_release(json: &str, platform: Platform) -> Option<Release> {
     let version = v["tag_name"].as_str()?.trim_start_matches('v').to_string();
     parse_version(&version)?;
     let page = v["html_url"].as_str()?.to_string();
-    let download = v["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|a| {
-            a["name"]
-                .as_str()
-                .is_some_and(|n| n.ends_with(platform.asset_suffix()))
+    let find = |want: &dyn Fn(&str) -> bool| {
+        v["assets"].as_array().into_iter().flatten().find_map(|a| {
+            let name = a["name"].as_str().filter(|n| want(n))?;
+            Some((
+                name.to_string(),
+                a["browser_download_url"].as_str()?.to_string(),
+            ))
         })
-        .and_then(|a| a["browser_download_url"].as_str())
-        .unwrap_or(&page)
-        .to_string();
+    };
+    let asset = find(&|n| n.ends_with(platform.asset_suffix()));
+    let sums = find(&|n| n == "SHA256SUMS").map(|(_, url)| url);
+    let (asset, download) = match asset {
+        Some((name, url)) => (Some(name), url),
+        None => (None, page.clone()),
+    };
     Some(Release {
         version,
         page,
         download,
+        asset,
+        sums,
     })
 }
 
@@ -268,7 +277,10 @@ pub extern "system" fn Java_org_th08_port_UpdateCheck_call<'c>(
             .and_then(|c| run(Some(&c)))
             .map_or_else(
                 || json!({}),
-                |r| json!({"version": r.version, "page": r.page, "download": r.download}),
+                |r| {
+                    json!({"version": r.version, "page": r.page, "download": r.download, "asset": r.asset,
+                        "sums": r.sums})
+                },
             );
         jni::objects::JString::from_str(env, reply.to_string())
     })
@@ -287,7 +299,8 @@ mod tests {
             {"name": "th08-0.2.0-windows-nsis.exe", "browser_download_url": "https://x/th08-0.2.0-windows-nsis.exe"},
             {"name": "th08-0.2.0-linux-appimage.AppImage", "browser_download_url": "https://x/a.AppImage"},
             {"name": "th08-0.2.0-linux-appimage.AppImage.zsync", "browser_download_url": "https://x/a.zsync"},
-            {"name": "th08-0.2.0-android-apk.apk", "browser_download_url": "https://x/a.apk"}
+            {"name": "th08-0.2.0-android-apk.apk", "browser_download_url": "https://x/a.apk"},
+            {"name": "SHA256SUMS", "browser_download_url": "https://x/SHA256SUMS"}
         ]
     }"#;
 
@@ -315,13 +328,17 @@ mod tests {
             r(Platform::WindowsPortable),
             "https://x/th08-0.2.0-windows-exe.exe"
         );
+        let apk = parse_release(REPLY, Platform::Android).unwrap();
+        assert_eq!(apk.asset.as_deref(), Some("th08-0.2.0-android-apk.apk"));
+        assert_eq!(apk.sums.as_deref(), Some("https://x/SHA256SUMS"));
         let rel = parse_release(REPLY, Platform::Linux).unwrap();
         assert_eq!(rel.version, "0.2.0");
         assert!(rel.page.ends_with("/v0.2.0"));
         let bare = r#"{"tag_name": "v0.2.0", "html_url": "https://p", "assets": []}"#;
+        let b = parse_release(bare, Platform::Linux).unwrap();
         assert_eq!(
-            parse_release(bare, Platform::Linux).unwrap().download,
-            "https://p"
+            (b.download.as_str(), b.asset, b.sums),
+            ("https://p", None, None)
         );
         let pre = r#"{"tag_name": "v0.3.0", "html_url": "https://p", "prerelease": true}"#;
         assert_eq!(parse_release(pre, Platform::Linux), None);
