@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--tab=replays] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--pad-capture=PAD_ROW] [--pad-press=PAD_ROW:BUTTON]... [--tab=replays] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -65,6 +65,16 @@ fn main() {
         .iter()
         .find_map(|a| a.strip_prefix("--capture="))
         .map(String::from);
+    // A Gamepad row waiting for a button, and captures fed a button as if pressed on a pad.
+    let pad_capture = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--pad-capture="))
+        .map(String::from);
+    let pad_press: Vec<String> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--pad-press="))
+        .map(String::from)
+        .collect();
     // A build with bundled game data: DIR as its bundled folder.
     let bundled = args
         .iter()
@@ -82,6 +92,8 @@ fn main() {
             && !a.starts_with("--tr-install=")
             && !a.starts_with("--bundled=")
             && !a.starts_with("--capture=")
+            && !a.starts_with("--pad-capture=")
+            && !a.starts_with("--pad-press=")
     });
     let mut dirs = th08::launcher::desktop_dirs().tool();
     if let Some(c) = config {
@@ -123,6 +135,7 @@ fn main() {
         };
         model.start_capture(e.key);
     }
+    pad_shot_rows(&mut model, &pad_press, pad_capture.as_deref());
     if replays_tab {
         model.set_tab(th08::launcher::Tab::Replays);
     }
@@ -133,4 +146,36 @@ fn main() {
     th08::launcher::render_image(&gfx, model, size.unwrap_or((640, 480)), safe)
         .save(&out)
         .expect("save png");
+}
+
+// `--pad-press` captures fed their button, then the `--pad-capture` row left waiting.
+fn pad_shot_rows(
+    model: &mut th08::launcher::Model,
+    pad_press: &[String],
+    pad_capture: Option<&str>,
+) {
+    let pad_row = |k: &str| {
+        th08::settings::find(k)
+            .filter(|e| e.group == th08::settings::Group::Gamepad)
+            .unwrap_or_else(|| {
+                eprintln!("{k}: not a Gamepad row");
+                std::process::exit(2);
+            })
+            .key
+    };
+    for p in pad_press {
+        let Some((row, b)) = p.split_once(':') else {
+            eprintln!("--pad-press={p}: expected PAD_ROW:BUTTON");
+            std::process::exit(2);
+        };
+        let Some(b) = th08::platform::padmap::button(b) else {
+            eprintln!("--pad-press={p}: not a bindable pad button");
+            std::process::exit(2);
+        };
+        model.start_pad_capture(pad_row(row));
+        model.capture_pad(b);
+    }
+    if let Some(k) = pad_capture {
+        model.start_pad_capture(pad_row(k));
+    }
 }

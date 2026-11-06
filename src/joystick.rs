@@ -42,6 +42,10 @@ const IN_USE: i32 = 300;
 // Hat axis value (−1..1) that counts as a d-pad press.
 const HAT_DEAD: f32 = 0.5;
 
+// Deflection (−1..1) past which an axis bound as a button is down.
+#[cfg(any(not(target_os = "linux"), feature = "gamepad-linux"))]
+const AXIS_BUTTON: f32 = 0.5;
+
 // Gamepad button index of an Android keycode.
 pub fn android_button(code: u32) -> Option<usize> {
     ANDROID_KEYS.iter().position(|&k| k == code)
@@ -158,6 +162,7 @@ pub struct Joystick {
     #[cfg(any(not(target_os = "linux"), feature = "gamepad-linux"))]
     gilrs: Option<gilrs::Gilrs>,
     pub events: EventPad,
+    pub map: crate::platform::padmap::PadMap,
     // Select pressed on a gilrs pad since the last `take_menu`.
     menu: bool,
     // Pad input since the last `take_used`.
@@ -237,26 +242,51 @@ impl Joystick {
         self.events.devices.first().cloned()
     }
 
-    // One poll: buttons and lX/lY of the first connected gilrs gamepad, else the event-fed pad.
-    pub fn poll(&mut self) -> PadState {
+    // Physical input of the first connected gilrs gamepad (`padmap` bits) and its lX/lY, else the event-fed pad.
+    pub fn read(&mut self) -> (u32, [i32; 2]) {
         self.pump();
         #[cfg(any(not(target_os = "linux"), feature = "gamepad-linux"))]
         if let Some(g) = &mut self.gilrs
             && let Some((_, pad)) = g.gamepads().next()
         {
-            let buttons = BUTTONS
+            use crate::platform::padmap::*;
+            use gilrs::Axis;
+            let mut phys = BUTTONS
                 .iter()
                 .enumerate()
                 .filter(|(_, b)| pad.is_pressed(**b))
                 .fold(0u32, |m, (i, _)| m | 1 << i);
+            // Pads without a mapping report the hat and the triggers as axes; gilrs Y is up-positive.
+            for (axis, sign, bit) in [
+                (Axis::DPadX, -1.0, DPAD_LEFT),
+                (Axis::DPadX, 1.0, DPAD_RIGHT),
+                (Axis::DPadY, 1.0, DPAD_UP),
+                (Axis::DPadY, -1.0, DPAD_DOWN),
+                (Axis::LeftZ, 1.0, LEFT_Z),
+                (Axis::RightZ, 1.0, RIGHT_Z),
+                (Axis::RightStickX, -1.0, RSTICK_LEFT),
+                (Axis::RightStickX, 1.0, RSTICK_RIGHT),
+                (Axis::RightStickY, 1.0, RSTICK_UP),
+                (Axis::RightStickY, -1.0, RSTICK_DOWN),
+            ] {
+                if pad.value(axis) * sign > AXIS_BUTTON {
+                    phys |= 1 << bit;
+                }
+            }
             // gilrs Y is up-positive, DirectInput lY down-positive.
             let axis = [
-                axis_value(pad.value(gilrs::Axis::LeftStickX)),
-                axis_value(-pad.value(gilrs::Axis::LeftStickY)),
+                axis_value(pad.value(Axis::LeftStickX)),
+                axis_value(-pad.value(Axis::LeftStickY)),
             ];
-            return PadState { buttons, axis };
+            return (phys, axis);
         }
-        self.events.state
+        (self.events.state.buttons, self.events.state.axis)
+    }
+
+    // One poll through the pad map: the state the game maps with th08.cfg, and the word bits the map adds.
+    pub fn poll(&mut self) -> (PadState, u16) {
+        let (phys, axis) = self.read();
+        self.map.apply(phys, axis)
     }
 }
 
@@ -383,7 +413,7 @@ mod tests {
         let mut j = Joystick::default();
         j.events.hat(1.0, 0.0);
         assert!(j.take_used());
-        assert_eq!(j.poll().axis, [1000, 0]);
+        assert_eq!(j.poll().0.axis, [1000, 0]);
     }
 
     // The event pad's input marks the pad as used once.

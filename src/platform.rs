@@ -7,6 +7,7 @@ pub mod gestures;
 pub mod hitbox;
 pub mod keymap;
 pub mod overlay;
+pub mod padmap;
 pub mod portmenu;
 pub mod safearea;
 pub mod screenshot;
@@ -385,9 +386,16 @@ fn is_score_file(name: &str) -> bool {
 }
 
 impl AppHost {
-    pub fn new(storage: Storage, touch: touch::TouchConfig, keys: &keymap::KeyMap) -> Self {
+    pub fn new(
+        storage: Storage,
+        touch: touch::TouchConfig,
+        keys: &keymap::KeyMap,
+        pads: &padmap::PadMap,
+    ) -> Self {
+        let mut joystick = crate::joystick::Joystick::new();
+        joystick.map = pads.clone();
         Self {
-            joystick: crate::joystick::Joystick::new(),
+            joystick,
             input: InputMux {
                 keyboard: Keyboard::new(keys),
                 touch: TouchSource::new(touch),
@@ -404,7 +412,10 @@ impl Host for AppHost {
             keys: self.input.poll(),
             ..Default::default()
         };
-        r.pads[0] = self.joystick.poll();
+        // Port-mapped pad bits count while the window is unfocused, like the original's background joystick.
+        let (pad, word) = self.joystick.poll();
+        r.pads[0] = pad;
+        r.keys[0] |= word;
         r
     }
     fn boot_clock_ms(&mut self) -> u32 {

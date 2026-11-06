@@ -273,6 +273,27 @@ pub const UI: &[(&str, &str)] = &[
         "keys_hint",
         "Click a key to remove it. A key in two rows sends both inputs. F1–F12 and Alt stay port keys.",
     ),
+    ("pad_none", "No gamepad connected"),
+    ("pad_connected", "Gamepad: {name}"),
+    ("pad_press", "press a button on the pad… {s} s"),
+    ("pad_add", "add a button"),
+    ("pad_defaults", "Defaults (th08.cfg)"),
+    (
+        "pad_mode_cfg",
+        "Mapping: the game's own pad config (th08.cfg)",
+    ),
+    (
+        "pad_mode_port",
+        "Mapping: the rows below (th08.cfg's pad buttons are ignored)",
+    ),
+    ("pad_stick", "Left stick"),
+    ("pad_dpad", "D-pad"),
+    (
+        "pad_hint",
+        "While every row is at its default, the game maps the pad with th08.cfg and its in-game Key Config, as \
+         before. Change a row and these rows map the pad instead: th08.cfg's pad buttons and its Shot Slow option \
+         no longer apply. The d-pad always steers. Select opens the port menu.",
+    ),
     ("screenshot", "Screenshot"),
     ("screenshot_saved", "Screenshot saved: {path}"),
     ("screenshot_failed", "Screenshot failed: {err}"),

@@ -663,6 +663,9 @@ impl App {
             model.set_fullscreen(self.display.fullscreen);
         }
         model.view = view;
+        if cfg!(not(any(target_arch = "wasm32", target_os = "android"))) {
+            model.attach_pad();
+        }
         Screen::new(self.window(), gfx, model)
     }
 

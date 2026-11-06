@@ -10,6 +10,7 @@ use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::window::Window;
 
+mod gamepad;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 mod replay_tab;
 
@@ -361,6 +362,7 @@ pub struct Model {
     last_error: Option<String>,
     // The Keyboard row waiting for a key press (its entry key).
     capture: Option<&'static str>,
+    pad: gamepad::PadUi,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     update: Update,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -443,6 +445,7 @@ impl Model {
             view: View::Settings,
             last_error,
             capture: None,
+            pad: gamepad::PadUi::default(),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             update: if crate::update::wanted(s) {
                 Update::Pending
@@ -997,9 +1000,15 @@ impl Model {
         egui::CollapsingHeader::new(egui::RichText::new(i18n::group_title(lang, g)).strong())
             .id_salt(g.id())
             .default_open(
-                matches!(g, Group::GameData | Group::Language | Group::Display) || set_here,
+                matches!(g, Group::GameData | Group::Language | Group::Display)
+                    || set_here
+                    || (g == Group::Gamepad && self.pad.capture.is_some()),
             )
             .show(ui, |ui| {
+                if g == Group::Gamepad {
+                    self.pad_section_ui(ui, &rows, lang);
+                    return;
+                }
                 egui::Grid::new(g.id())
                     .num_columns(2)
                     .striped(true)
@@ -1104,6 +1113,9 @@ impl Model {
                 }
             });
             ui.end_row();
+        }
+        if capture.is_some() {
+            self.pad.capture = None;
         }
         self.capture = capture;
     }
@@ -1844,12 +1856,16 @@ impl Screen {
         if let WindowEvent::KeyboardInput { event, .. } = ev
             && event.state == winit::event::ElementState::Pressed
             && let winit::keyboard::PhysicalKey::Code(k) = event.physical_key
-            && self.p.model.capture.is_some()
         {
-            if !event.repeat {
-                self.p.model.capture_key(k);
+            if self.p.model.capture.is_some() {
+                if !event.repeat {
+                    self.p.model.capture_key(k);
+                }
+                return true;
             }
-            return true;
+            if k == KeyCode::Escape && self.p.model.cancel_pad_capture() {
+                return true;
+            }
         }
         self.state.on_window_event(window, ev).repaint
     }

@@ -117,6 +117,16 @@ keys_conflict = "ほかの割り当て: {list}"
 keys_original = "元のキー配置"
 keys_wasd = "WASD + J / K / L"
 keys_hint = "キーをクリックすると解除します。二つの行にあるキーは両方の入力を送ります。F1〜F12 と Alt は移植版のキーのままです。"
+pad_none = "ゲームパッドが接続されていません"
+pad_connected = "ゲームパッド: {name}"
+pad_press = "パッドのボタンを押してください… {s} 秒"
+pad_add = "ボタンを追加"
+pad_defaults = "初期設定 (th08.cfg)"
+pad_mode_cfg = "割り当て: ゲーム本来のパッド設定 (th08.cfg)"
+pad_mode_port = "割り当て: 下の行 (th08.cfg のパッドボタンは使われません)"
+pad_stick = "左スティック"
+pad_dpad = "十字キー"
+pad_hint = "すべての行が初期設定のあいだは、これまでどおり th08.cfg とゲーム内のキーコンフィグでパッドを割り当てます。行を一つでも変えると、この行の割り当てが使われます。th08.cfg のパッドボタンと ShotSlow 設定は効かなくなります。十字キーは常に移動に使えます。Select で移植版メニューを開きます。"
 screenshot = "スクリーンショット"
 screenshot_saved = "スクリーンショットを保存しました: {path}"
 screenshot_failed = "スクリーンショットに失敗しました: {err}"
@@ -154,6 +164,7 @@ display = "画面"
 sound = "サウンド"
 accessibility = "アクセシビリティ"
 keyboard = "キーボード"
+gamepad = "ゲームパッド"
 touch = "タッチ操作"
 start_game = "ゲーム開始"
 cheats = "チート／デバッグ"
@@ -405,6 +416,70 @@ summary = "ポーズメニューからやり直し"
 help = "ポーズメニューのやり直しショートカットのキー（キー名をカンマ区切り、または none）"
 
 [entry.key_retry.words]
+none = "なし"
+
+[entry.pad_shot]
+label = "パッド: ショット"
+summary = "ショット、メニューで決定"
+help = "ショットのパッドボタン: South, East, West, North, LeftTrigger, RightTrigger, LeftTrigger2, RightTrigger2, Start, LeftThumb, RightThumb, LeftZ, RightZ, RightStickUp / Down / Left / Right をカンマ区切り、または none。初期設定から変えた行があると th08.cfg のパッド設定の代わりに使われます"
+
+[entry.pad_shot.words]
+none = "なし"
+
+[entry.pad_bomb]
+label = "パッド: ボム"
+summary = "スペルカード、メニューでキャンセル"
+help = "ボムのパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_bomb.words]
+none = "なし"
+
+[entry.pad_focus]
+label = "パッド: 低速"
+summary = "低速移動とパートナーのショット"
+help = "低速のパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_focus.words]
+none = "なし"
+
+[entry.pad_pause]
+label = "パッド: ポーズ"
+summary = "ポーズメニュー"
+help = "ポーズのパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_pause.words]
+none = "なし"
+
+[entry.pad_skip]
+label = "パッド: スキップ"
+summary = "会話の早送り"
+help = "スキップのパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_skip.words]
+none = "なし"
+
+[entry.pad_enter]
+label = "パッド: Enter"
+summary = "メニューで決定"
+help = "Enter のパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_enter.words]
+none = "なし"
+
+[entry.pad_quit]
+label = "パッド: 終了 (Q)"
+summary = "ポーズメニューから終了"
+help = "ポーズメニューの終了ショートカットのパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_quit.words]
+none = "なし"
+
+[entry.pad_retry]
+label = "パッド: やり直し (R)"
+summary = "ポーズメニューからやり直し"
+help = "ポーズメニューのやり直しショートカットのパッドボタン（ボタン名をカンマ区切り、または none）"
+
+[entry.pad_retry.words]
 none = "なし"
 
 [entry.screenshot_size]

@@ -102,6 +102,7 @@ pub enum Group {
     Sound,
     Accessibility,
     Keyboard,
+    Gamepad,
     Touch,
     StartGame,
     Cheats,
@@ -109,13 +110,14 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 10] = [
+    pub const ALL: [Group; 11] = [
         Group::GameData,
         Group::Language,
         Group::Display,
         Group::Sound,
         Group::Accessibility,
         Group::Keyboard,
+        Group::Gamepad,
         Group::Touch,
         Group::StartGame,
         Group::Cheats,
@@ -131,6 +133,7 @@ impl Group {
             Group::Sound => "sound",
             Group::Accessibility => "accessibility",
             Group::Keyboard => "keyboard",
+            Group::Gamepad => "gamepad",
             Group::Touch => "touch",
             Group::StartGame => "start_game",
             Group::Cheats => "cheats",
@@ -147,6 +150,7 @@ impl Group {
             Group::Sound => "Sound",
             Group::Accessibility => "Accessibility",
             Group::Keyboard => "Keyboard",
+            Group::Gamepad => "Gamepad",
             Group::Touch => "Touch controls",
             Group::StartGame => "Start game",
             Group::Cheats => "Cheats/debug",
@@ -298,6 +302,7 @@ pub struct Settings {
     pub blit: th08_render::gfx::BlitOptions,
     pub hitboxes: crate::platform::hitbox::Hitboxes,
     pub keys: crate::platform::keymap::KeyMap,
+    pub pads: crate::platform::padmap::PadMap,
     // F12 / port-menu screenshots at the window size (else 640×480).
     pub screenshot_window: bool,
     // Input display corner (None = off) and opacity 0–1.
@@ -391,6 +396,7 @@ impl Settings {
             blit: th08_render::gfx::BlitOptions::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
             keys: crate::platform::keymap::KeyMap::default(),
+            pads: crate::platform::padmap::PadMap::default(),
             screenshot_window: false,
             input_display: None,
             input_opacity: 0.8,
@@ -523,6 +529,28 @@ macro_rules! key_entry {
             persist: true,
             help: $help,
             set: |s, v| s.keys.set($i, v),
+        }
+    };
+}
+
+// A Gamepad row: the pad buttons of game input `padmap::INPUTS[$i]`; read on Android too (no screen there).
+macro_rules! pad_entry {
+    ($i:literal, $env:literal, $label:literal, $summary:literal, $help:literal) => {
+        Entry {
+            key: crate::platform::padmap::INPUTS[$i].key,
+            env: $env,
+            kind: Kind::Text("BUTTON[,BUTTON…] | none"),
+            default: crate::platform::padmap::INPUTS[$i].default,
+            group: Group::Gamepad,
+            label: $label,
+            summary: $summary,
+            unit: "",
+            words: &[("none", "Not bound")],
+            audience: Audience::Player,
+            platforms: Platforms::DESKTOP,
+            persist: true,
+            help: $help,
+            set: |s, v| s.pads.set($i, v),
         }
     };
 }
@@ -1059,6 +1087,62 @@ pub const ENTRIES: &[Entry] = &[
         "Retry (R)",
         "Restart from the pause menu",
         "keys for the pause menu's retry shortcut (key names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        0,
+        "TH08_PAD_SHOT",
+        "Pad shot",
+        "Shoot; confirm in menus",
+        "pad buttons for shot: South, East, West, North, LeftTrigger, RightTrigger, LeftTrigger2, RightTrigger2, Start, LeftThumb, RightThumb, LeftZ, RightZ or RightStickUp / Down / Left / Right, comma-separated, or none; any row off its default replaces th08.cfg's pad config"
+    ),
+    pad_entry!(
+        1,
+        "TH08_PAD_BOMB",
+        "Pad bomb",
+        "Spell card; cancel in menus",
+        "pad buttons for bomb (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        2,
+        "TH08_PAD_FOCUS",
+        "Pad focus",
+        "Slow movement and the partner's shot",
+        "pad buttons for focus (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        3,
+        "TH08_PAD_PAUSE",
+        "Pad pause",
+        "Pause menu",
+        "pad buttons for pause (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        4,
+        "TH08_PAD_SKIP",
+        "Pad skip",
+        "Fast-forward dialogue",
+        "pad buttons for skip (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        5,
+        "TH08_PAD_ENTER",
+        "Pad enter",
+        "Confirm in menus",
+        "pad buttons for enter (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        6,
+        "TH08_PAD_QUIT",
+        "Pad quit (Q)",
+        "Quit from the pause menu",
+        "pad buttons for the pause menu's quit shortcut (button names, comma-separated, or none)"
+    ),
+    pad_entry!(
+        7,
+        "TH08_PAD_RETRY",
+        "Pad retry (R)",
+        "Restart from the pause menu",
+        "pad buttons for the pause menu's retry shortcut (button names, comma-separated, or none)"
     ),
     Entry {
         key: "screenshot_size",
@@ -2367,6 +2451,7 @@ impl Settings {
             self.storage(),
             self.touch.clone(),
             &self.keys,
+            &self.pads,
         ))
     }
 
@@ -3156,6 +3241,43 @@ mod tests {
         assert!(Settings::default().keys == crate::platform::keymap::KeyMap::default());
         assert!(find("key_down").unwrap().check("KeyS,Numpad2").is_ok());
         assert!(find("key_down").unwrap().check("F1").is_err());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    // Gamepad rows load from and save to port.cfg; a bad value keeps the default.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn port_cfg_pads() {
+        use crate::platform::padmap::{PadMap, RIGHT_Z};
+        let d = std::env::temp_dir().join(format!("th08-portcfg-pads-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let dirs = PlatformDirs {
+            config: Some(d.clone()),
+            ..PlatformDirs::default()
+        };
+        assert!(!Settings::game_environment(dirs.clone()).pads.custom());
+        try_write_port_cfg(
+            &dirs,
+            &[
+                ("pad_shot", Some("RightTrigger2,South")),
+                ("pad_bomb", Some("RightZ")),
+                ("pad_focus", Some("Select")),
+                ("pad_enter", Some("Start")),
+            ],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(d.join("port.cfg")).unwrap();
+        assert!(text.contains("pad_shot = RightTrigger2,South\n"), "{text}");
+        let s = Settings::game_environment(dirs);
+        assert_eq!(s.pads.binds[0], [7, 0]);
+        assert_eq!(s.pads.binds[1], [RIGHT_Z]);
+        assert_eq!(s.pads.binds[2], PadMap::default().binds[2]);
+        assert_eq!(s.pads.binds[5], [9]);
+        assert!(s.pads.custom());
+        assert!(Settings::default().pads == PadMap::default());
+        assert!(find("pad_skip").unwrap().check("North,LeftZ").is_ok());
+        assert!(find("pad_skip").unwrap().check("DPadUp").is_err());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

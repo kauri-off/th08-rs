@@ -117,6 +117,16 @@ keys_conflict = "также назначена на: {list}"
 keys_original = "Исходные клавиши"
 keys_wasd = "WASD + J / K / L"
 keys_hint = "Щелчок по клавише снимает её. Клавиша в двух строках посылает оба действия. F1–F12 и Alt остаются клавишами порта."
+pad_none = "Геймпад не подключён"
+pad_connected = "Геймпад: {name}"
+pad_press = "нажмите кнопку на геймпаде… {s} с"
+pad_add = "добавить кнопку"
+pad_defaults = "По умолчанию (th08.cfg)"
+pad_mode_cfg = "Назначение: собственная настройка геймпада в игре (th08.cfg)"
+pad_mode_port = "Назначение: строки ниже (кнопки геймпада из th08.cfg не действуют)"
+pad_stick = "Левый стик"
+pad_dpad = "Крестовина"
+pad_hint = "Пока все строки по умолчанию, игра назначает кнопки геймпада по th08.cfg и своему меню Key Config, как раньше. Измените любую строку — и кнопки назначают эти строки: кнопки геймпада из th08.cfg и опция Shot Slow больше не действуют. Крестовина всегда управляет движением. Select открывает меню порта."
 screenshot = "Снимок экрана"
 screenshot_saved = "Снимок сохранён: {path}"
 screenshot_failed = "Не удалось сделать снимок: {err}"
@@ -154,6 +164,7 @@ display = "Экран"
 sound = "Звук"
 accessibility = "Специальные возможности"
 keyboard = "Клавиатура"
+gamepad = "Геймпад"
 touch = "Сенсорное управление"
 start_game = "Запуск игры"
 cheats = "Читы и отладка"
@@ -405,6 +416,70 @@ summary = "Перезапуск из меню паузы"
 help = "клавиши быстрого перезапуска в меню паузы (имена через запятую или none)"
 
 [entry.key_retry.words]
+none = "Не назначено"
+
+[entry.pad_shot]
+label = "Геймпад: выстрел"
+summary = "Стрельба; подтверждение в меню"
+help = "кнопки геймпада для выстрела: South, East, West, North, LeftTrigger, RightTrigger, LeftTrigger2, RightTrigger2, Start, LeftThumb, RightThumb, LeftZ, RightZ или RightStickUp / Down / Left / Right через запятую, или none; любая строка не по умолчанию заменяет настройку геймпада из th08.cfg"
+
+[entry.pad_shot.words]
+none = "Не назначено"
+
+[entry.pad_bomb]
+label = "Геймпад: бомба"
+summary = "Спелл-карта; отмена в меню"
+help = "кнопки геймпада для бомбы (имена через запятую или none)"
+
+[entry.pad_bomb.words]
+none = "Не назначено"
+
+[entry.pad_focus]
+label = "Геймпад: фокус"
+summary = "Медленное движение и выстрел партнёра"
+help = "кнопки геймпада для фокуса (имена через запятую или none)"
+
+[entry.pad_focus.words]
+none = "Не назначено"
+
+[entry.pad_pause]
+label = "Геймпад: пауза"
+summary = "Меню паузы"
+help = "кнопки геймпада для паузы (имена через запятую или none)"
+
+[entry.pad_pause.words]
+none = "Не назначено"
+
+[entry.pad_skip]
+label = "Геймпад: пропуск"
+summary = "Перемотка диалогов"
+help = "кнопки геймпада для пропуска (имена через запятую или none)"
+
+[entry.pad_skip.words]
+none = "Не назначено"
+
+[entry.pad_enter]
+label = "Геймпад: Enter"
+summary = "Подтверждение в меню"
+help = "кнопки геймпада для Enter (имена через запятую или none)"
+
+[entry.pad_enter.words]
+none = "Не назначено"
+
+[entry.pad_quit]
+label = "Геймпад: выход (Q)"
+summary = "Выход из меню паузы"
+help = "кнопки геймпада для быстрого выхода в меню паузы (имена через запятую или none)"
+
+[entry.pad_quit.words]
+none = "Не назначено"
+
+[entry.pad_retry]
+label = "Геймпад: заново (R)"
+summary = "Перезапуск из меню паузы"
+help = "кнопки геймпада для быстрого перезапуска в меню паузы (имена через запятую или none)"
+
+[entry.pad_retry.words]
 none = "Не назначено"
 
 [entry.screenshot_size]
