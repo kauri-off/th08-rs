@@ -25,6 +25,8 @@ pub struct PortMenu {
     pub controller: Option<String>,
     // Active Cheats rows (`Settings::active_cheats`), shown as a no-saves note.
     pub cheats: Vec<&'static str>,
+    // The last screenshot's outcome (set by the app).
+    pub status: Option<String>,
     // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
@@ -69,6 +71,7 @@ impl PortMenu {
             generation: None,
             controller: None,
             cheats: Vec::new(),
+            status: None,
             touch,
             edit: None,
             saved: None,
@@ -116,6 +119,7 @@ impl PortMenu {
         }
         let pad = self.controller.as_deref();
         let cheats = &self.cheats;
+        let status = self.status.as_deref();
         let (edit, touch) = (&mut self.edit, self.touch.is_some());
         let mut open_edit = false;
         let mut done = None;
@@ -125,7 +129,7 @@ impl PortMenu {
             if let Some(e) = edit {
                 done = e.ui(ctx, lang, ppp);
             } else {
-                (act, open_edit, cycle) = menu_ui(ctx, lang, pad, touch, cheats, hitboxes);
+                (act, open_edit, cycle) = menu_ui(ctx, lang, pad, touch, cheats, hitboxes, status);
             }
         });
         if cycle {
@@ -186,6 +190,7 @@ fn menu_ui(
     touch: bool,
     cheats: &[&str],
     hitboxes: super::hitbox::Hitboxes,
+    status: Option<&str>,
 ) -> (Option<Action>, bool, bool) {
     let mut act = None;
     let mut edit = false;
@@ -218,6 +223,18 @@ fn menu_ui(
                         }
                         ui.add_space(4.0);
                         cycle = ui.button(hitboxes_label(lang, hitboxes)).clicked();
+                        ui.add_space(4.0);
+                        let shot = if cfg!(any(target_os = "android", target_arch = "wasm32")) {
+                            i18n::ui(lang, "screenshot").to_string()
+                        } else {
+                            format!("{} (F12)", i18n::ui(lang, "screenshot"))
+                        };
+                        if ui.button(shot).clicked() {
+                            act = Some(Action::Screenshot);
+                        }
+                        if let Some(s) = status {
+                            ui.label(RichText::new(s).small());
+                        }
                         ui.add_space(4.0);
                         let keys = if cfg!(target_os = "android") {
                             i18n::ui(lang, "key_back")

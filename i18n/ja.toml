@@ -111,12 +111,22 @@ tr_failed = "{lang}: {err}"
 tr_needs_data = "先にゲームフォルダを選んでください: th08.dat または th08.pak を読み込みます"
 tr_attribution = "翻訳: Touhou Patch Center (thpatch.net) とその協力者、CC BY-SA 4.0。ゲームのテキストは上海アリス幻樂団によるものです。パックはこの端末の {dir} に作成され、個人利用に限ります。"
 tr_site_storage = "このブラウザのサイトデータ"
+keys_press = "キーを押してください…"
+keys_add = "キーを追加"
+keys_conflict = "ほかの割り当て: {list}"
+keys_original = "元のキー配置"
+keys_wasd = "WASD + J / K / L"
+keys_hint = "キーをクリックすると解除します。二つの行にあるキーは両方の入力を送ります。F1〜F12 と Alt は移植版のキーのままです。"
+screenshot = "スクリーンショット"
+screenshot_saved = "スクリーンショットを保存しました: {path}"
+screenshot_failed = "スクリーンショットに失敗しました: {err}"
 [group]
 language = "言語"
 game_data = "ゲームデータ"
 display = "画面"
 sound = "サウンド"
 accessibility = "アクセシビリティ"
+keyboard = "キーボード"
 touch = "タッチ操作"
 start_game = "ゲーム開始"
 cheats = "チート／デバッグ"
@@ -268,6 +278,111 @@ help = "当たり判定ビューア: off、player（自機の当たり判定と�
 off = "オフ"
 player = "自機"
 all = "すべて"
+
+[entry.key_up]
+label = "上"
+summary = "上へ移動、メニューのカーソルを上へ"
+help = "上のキー: ArrowUp、KeyW、Numpad8 などの W3C キー名をカンマ区切りで、または none"
+
+[entry.key_up.words]
+none = "なし"
+
+[entry.key_down]
+label = "下"
+summary = "下へ移動、メニューのカーソルを下へ"
+help = "下のキー（キー名をカンマ区切り、または none）"
+
+[entry.key_down.words]
+none = "なし"
+
+[entry.key_left]
+label = "左"
+summary = "左へ移動"
+help = "左のキー（キー名をカンマ区切り、または none）"
+
+[entry.key_left.words]
+none = "なし"
+
+[entry.key_right]
+label = "右"
+summary = "右へ移動"
+help = "右のキー（キー名をカンマ区切り、または none）"
+
+[entry.key_right.words]
+none = "なし"
+
+[entry.key_shot]
+label = "ショット"
+summary = "ショット、メニューで決定"
+help = "ショットのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_shot.words]
+none = "なし"
+
+[entry.key_bomb]
+label = "ボム"
+summary = "スペルカード、メニューでキャンセル"
+help = "ボムのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_bomb.words]
+none = "なし"
+
+[entry.key_focus]
+label = "低速"
+summary = "低速移動とパートナーのショット"
+help = "低速のキー（キー名をカンマ区切り、または none）"
+
+[entry.key_focus.words]
+none = "なし"
+
+[entry.key_pause]
+label = "ポーズ"
+summary = "ポーズメニュー"
+help = "ポーズのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_pause.words]
+none = "なし"
+
+[entry.key_skip]
+label = "スキップ"
+summary = "会話の早送り"
+help = "スキップのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_skip.words]
+none = "なし"
+
+[entry.key_enter]
+label = "Enter"
+summary = "メニューで決定"
+help = "Enter のキー（キー名をカンマ区切り、または none）"
+
+[entry.key_enter.words]
+none = "なし"
+
+[entry.key_quit]
+label = "終了 (Q)"
+summary = "ポーズメニューから終了"
+help = "ポーズメニューの終了ショートカットのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_quit.words]
+none = "なし"
+
+[entry.key_retry]
+label = "やり直し (R)"
+summary = "ポーズメニューからやり直し"
+help = "ポーズメニューのやり直しショートカットのキー（キー名をカンマ区切り、または none）"
+
+[entry.key_retry.words]
+none = "なし"
+
+[entry.screenshot_size]
+label = "スクリーンショットの大きさ"
+summary = "F12 と移植版メニューで screenshots/ に PNG を保存"
+help = "スクリーンショットの大きさ: game（640x480 の画面）または window（ウィンドウと同じ拡大）"
+
+[entry.screenshot_size.words]
+game = "640×480"
+window = "ウィンドウの大きさ"
 
 [entry.touch]
 label = "タッチオーバーレイ"

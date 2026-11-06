@@ -111,12 +111,22 @@ tr_failed = "{lang}: {err}"
 tr_needs_data = "сначала выберите папку игры: импорт читает th08.dat или th08.pak"
 tr_attribution = "Переводы: Touhou Patch Center (thpatch.net) и его участники, CC BY-SA 4.0; текст игры — Team Shanghai Alice. Пакеты собираются на этом устройстве в {dir}, для личного использования."
 tr_site_storage = "хранилище сайта в этом браузере"
+keys_press = "нажмите клавишу…"
+keys_add = "добавить клавишу"
+keys_conflict = "также назначена на: {list}"
+keys_original = "Исходные клавиши"
+keys_wasd = "WASD + J / K / L"
+keys_hint = "Щелчок по клавише снимает её. Клавиша в двух строках посылает оба действия. F1–F12 и Alt остаются клавишами порта."
+screenshot = "Снимок экрана"
+screenshot_saved = "Снимок сохранён: {path}"
+screenshot_failed = "Не удалось сделать снимок: {err}"
 [group]
 language = "Язык"
 game_data = "Данные игры"
 display = "Экран"
 sound = "Звук"
 accessibility = "Специальные возможности"
+keyboard = "Клавиатура"
 touch = "Сенсорное управление"
 start_game = "Запуск игры"
 cheats = "Читы и отладка"
@@ -268,6 +278,111 @@ help = "показ хитбоксов: off, player (хитбокс персон�
 off = "Выкл."
 player = "Персонаж"
 all = "Все"
+
+[entry.key_up]
+label = "Вверх"
+summary = "Движение вверх; курсор меню вверх"
+help = "клавиши «вверх»: имена клавиш W3C, например ArrowUp, KeyW или Numpad8, через запятую, или none"
+
+[entry.key_up.words]
+none = "Не назначено"
+
+[entry.key_down]
+label = "Вниз"
+summary = "Движение вниз; курсор меню вниз"
+help = "клавиши «вниз» (имена через запятую или none)"
+
+[entry.key_down.words]
+none = "Не назначено"
+
+[entry.key_left]
+label = "Влево"
+summary = "Движение влево"
+help = "клавиши «влево» (имена через запятую или none)"
+
+[entry.key_left.words]
+none = "Не назначено"
+
+[entry.key_right]
+label = "Вправо"
+summary = "Движение вправо"
+help = "клавиши «вправо» (имена через запятую или none)"
+
+[entry.key_right.words]
+none = "Не назначено"
+
+[entry.key_shot]
+label = "Выстрел"
+summary = "Стрельба; подтверждение в меню"
+help = "клавиши выстрела (имена через запятую или none)"
+
+[entry.key_shot.words]
+none = "Не назначено"
+
+[entry.key_bomb]
+label = "Бомба"
+summary = "Спелл-карта; отмена в меню"
+help = "клавиши бомбы (имена через запятую или none)"
+
+[entry.key_bomb.words]
+none = "Не назначено"
+
+[entry.key_focus]
+label = "Фокус"
+summary = "Медленное движение и выстрел напарника"
+help = "клавиши фокуса (имена через запятую или none)"
+
+[entry.key_focus.words]
+none = "Не назначено"
+
+[entry.key_pause]
+label = "Пауза"
+summary = "Меню паузы"
+help = "клавиши паузы (имена через запятую или none)"
+
+[entry.key_pause.words]
+none = "Не назначено"
+
+[entry.key_skip]
+label = "Пропуск"
+summary = "Перемотка диалогов"
+help = "клавиши пропуска (имена через запятую или none)"
+
+[entry.key_skip.words]
+none = "Не назначено"
+
+[entry.key_enter]
+label = "Enter"
+summary = "Подтверждение в меню"
+help = "клавиши Enter (имена через запятую или none)"
+
+[entry.key_enter.words]
+none = "Не назначено"
+
+[entry.key_quit]
+label = "Выход (Q)"
+summary = "Выход из меню паузы"
+help = "клавиши быстрого выхода в меню паузы (имена через запятую или none)"
+
+[entry.key_quit.words]
+none = "Не назначено"
+
+[entry.key_retry]
+label = "Заново (R)"
+summary = "Перезапуск из меню паузы"
+help = "клавиши быстрого перезапуска в меню паузы (имена через запятую или none)"
+
+[entry.key_retry.words]
+none = "Не назначено"
+
+[entry.screenshot_size]
+label = "Размер снимка"
+summary = "F12 и меню порта сохраняют PNG в screenshots/"
+help = "размер снимка: game (кадр 640x480) или window (масштаб окна)"
+
+[entry.screenshot_size.words]
+game = "640×480"
+window = "Размер окна"
 
 [entry.touch]
 label = "Сенсорные кнопки"

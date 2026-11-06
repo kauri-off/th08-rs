@@ -2130,6 +2130,66 @@ impl Gfx {
         image::RgbaImage::from_raw(w, h, px).unwrap()
     }
 
+    // Starts a read-back of the last rendered 640x480 frame, or of it blitted like the window into a w×h target
+    // (no overlays); `Readback::poll` returns the RGBA image once the copy has landed.
+    pub fn snapshot(&self, size: Option<(u32, u32)>) -> Readback {
+        let mut enc = encoder(&self.device);
+        let scaled = size.map(|(w, h)| {
+            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: extent(w.max(1), h.max(1)),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            self.blit(&mut enc, &view(&t), t.width(), t.height());
+            t
+        });
+        let src = scaled.as_ref().unwrap_or(&self.gpu.frame);
+        let (w, h) = (src.width(), src.height());
+        let row = (w * 4).div_ceil(256) * 256;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("snapshot"),
+            size: u64::from(row * h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            src.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            extent(w, h),
+        );
+        self.queue.submit([enc.finish()]);
+        let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let st = state.clone();
+        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            st.store(
+                if r.is_ok() { 1 } else { 2 },
+                std::sync::atomic::Ordering::Release,
+            );
+        });
+        Readback {
+            buf,
+            size: (w, h),
+            row,
+            bgra: matches!(
+                self.config.format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            ),
+            state,
+        }
+    }
+
     fn clear_batches(&mut self) {
         if let Some(l) = &mut self.log {
             l.clear();
@@ -2420,6 +2480,49 @@ fn copy_region(
     });
     enc.copy_texture_to_texture(info(src, from), info(&scratch, [0, 0]), ext);
     enc.copy_texture_to_texture(info(&scratch, [0, 0]), info(dst, to), ext);
+}
+
+// A frame copy in flight (`Gfx::snapshot`).
+pub struct Readback {
+    buf: wgpu::Buffer,
+    size: (u32, u32),
+    row: u32,
+    bgra: bool,
+    // 0 pending, 1 mapped, 2 failed.
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl Readback {
+    // The image once mapped (native: waits for it; web: None until the browser has mapped the buffer).
+    pub fn poll(&self, device: &wgpu::Device) -> Option<Result<image::RgbaImage, String>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        #[cfg(target_arch = "wasm32")]
+        let _ = device.poll(wgpu::PollType::Poll);
+        match self.state.load(std::sync::atomic::Ordering::Acquire) {
+            0 => None,
+            2 => Some(Err("the frame could not be read back".into())),
+            _ => {
+                let (w, h) = self.size;
+                let data = self.buf.slice(..).get_mapped_range().ok()?.to_vec();
+                let mut px: Vec<u8> = data
+                    .chunks_exact(self.row as usize)
+                    .flat_map(|r| &r[..(w * 4) as usize])
+                    .copied()
+                    .collect();
+                if self.bgra {
+                    px.as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .for_each(|p| p.swap(0, 2));
+                }
+                Some(
+                    image::RgbaImage::from_raw(w, h, px)
+                        .ok_or_else(|| "bad frame size".to_string()),
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -101,6 +101,7 @@ pub enum Group {
     Display,
     Sound,
     Accessibility,
+    Keyboard,
     Touch,
     StartGame,
     Cheats,
@@ -108,12 +109,13 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 9] = [
+    pub const ALL: [Group; 10] = [
         Group::GameData,
         Group::Language,
         Group::Display,
         Group::Sound,
         Group::Accessibility,
+        Group::Keyboard,
         Group::Touch,
         Group::StartGame,
         Group::Cheats,
@@ -128,6 +130,7 @@ impl Group {
             Group::Display => "display",
             Group::Sound => "sound",
             Group::Accessibility => "accessibility",
+            Group::Keyboard => "keyboard",
             Group::Touch => "touch",
             Group::StartGame => "start_game",
             Group::Cheats => "cheats",
@@ -143,6 +146,7 @@ impl Group {
             Group::Display => "Display",
             Group::Sound => "Sound",
             Group::Accessibility => "Accessibility",
+            Group::Keyboard => "Keyboard",
             Group::Touch => "Touch controls",
             Group::StartGame => "Start game",
             Group::Cheats => "Cheats/debug",
@@ -293,6 +297,9 @@ pub struct Settings {
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
     pub hitboxes: crate::platform::hitbox::Hitboxes,
+    pub keys: crate::platform::keymap::KeyMap,
+    // F12 / port-menu screenshots at the window size (else 640×480).
+    pub screenshot_window: bool,
     pub volume: th08_audio::audio::PortVolume,
     pub mute_unfocused: bool,
     pub audio_buffer: Option<u32>,
@@ -378,6 +385,8 @@ impl Settings {
             pause_unfocused: true,
             blit: th08_render::gfx::BlitOptions::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
+            keys: crate::platform::keymap::KeyMap::default(),
+            screenshot_window: false,
             volume: th08_audio::audio::PortVolume::default(),
             mute_unfocused: true,
             audio_buffer: None,
@@ -486,6 +495,28 @@ fn parse_ending(v: &str) -> Result<Ending, String> {
         shot,
         kind: k.chars().next().unwrap_or('b'),
     })
+}
+
+// A Keyboard row: the keys of game input `INPUTS[$i]`.
+macro_rules! key_entry {
+    ($i:literal, $env:literal, $label:literal, $summary:literal, $help:literal) => {
+        Entry {
+            key: crate::platform::keymap::INPUTS[$i].key,
+            env: $env,
+            kind: Kind::Text("KEY[,KEY…] | none"),
+            default: crate::platform::keymap::INPUTS[$i].default,
+            group: Group::Keyboard,
+            label: $label,
+            summary: $summary,
+            unit: "",
+            words: &[("none", "Not bound")],
+            audience: Audience::Player,
+            platforms: Platforms::DESKTOP_WEB,
+            persist: true,
+            help: $help,
+            set: |s, v| s.keys.set($i, v),
+        }
+    };
 }
 
 pub const ENTRIES: &[Entry] = &[
@@ -915,6 +946,113 @@ pub const ENTRIES: &[Entry] = &[
         set: |s, v| {
             s.hitboxes =
                 crate::platform::hitbox::Hitboxes::parse(v).ok_or("expected off, player or all")?;
+            Ok(())
+        },
+    },
+    key_entry!(
+        0,
+        "TH08_KEY_UP",
+        "Up",
+        "Move up; menu cursor up",
+        "keys for up: W3C key names such as ArrowUp, KeyW or Numpad8, comma-separated, or none"
+    ),
+    key_entry!(
+        1,
+        "TH08_KEY_DOWN",
+        "Down",
+        "Move down; menu cursor down",
+        "keys for down (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        2,
+        "TH08_KEY_LEFT",
+        "Left",
+        "Move left",
+        "keys for left (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        3,
+        "TH08_KEY_RIGHT",
+        "Right",
+        "Move right",
+        "keys for right (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        4,
+        "TH08_KEY_SHOT",
+        "Shot",
+        "Shoot; confirm in menus",
+        "keys for shot (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        5,
+        "TH08_KEY_BOMB",
+        "Bomb",
+        "Spell card; cancel in menus",
+        "keys for bomb (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        6,
+        "TH08_KEY_FOCUS",
+        "Focus",
+        "Slow movement and the partner's shot",
+        "keys for focus (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        7,
+        "TH08_KEY_PAUSE",
+        "Pause",
+        "Pause menu",
+        "keys for pause (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        8,
+        "TH08_KEY_SKIP",
+        "Skip",
+        "Fast-forward dialogue",
+        "keys for skip (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        9,
+        "TH08_KEY_ENTER",
+        "Enter",
+        "Confirm in menus",
+        "keys for enter (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        10,
+        "TH08_KEY_QUIT",
+        "Quit (Q)",
+        "Quit from the pause menu",
+        "keys for the pause menu's quit shortcut (key names, comma-separated, or none)"
+    ),
+    key_entry!(
+        11,
+        "TH08_KEY_RETRY",
+        "Retry (R)",
+        "Restart from the pause menu",
+        "keys for the pause menu's retry shortcut (key names, comma-separated, or none)"
+    ),
+    Entry {
+        key: "screenshot_size",
+        env: "TH08_SCREENSHOT_SIZE",
+        kind: Kind::Enum(&["game", "window"]),
+        default: "game",
+        group: Group::Display,
+        label: "Screenshot resolution",
+        summary: "F12 and the port menu save a PNG into screenshots/",
+        unit: "",
+        words: &[("game", "640×480"), ("window", "Window size")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "screenshot size: game (the 640x480 frame) or window (scaled like the window)",
+        set: |s, v| {
+            s.screenshot_window = match v.trim() {
+                "game" => false,
+                "window" => true,
+                _ => return Err("expected game or window".into()),
+            };
             Ok(())
         },
     },
@@ -2149,6 +2287,7 @@ impl Settings {
         Box::new(crate::platform::AppHost::new(
             self.storage(),
             self.touch.clone(),
+            &self.keys,
         ))
     }
 
@@ -2906,6 +3045,38 @@ mod tests {
                 && t.contains("fullscreen = on\n")
                 && t.contains("game_dir = ")
         );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    // Keyboard rows: port.cfg round trip into the key map; a bad key name is rejected and leaves the default.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn port_cfg_keys() {
+        use winit::keyboard::KeyCode;
+        let d = std::env::temp_dir().join(format!("th08-portcfg-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let dirs = PlatformDirs {
+            config: Some(d.clone()),
+            ..PlatformDirs::default()
+        };
+        try_write_port_cfg(
+            &dirs,
+            &[
+                ("key_up", Some("KeyW,ArrowUp")),
+                ("key_bomb", Some("none")),
+                ("key_shot", Some("Bogus")),
+            ],
+        )
+        .unwrap();
+        let s = Settings::game_environment(dirs);
+        assert_eq!(s.keys.binds[0], [KeyCode::KeyW, KeyCode::ArrowUp]);
+        assert!(s.keys.binds[5].is_empty());
+        assert_eq!(s.keys.binds[4], [KeyCode::KeyZ]);
+        assert_eq!(s.value("key_up"), Some("KeyW,ArrowUp"));
+        assert!(Settings::default().keys == crate::platform::keymap::KeyMap::default());
+        assert!(find("key_down").unwrap().check("KeyS,Numpad2").is_ok());
+        assert!(find("key_down").unwrap().check("F1").is_err());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

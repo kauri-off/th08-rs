@@ -18,7 +18,7 @@ pub enum Action {
 impl Action {
     pub const ALL: [Action; 4] = [Action::Slower, Action::Pause, Action::Step, Action::Faster];
 
-    // Desktop keys; none of them is in the game's `KEYS` table.
+    // Desktop keys; none of them can be bound to a game input (`keymap.rs`).
     pub fn of_key(k: KeyCode) -> Option<Action> {
         match k {
             KeyCode::F5 => Some(Action::Pause),
@@ -125,6 +125,16 @@ mod tests {
         for k in [KeyCode::F5, KeyCode::F6, KeyCode::F7, KeyCode::F8] {
             assert!(Action::of_key(k).is_some());
             assert_eq!(crate::platform::map_key(k), 0);
+        }
+        for k in [
+            KeyCode::F1,
+            KeyCode::F3,
+            KeyCode::F5,
+            KeyCode::F8,
+            KeyCode::F11,
+            KeyCode::F12,
+        ] {
+            assert!(crate::platform::keymap::name(k).is_none());
         }
     }
 

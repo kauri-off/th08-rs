@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -60,6 +60,11 @@ fn main() {
         .find_map(|a| a.strip_prefix("--tr-install="))
         .map(String::from);
     let list = args.iter().any(|a| a == "--tr-list");
+    // A Keyboard row (`key_bomb`) shown waiting for a key press.
+    let capture = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--capture="))
+        .map(String::from);
     // A build with bundled game data: DIR as its bundled folder.
     let bundled = args
         .iter()
@@ -74,6 +79,7 @@ fn main() {
             && !a.starts_with("--config=")
             && !a.starts_with("--tr-install=")
             && !a.starts_with("--bundled=")
+            && !a.starts_with("--capture=")
     });
     let mut dirs = th08::launcher::desktop_dirs().tool();
     if let Some(c) = config {
@@ -106,6 +112,15 @@ fn main() {
         }
     }
     model.dev |= dev;
+    if let Some(k) = capture {
+        let Some(e) =
+            th08::settings::find(&k).filter(|e| e.group == th08::settings::Group::Keyboard)
+        else {
+            eprintln!("--capture={k}: not a Keyboard row");
+            std::process::exit(2);
+        };
+        model.start_capture(e.key);
+    }
     model.view = match error {
         Some(e) => th08::launcher::View::Error(e),
         None => view,

@@ -493,7 +493,7 @@ impl Store for WebStore {
     }
 
     fn keep_backup(&mut self, name: &str, zip: &[u8]) -> Result<String, String> {
-        download(name, zip)?;
+        download(name, "application/zip", zip)?;
         Ok(name.to_string())
     }
 }
@@ -505,13 +505,13 @@ fn js_err(e: &wasm_bindgen::JsValue) -> String {
 
 // Hands `data` to the browser as a file download named `name`.
 #[cfg(target_arch = "wasm32")]
-pub fn download(name: &str, data: &[u8]) -> Result<(), String> {
+pub fn download(name: &str, mime: &str, data: &[u8]) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     let w = web_sys::window().ok_or("no window")?;
     let doc = w.document().ok_or("no document")?;
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(data));
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/zip");
+    opts.set_type(mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
         .map_err(|e| js_err(&e))?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|e| js_err(&e))?;

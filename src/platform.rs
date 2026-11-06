@@ -5,63 +5,59 @@ pub mod framerate;
 pub mod gamepad;
 pub mod gestures;
 pub mod hitbox;
+pub mod keymap;
 pub mod overlay;
 pub mod portmenu;
 pub mod safearea;
+pub mod screenshot;
 pub mod touch;
 pub mod touchedit;
 
 use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
+#[cfg(test)]
 use th08_core::input::*;
 use winit::keyboard::KeyCode;
 
-// Input_Poll 0x43D970 DIK table, the default path: physical keys = DIK scan codes. Keypad 7/9/1/3 give the
-// diagonals; only the main Enter (0x1C) is mapped, keypad Enter (0x9C) is not.
-const KEYS: [(KeyCode, u16); 26] = [
-    (KeyCode::ArrowUp, UP),
-    (KeyCode::ArrowDown, DOWN),
-    (KeyCode::ArrowLeft, LEFT),
-    (KeyCode::ArrowRight, RIGHT),
-    (KeyCode::Numpad8, UP),
-    (KeyCode::Numpad2, DOWN),
-    (KeyCode::Numpad4, LEFT),
-    (KeyCode::Numpad6, RIGHT),
-    (KeyCode::Numpad7, UP | LEFT),
-    (KeyCode::Numpad9, UP | RIGHT),
-    (KeyCode::Numpad1, DOWN | LEFT),
-    (KeyCode::Numpad3, DOWN | RIGHT),
-    (KeyCode::KeyZ, SHOT),
-    (KeyCode::KeyX, BOMB),
-    (KeyCode::ShiftLeft, FOCUS),
-    (KeyCode::ShiftRight, FOCUS),
-    (KeyCode::Escape, PAUSE),
-    (KeyCode::ControlLeft, SKIP),
-    (KeyCode::ControlRight, SKIP),
-    (KeyCode::KeyQ, KEY_Q),
-    (KeyCode::KeyS, KEY_S),
-    (KeyCode::KeyR, KEY_R),
-    (KeyCode::Home, KEY_HOME),
-    (KeyCode::KeyP, KEY_HOME),
-    (KeyCode::Enter, ENTER),
-    (KeyCode::KeyD, KEY_D),
-];
-
+// Word bits of key `k` under the original table.
+#[cfg(test)]
 pub fn map_key(k: KeyCode) -> u16 {
-    KEYS.iter().find(|e| e.0 == k).map_or(0, |e| e.1)
+    keymap::KeyMap::default()
+        .table()
+        .iter()
+        .find(|e| e.0 == k)
+        .map_or(0, |e| e.1)
 }
 
-// The keyboard device: held keys (bit i = KEYS[i] down); each held key ORs its bits into the word.
-#[derive(Clone, Copy, Debug, Default)]
+// The keyboard device over a key table (`keymap.rs`; default = the original DIK table): held keys (bit i = table[i]
+// down); each held key ORs its bits into the word.
+#[derive(Clone, Debug)]
 pub struct Keyboard {
-    keys: u32,
+    table: std::sync::Arc<[(KeyCode, u16)]>,
+    keys: u64,
     // The keyboard read fails. Port: winit has no device read, so focus loss stands in for a failing
     // GetDeviceState (keys released).
     failed: bool,
 }
 
+impl Default for Keyboard {
+    fn default() -> Self {
+        Self::new(&keymap::KeyMap::default())
+    }
+}
+
 impl Keyboard {
+    pub fn new(map: &keymap::KeyMap) -> Self {
+        let mut t = map.table();
+        t.truncate(64);
+        Self {
+            table: t.into(),
+            keys: 0,
+            failed: false,
+        }
+    }
+
     pub fn key(&mut self, k: KeyCode, down: bool) {
-        let Some(i) = KEYS.iter().position(|e| e.0 == k) else {
+        let Some(i) = self.table.iter().position(|e| e.0 == k) else {
             return;
         };
         if down {
@@ -83,7 +79,8 @@ impl Keyboard {
         if self.failed {
             return 0;
         }
-        KEYS.iter()
+        self.table
+            .iter()
             .enumerate()
             .filter(|(i, _)| self.keys >> i & 1 != 0)
             .fold(0, |w, (_, e)| w | e.1)
@@ -380,12 +377,12 @@ pub struct AppHost {
 }
 
 impl AppHost {
-    pub fn new(storage: Storage, touch: touch::TouchConfig) -> Self {
+    pub fn new(storage: Storage, touch: touch::TouchConfig, keys: &keymap::KeyMap) -> Self {
         Self {
             joystick: crate::joystick::Joystick::new(),
             input: InputMux {
+                keyboard: Keyboard::new(keys),
                 touch: TouchSource::new(touch),
-                ..Default::default()
             },
             storage,
             ..Default::default()
@@ -552,6 +549,26 @@ mod tests {
         k.key(KeyCode::Home, true);
         k.key(KeyCode::Home, false);
         assert_eq!(k.word(), UP | KEY_HOME);
+    }
+
+    // A remapped keyboard: WASD moves, the old keys of a rebound input go quiet, an unbound input sends nothing.
+    #[test]
+    fn remapped_keyboard() {
+        let mut map = keymap::KeyMap::default();
+        map.set(0, "KeyW").unwrap();
+        map.set(4, "KeyJ,KeyZ").unwrap();
+        map.set(5, "none").unwrap();
+        let mut k = Keyboard::new(&map);
+        k.key(KeyCode::ArrowUp, true);
+        k.key(KeyCode::KeyX, true);
+        assert_eq!(k.word(), 0);
+        k.key(KeyCode::KeyW, true);
+        assert_eq!(k.word(), UP);
+        k.key(KeyCode::KeyW, false);
+        k.key(KeyCode::KeyJ, true);
+        assert_eq!(k.word(), SHOT);
+        k.key(KeyCode::Numpad7, true);
+        assert_eq!(k.word(), SHOT | UP | LEFT);
     }
 
     // A failed keyboard read gives the joystick bits only; focus loss releases the keys.

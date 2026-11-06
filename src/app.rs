@@ -32,8 +32,10 @@ struct Running {
     // The touch overlay while a gamepad is in use; back on the next touch.
     hidden_overlay: Option<Box<dyn th08_render::gfx::Overlay>>,
     replay: ReplayTransport,
-    // A save failure toast and when it goes.
+    // A save failure or screenshot toast and when it goes.
     toast: Option<(String, Instant)>,
+    // A screenshot whose frame copy is still in flight (web maps the buffer asynchronously).
+    snapshot: Option<th08_render::gfx::Readback>,
     // When the event loop next wakes the game for a redraw (None: on the next request only).
     wake: Option<Instant>,
     // While held: the last picture must be presented again (hold, resize, transport input, port menu closed).
@@ -214,6 +216,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         hidden_overlay: None,
         replay: ReplayTransport::default(),
         toast: None,
+        snapshot: None,
         wake: None,
         held_dirty: false,
     }))
@@ -828,6 +831,13 @@ impl App {
                 }
             }
             Action::Resume => self.resume_game(el),
+            Action::Screenshot => {
+                let window = self.window().clone();
+                if let Shell::PortMenu(r, _) = &mut self.shell {
+                    start_screenshot(r, window_size(&window));
+                    window.request_redraw();
+                }
+            }
         }
     }
 
@@ -1040,7 +1050,20 @@ impl App {
         };
         match ev {
             WindowEvent::CloseRequested => close(r, el),
+            WindowEvent::KeyboardInput { event, .. }
+                if event.physical_key == PhysicalKey::Code(SCREENSHOT_KEY) =>
+            {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    start_screenshot(r, window_size(&window));
+                    window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
+                if let Some(m) = poll_screenshot(r) {
+                    screen.status = Some(m);
+                } else if r.snapshot.is_some() {
+                    window.request_redraw();
+                }
                 screen.controller = r
                     .ctx
                     .host_as::<crate::platform::AppHost>()
@@ -1135,12 +1158,15 @@ impl App {
                     transport_act(r, a, Instant::now());
                 }
             }
-            // Port-only hitbox viewer key: the press does not reach the game.
-            WindowEvent::KeyboardInput { event, .. }
-                if event.physical_key == PhysicalKey::Code(crate::platform::hitbox::KEY) =>
-            {
+            // Port-only hitbox viewer and screenshot keys: the press does not reach the game.
+            WindowEvent::KeyboardInput { event, .. } if port_key(event.physical_key).is_some() => {
                 if event.state == ElementState::Pressed && !event.repeat {
-                    crate::platform::hitbox::cycle(gfx(&mut r.ctx));
+                    match port_key(event.physical_key) {
+                        Some(SCREENSHOT_KEY) => game_screenshot(r, &window),
+                        _ => {
+                            crate::platform::hitbox::cycle(gfx(&mut r.ctx));
+                        }
+                    }
                 }
             }
             // Android Back (button, gesture, a pad's Back key): one X pulse in menus, one Esc pulse in play and in the
@@ -1352,6 +1378,10 @@ fn close_save(r: &mut Running) -> Option<Vec<u8>> {
 fn frame(r: &mut Running, window: &Window) -> Frame {
     let now = Instant::now();
     r.wake = None;
+    if let Some(m) = poll_screenshot(r) {
+        r.toast = Some((m, now + TOAST));
+        r.held_dirty = true;
+    }
     follow_replay(r, now);
     let shot = r.settings.shot;
     let (per_draw, draws) = match r.pacer.poll(now) {
@@ -1611,6 +1641,64 @@ fn strip_hit(r: &Running, x: f32, y: f32) -> Option<Transp> {
         .strip
         .as_ref()
         .and_then(|s| crate::transport::hit(s, x, y))
+}
+
+// Port-only screenshot key.
+const SCREENSHOT_KEY: KeyCode = KeyCode::F12;
+
+// The in-game hitbox viewer and screenshot keys.
+fn port_key(k: PhysicalKey) -> Option<KeyCode> {
+    match k {
+        PhysicalKey::Code(c) if c == SCREENSHOT_KEY || c == crate::platform::hitbox::KEY => Some(c),
+        _ => None,
+    }
+}
+
+// Starts a screenshot of the last rendered frame (640×480, or the window size with `screenshot_size = window`).
+fn start_screenshot(r: &mut Running, window: (u32, u32)) {
+    if r.snapshot.is_some() {
+        return;
+    }
+    let size = r.settings.screenshot_window.then_some(window);
+    r.snapshot = Some(gfx(&mut r.ctx).snapshot(size));
+}
+
+fn window_size(w: &Window) -> (u32, u32) {
+    let s = w.inner_size();
+    (s.width, s.height)
+}
+
+// F12 in the game: the toast shows once the PNG is saved (native: at once).
+fn game_screenshot(r: &mut Running, window: &Window) {
+    start_screenshot(r, window_size(window));
+    if let Some(m) = poll_screenshot(r) {
+        r.toast = Some((m, Instant::now() + TOAST));
+        r.held_dirty = true;
+        window.request_redraw();
+    }
+}
+
+// A finished screenshot saved: the toast text (None while none is pending or its copy is still in flight).
+fn poll_screenshot(r: &mut Running) -> Option<String> {
+    let res = r.snapshot.as_ref()?.poll(&gfx(&mut r.ctx).device)?;
+    r.snapshot = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let dir = r.settings.storage_dir();
+    #[cfg(target_arch = "wasm32")]
+    let dir: Option<std::path::PathBuf> = None;
+    let lang = crate::i18n::resolve(r.settings.language);
+    Some(
+        match res.and_then(|img| crate::platform::screenshot::save(&img, dir.as_deref())) {
+            Ok(p) => {
+                log::info!("screenshot: {p}");
+                crate::i18n::ui_fmt(lang, "screenshot_saved", &[("path", &p)])
+            }
+            Err(e) => {
+                log::warn!("screenshot failed: {e}");
+                crate::i18n::ui_fmt(lang, "screenshot_failed", &[("err", &e)])
+            }
+        },
+    )
 }
 
 // The transport HUD: the label while it lasts (always while paused), the strip while a replay plays with touch on.
@@ -1893,9 +1981,82 @@ mod tests {
             hidden_overlay: None,
             replay: ReplayTransport::default(),
             toast: None,
+            snapshot: None,
             wake: None,
             held_dirty: false,
         })
+    }
+
+    // F12 path on a headless GPU: 300 frames, then the read-back of the frame saved as PNG under
+    // `<save dir>/screenshots/`, equal to the frame `capture` renders; the window-size variant scales it.
+    #[test]
+    fn screenshot_saves_frame() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            eprintln!("skipped: no game data (TH08_DIR unset)");
+            return;
+        };
+        let Ok(g) = pollster::block_on(Gfx::headless()) else {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        };
+        let src = crate::sources::native(dir);
+        let mut s = crate::settings::get().clone();
+        let saves = std::env::temp_dir().join(format!("th08_screenshot_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&saves);
+        std::fs::create_dir_all(&saves).unwrap();
+        s.save_dir = Some(saves.clone());
+        let io = s.tool_io(g, &src);
+        let ctx = pollster::block_on(Ctx::load_with(src.clone(), io, s.core(), false)).unwrap();
+        let mut r = Running {
+            ctx,
+            pacer: Pacer::new(0),
+            vsync_epoch: Instant::now(),
+            settings: s,
+            hidden_overlay: None,
+            replay: ReplayTransport::default(),
+            toast: None,
+            snapshot: None,
+            wake: None,
+            held_dirty: false,
+        };
+        for _ in 0..300 {
+            r.ctx.calc();
+            r.ctx.draw();
+            r.ctx.present();
+        }
+        r.ctx.calc();
+        r.ctx.draw();
+        let (g, rec) = gfx_rec(&mut r.ctx);
+        let want = g.capture(rec, None);
+        start_screenshot(&mut r, (1280, 960));
+        let msg = poll_screenshot(&mut r).expect("native read-back is immediate");
+        let shots: Vec<_> = std::fs::read_dir(saves.join("screenshots"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(shots.len(), 1, "{msg}");
+        let name = shots[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("th08_") && name.ends_with(".png") && msg.contains(&name));
+        let got = image::open(&shots[0]).unwrap().to_rgb8();
+        assert_eq!(got.dimensions(), (640, 480));
+        let want = image::DynamicImage::ImageRgba8(want).to_rgb8();
+        assert!(got == want, "screenshot differs from the rendered frame");
+        assert!(
+            got.pixels().any(|p| p != got.get_pixel(0, 0)),
+            "blank frame"
+        );
+        std::fs::remove_file(&shots[0]).unwrap();
+        r.settings.screenshot_window = true;
+        start_screenshot(&mut r, (1280, 960));
+        poll_screenshot(&mut r).unwrap();
+        let p = std::fs::read_dir(saves.join("screenshots"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(image::image_dimensions(&p).unwrap(), (1280, 960));
+        let _ = std::fs::remove_dir_all(&saves);
     }
 
     fn state(r: &Running) -> (u64, i8, [i64; 22]) {

@@ -11,7 +11,7 @@ use th08_core::world::World;
 use th08_render::gfx::{Gfx, Overlay, OverlayTarget};
 use winit::keyboard::KeyCode;
 
-// Desktop key that cycles the mode in the game (outside `platform::KEYS`).
+// Desktop key that cycles the mode in the game (never bindable, `keymap.rs`).
 pub const KEY: KeyCode = KeyCode::F3;
 
 // The `hitboxes` setting.

@@ -264,6 +264,18 @@ pub const UI: &[(&str, &str)] = &[
          is by Team Shanghai Alice. Packs are built on this device into {dir}, for personal use.",
     ),
     ("tr_site_storage", "this browser's site storage"),
+    ("keys_press", "press a key…"),
+    ("keys_add", "add a key"),
+    ("keys_conflict", "also bound to: {list}"),
+    ("keys_original", "Original keys"),
+    ("keys_wasd", "WASD + J / K / L"),
+    (
+        "keys_hint",
+        "Click a key to remove it. A key in two rows sends both inputs. F1–F12 and Alt stay port keys.",
+    ),
+    ("screenshot", "Screenshot"),
+    ("screenshot_saved", "Screenshot saved: {path}"),
+    ("screenshot_failed", "Screenshot failed: {err}"),
 ];
 
 type Table = HashMap<String, String>;

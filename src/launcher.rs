@@ -1,11 +1,13 @@
 //! Launcher screen and game-folder flow: an egui settings screen generated from `settings::ENTRIES`.
 
 use crate::i18n::{self, Lang};
+use crate::platform::keymap;
 use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
+use winit::keyboard::KeyCode;
 use winit::window::Window;
 
 // "version (channel)"; the channel is set only for Android builds.
@@ -215,6 +217,8 @@ pub enum Action {
     Back,
     // Port menu: back to the paused game.
     Resume,
+    // Port menu: a PNG screenshot of the paused game's frame.
+    Screenshot,
     // The Fullscreen box was changed on screen; the app applies it to the window.
     Fullscreen(bool),
 }
@@ -350,6 +354,8 @@ pub struct Model {
     pub view: View,
     // The previous run's `last_error.txt`, shown until dismissed or Play.
     last_error: Option<String>,
+    // The Keyboard row waiting for a key press (its entry key).
+    capture: Option<&'static str>,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     update: Update,
 }
@@ -419,6 +425,7 @@ impl Model {
             saves: SavesUi::default(),
             view: View::Settings,
             last_error,
+            capture: None,
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             update: if crate::update::wanted(s) {
                 Update::Pending
@@ -911,6 +918,10 @@ impl Model {
                     .striped(true)
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
+                        if g == Group::Keyboard {
+                            self.keys_rows_ui(ui, &rows, lang);
+                            return;
+                        }
                         for i in rows {
                             let x: &[(String, String)] = if self.rows[i].e.key == "game_text" {
                                 &extra
@@ -925,7 +936,132 @@ impl Model {
                     ui.add_space(6.0);
                     self.translations_ui(ui, lang);
                 }
+                if g == Group::Keyboard {
+                    ui.add_space(6.0);
+                    self.keys_presets_ui(ui, lang);
+                }
             });
+    }
+
+    // Keyboard rows: the bound keys (click one to remove it), "+" to capture a key, keys bound in several rows.
+    fn keys_rows_ui(&mut self, ui: &mut egui::Ui, rows: &[usize], lang: Lang) {
+        let binds: Vec<Vec<KeyCode>> = rows
+            .iter()
+            .map(|&i| keymap::parse(&self.rows[i].value.text()).unwrap_or_default())
+            .collect();
+        let conflicts: Vec<String> = binds
+            .iter()
+            .enumerate()
+            .map(|(n, b)| {
+                let mut others: Vec<&str> = Vec::new();
+                for (m, ob) in binds.iter().enumerate() {
+                    if m != n && b.iter().any(|k| ob.contains(k)) {
+                        others.push(i18n::label(lang, self.rows[rows[m]].e));
+                    }
+                }
+                others.join(", ")
+            })
+            .collect();
+        let mut capture = self.capture;
+        for (n, &i) in rows.iter().enumerate() {
+            let r = &mut self.rows[i];
+            ui.label(i18n::label(lang, r.e))
+                .on_hover_text(i18n::summary(lang, r.e));
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut keys = binds[n].clone();
+                    let mut remove = None;
+                    for (j, &k) in keys.iter().enumerate() {
+                        let name = keymap::name(k).unwrap_or("?");
+                        if ui
+                            .button(format!("{}  ×", keymap::label(name)))
+                            .on_hover_text(name)
+                            .clicked()
+                        {
+                            remove = Some(j);
+                        }
+                    }
+                    if keys.is_empty() {
+                        let none = i18n::word(lang, r.e, "none").unwrap_or("none");
+                        ui.label(egui::RichText::new(none).weak());
+                    }
+                    if let Some(j) = remove {
+                        keys.remove(j);
+                        r.set(Value::Text(keymap::format(&keys)));
+                    }
+                    if capture == Some(r.e.key) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(120, 170, 255),
+                            i18n::ui(lang, "keys_press"),
+                        );
+                        if ui.button(i18n::ui(lang, "cancel")).clicked() {
+                            capture = None;
+                        }
+                    } else if keys.len() < keymap::MAX_PER_INPUT
+                        && ui
+                            .button("+")
+                            .on_hover_text(i18n::ui(lang, "keys_add"))
+                            .clicked()
+                    {
+                        capture = Some(r.e.key);
+                    }
+                });
+                if !conflicts[n].is_empty() {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        i18n::ui_fmt(lang, "keys_conflict", &[("list", &conflicts[n])]),
+                    );
+                }
+                if let Some(err) = r.error() {
+                    ui.colored_label(ui.visuals().error_fg_color, err);
+                }
+            });
+            ui.end_row();
+        }
+        self.capture = capture;
+    }
+
+    // Original keys / the WASD + J / K / L preset for every Keyboard row.
+    fn keys_presets_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        ui.horizontal_wrapped(|ui| {
+            let original = ui.button(i18n::ui(lang, "keys_original")).clicked();
+            let wasd = ui.button(i18n::ui(lang, "keys_wasd")).clicked();
+            if original || wasd {
+                self.capture = None;
+                for input in &keymap::INPUTS {
+                    let v = if wasd { input.wasd } else { input.default };
+                    self.row_mut(input.key).set(Value::Text(v.into()));
+                }
+            }
+        });
+        ui.label(
+            egui::RichText::new(i18n::ui(lang, "keys_hint"))
+                .small()
+                .weak(),
+        );
+    }
+
+    // A key press while a Keyboard row waits for one: added to that row; true when it was taken.
+    pub fn capture_key(&mut self, k: KeyCode) -> bool {
+        let Some(key) = self.capture else {
+            return false;
+        };
+        if keymap::name(k).is_none() {
+            return false;
+        }
+        self.capture = None;
+        let r = self.row_mut(key);
+        let mut keys = keymap::parse(&r.value.text()).unwrap_or_default();
+        if !keys.contains(&k) && keys.len() < keymap::MAX_PER_INPUT {
+            keys.push(k);
+            r.set(Value::Text(keymap::format(&keys)));
+        }
+        true
+    }
+
+    // Tools: start a key capture on a Keyboard row.
+    pub fn start_capture(&mut self, key: &'static str) {
+        self.capture = Some(key);
     }
 
     // Export / Import of score.dat, th08.cfg, replays and the player rows of port.cfg (saves.rs); shown on the settings
@@ -1009,7 +1145,7 @@ impl Model {
                 .map_err(|e| format!("{}: {e}", path.display()))
         };
         #[cfg(target_arch = "wasm32")]
-        let r = crate::saves::download(&name, &out.zip).map(|()| name);
+        let r = crate::saves::download(&name, "application/zip", &out.zip).map(|()| name);
         let n = out.files.to_string();
         Some(
             r.map(|p| i18n::ui_fmt(lang, "saves_exported", &[("n", &n), ("path", &p)]))
@@ -1618,6 +1754,16 @@ impl Screen {
 
     // Returns whether the window needs a redraw.
     pub fn on_event(&mut self, window: &Window, ev: &WindowEvent) -> bool {
+        if let WindowEvent::KeyboardInput { event, .. } = ev
+            && event.state == winit::event::ElementState::Pressed
+            && let winit::keyboard::PhysicalKey::Code(k) = event.physical_key
+            && self.p.model.capture.is_some()
+        {
+            if !event.repeat {
+                self.p.model.capture_key(k);
+            }
+            return true;
+        }
         self.state.on_window_event(window, ev).repaint
     }
 
