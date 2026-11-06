@@ -786,6 +786,11 @@ impl TouchSource {
         }
     }
 
+    // A pulse is queued or its up poll is still owed.
+    pub fn pulse_pending(&self) -> bool {
+        self.gap || !self.pulses.is_empty()
+    }
+
     pub fn take_menu(&mut self) -> bool {
         std::mem::take(&mut self.menu_req)
     }

@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--pad-capture=PAD_ROW] [--pad-press=PAD_ROW:BUTTON]... [--tab=replays|stats] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--pad-capture=PAD_ROW] [--pad-press=PAD_ROW:BUTTON]... [--tab=replays|stats] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -27,9 +27,8 @@ fn main() {
         None => th08::launcher::View::Settings,
         Some("waiting") => th08::launcher::View::Waiting,
         Some("loading") => th08::launcher::View::Loading,
-        Some("portmenu") => th08::launcher::View::PortMenu,
         Some(v) => {
-            eprintln!("--view={v}: expected waiting, loading or portmenu");
+            eprintln!("--view={v}: expected waiting or loading");
             std::process::exit(2);
         }
     };

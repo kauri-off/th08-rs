@@ -49,6 +49,10 @@ struct Running {
     discord: crate::discord::Rpc,
     // Play statistics recorder (`stats` on, live game with a save dir).
     stats: Option<crate::stats::Log>,
+    // The sound device's port volume (port menu rows).
+    volume: Option<th08_audio::audio::VolumeHandle>,
+    // "Quit to title" from the port menu: input pulses still to send (quittitle.rs).
+    quit: Option<crate::platform::quittitle::Quit>,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -192,10 +196,12 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(gfx);
     let overlay = s.mount_pack(renderer.as_mut());
     th08_core::assets::yield_now().await;
-    let mut audio: Box<dyn th08_core::game::AudioOut> =
-        Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio()));
+    let device = th08_audio::audio::Audio::new(source.clone(), s.audio());
+    let volume = device.volume_handle();
+    let mut audio: Box<dyn th08_core::game::AudioOut> = Box::new(device);
     let mut started = None;
-    if s.now_playing {
+    // The port menu can switch `now_playing` on: the game watches BGM starts unless it is a tool run.
+    if s.now_playing || !s.is_tool_run() {
         let (w, st) = crate::nowplaying::Watch::new(audio);
         audio = Box::new(w);
         started = Some(st);
@@ -259,6 +265,8 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         now_playing: None,
         discord: crate::discord::Rpc::new(discord),
         stats,
+        volume: Some(volume),
+        quit: None,
     }))
 }
 
@@ -297,6 +305,9 @@ impl ApplicationHandler<UserEvent> for App {
         log::info!("lifecycle: suspended");
         self.suspended = true;
         self.surface_gen = self.surface_gen.wrapping_add(1);
+        if let Shell::PortMenu(_, m) = &self.shell {
+            m.save();
+        }
         match &mut self.shell {
             Shell::Running(r) | Shell::PortMenu(r, _) => {
                 r.pacer.suspend();
@@ -875,6 +886,13 @@ impl App {
                 }
             }
             Action::Resume => self.resume_game(el),
+            Action::QuitToTitle => {
+                if let Shell::PortMenu(r, _) = &mut self.shell {
+                    log::info!("port menu: quit to title");
+                    r.quit = Some(crate::platform::quittitle::Quit::default());
+                }
+                self.resume_game(el);
+            }
             Action::Screenshot => {
                 let window = self.window().clone();
                 if let Shell::PortMenu(r, _) = &mut self.shell {
@@ -1037,18 +1055,13 @@ impl App {
             h.input.set_focus(false);
         }
         crate::platform::gestures::set_exclusion(&[]);
-        let lang = crate::i18n::resolve(r.settings.language);
         let touch = gfx(&mut r.ctx).overlay.is_some().then(|| {
             r.ctx
                 .host_as::<crate::platform::AppHost>()
                 .map_or_else(|| r.settings.touch.clone(), |h| h.input.touch.cfg.clone())
         });
-        let mut menu = crate::platform::portmenu::PortMenu::new(
-            self.window(),
-            lang,
-            r.settings.font.as_deref(),
-            touch,
-        );
+        let mut menu = crate::platform::portmenu::PortMenu::new(self.window(), &r.settings, touch);
+        menu.quit_ok = r.quit.is_none() && crate::platform::quittitle::available(&r.ctx.w);
         menu.cheats = r.settings.active_cheats();
         menu.speed = menu_speed(&r);
         menu.no_saves = no_score_saves(&mut r);
@@ -1063,6 +1076,8 @@ impl App {
         else {
             return;
         };
+        screen.save();
+        refresh_overlays(&mut r, screen.opened_with());
         drop(screen);
         if !self.suspended {
             r.pacer.resume(Instant::now());
@@ -1104,7 +1119,10 @@ impl App {
             return;
         };
         match ev {
-            WindowEvent::CloseRequested => close(r, el),
+            WindowEvent::CloseRequested => {
+                screen.save();
+                close(r, el);
+            }
             WindowEvent::KeyboardInput { event, .. }
                 if event.physical_key == PhysicalKey::Code(SCREENSHOT_KEY) =>
             {
@@ -1124,9 +1142,20 @@ impl App {
                     .host_as::<crate::platform::AppHost>()
                     .and_then(|h| h.joystick.active_name());
                 let a = screen.redraw(&window, gfx(&mut r.ctx));
+                let changed = screen.take_changed();
+                if let Some(rows) = &changed {
+                    for (k, v) in rows {
+                        apply_row(&mut r.settings, k, v);
+                        apply_row(&mut self.setup, k, v);
+                    }
+                    apply_live(r);
+                }
                 if let Some(l) = screen.take_layout() {
                     self.setup.touch.layout = l.clone();
                     save_layout(r, l);
+                }
+                if changed.is_some() {
+                    self.sync_audio();
                 }
                 if let Some(a) = a {
                     self.act(el, &a);
@@ -1381,6 +1410,56 @@ fn save_layout(r: &mut Running, l: crate::platform::touch::TouchLayout) {
     crate::settings::write_port_cfg(&r.settings.dirs, &[("touch_layout", v)]);
 }
 
+// A port menu row's value into a game's settings (the row widgets only give values the entry accepts).
+fn apply_row(s: &mut Settings, key: &str, v: &str) {
+    if let Err(e) = s.set_from(crate::settings::Origin::Launcher, key, v) {
+        log::warn!("port menu: {key} = {v}: {e}");
+    }
+}
+
+// The port menu's live rows on the held game at once: picture filters, port volume, touch opacity. Mute, the
+// overlays and the screenshot size are read from the settings where they are used.
+fn apply_live(r: &mut Running) {
+    gfx(&mut r.ctx).blit_options = r.settings.blit;
+    if let Some(v) = &r.volume {
+        v.set(r.settings.volume);
+    }
+    let opacity = r.settings.touch.opacity;
+    if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+        h.input.touch.cfg.opacity = opacity;
+    }
+}
+
+// On resume: the HUD and touch overlays are made again when the language or `now_playing` changed in the menu.
+fn refresh_overlays(r: &mut Running, (lang, now_playing): (crate::i18n::Lang, bool)) {
+    let new_lang = crate::i18n::resolve(r.settings.language);
+    if new_lang == lang && r.settings.now_playing == now_playing {
+        return;
+    }
+    let font = r.settings.font.clone();
+    let g = gfx(&mut r.ctx);
+    g.hud = Some(Box::new(crate::platform::overlay::TransportOverlay::new(
+        new_lang,
+        font.clone(),
+        r.settings.now_playing,
+    )));
+    if new_lang == lang {
+        return;
+    }
+    let touch = || -> Box<dyn th08_render::gfx::Overlay> {
+        Box::new(crate::platform::overlay::TouchOverlay::new(
+            new_lang,
+            font.clone(),
+        ))
+    };
+    if g.overlay.is_some() {
+        g.overlay = Some(touch());
+    }
+    if r.hidden_overlay.is_some() {
+        r.hidden_overlay = Some(touch());
+    }
+}
+
 // In a stage (scene game): where pad Select and a resume from the background open the port menu.
 fn in_stage(r: &Running) -> bool {
     r.ctx.w.game.scene == th08_core::types::SceneId::Game
@@ -1601,6 +1680,7 @@ fn logic_frames(r: &mut Running, n: u32, frozen: bool, touch: bool) -> Option<Fr
                 h.input.touch.set_scene(scene);
             }
         }
+        quit_step(r);
         let flow = if frozen { Flow::Continue } else { r.ctx.calc() };
         if !frozen && let Some(st) = &mut r.stats {
             st.frame(&r.ctx.w);
@@ -1627,6 +1707,24 @@ fn logic_frames(r: &mut Running, n: u32, frozen: bool, touch: bool) -> Option<Fr
         }
     }
     None
+}
+
+// Port menu "Quit to title": the next Esc / Q pulse into the touch input, before a logic frame.
+fn quit_step(r: &mut Running) {
+    let Some(q) = &mut r.quit else { return };
+    let pending = r
+        .ctx
+        .host_as::<crate::platform::AppHost>()
+        .is_some_and(|h| h.input.touch.pulse_pending());
+    match q.next(&r.ctx.w, pending) {
+        Some(Some(bit)) => {
+            if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                h.input.touch.back_key(bit);
+            }
+        }
+        Some(None) => {}
+        None => r.quit = None,
+    }
 }
 
 // A replay (not an attract demo) is playing.
@@ -1870,12 +1968,16 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) -> bool {
         .started
         .as_ref()
         .and_then(crate::nowplaying::Started::take)
+        && r.settings.now_playing
         && let Some(title) = crate::nowplaying::title(&r.titles, &stem)
     {
         let text = crate::i18n::ui_fmt(lang, "now_playing", &[("title", title)]);
         r.now_playing = Some((text, now + NOW_PLAYING));
     }
-    if r.now_playing.as_ref().is_some_and(|t| now >= t.1) {
+    if r.now_playing
+        .as_ref()
+        .is_some_and(|t| now >= t.1 || !r.settings.now_playing)
+    {
         r.now_playing = None;
     }
     let now_playing = r.now_playing.as_ref().map(|t| t.0.clone());
@@ -2167,6 +2269,8 @@ mod tests {
             now_playing: None,
             discord: crate::discord::Rpc::off(),
             stats: None,
+            volume: None,
+            quit: None,
         })
     }
 
@@ -2207,6 +2311,8 @@ mod tests {
             now_playing: None,
             discord: crate::discord::Rpc::off(),
             stats: None,
+            volume: None,
+            quit: None,
         };
         for _ in 0..300 {
             r.ctx.calc();
@@ -2245,6 +2351,99 @@ mod tests {
             .unwrap()
             .path();
         assert_eq!(image::image_dimensions(&p).unwrap(), (1280, 960));
+        let _ = std::fs::remove_dir_all(&saves);
+    }
+
+    // Port menu "Quit to title" in stage 1: the Esc / Q pulses take the game's own pause menu to the title scene;
+    // score.dat keeps every record.
+    #[test]
+    fn quit_to_title() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            eprintln!("skipped: no game data (TH08_DIR unset)");
+            return;
+        };
+        let src = crate::sources::native(dir);
+        let mut s = crate::settings::get().clone();
+        s.set_from(crate::settings::Origin::Cli, "stage", "1")
+            .unwrap();
+        let saves = std::env::temp_dir().join(format!("th08_quit_title_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&saves);
+        std::fs::create_dir_all(&saves).unwrap();
+        s.save_dir = Some(saves.clone());
+        let mut io = s.tool_io(th08_core::drawlist::NullRenderer, &src);
+        io.host = s.app_host();
+        let ctx = pollster::block_on(Ctx::load_with(src.clone(), io, s.core(), true)).unwrap();
+        let mut r = Running {
+            ctx,
+            pacer: Pacer::new(0),
+            vsync_epoch: Instant::now(),
+            settings: s,
+            hidden_overlay: None,
+            replay: ReplayTransport::default(),
+            toast: None,
+            snapshot: None,
+            wake: None,
+            held_dirty: false,
+            slow: 0,
+            started: None,
+            titles: Vec::new(),
+            now_playing: None,
+            discord: crate::discord::Rpc::off(),
+            stats: None,
+            volume: None,
+            quit: None,
+        };
+        let step = |r: &mut Running| {
+            assert!(logic_frames(r, 1, false, false).is_none());
+            r.ctx.draw();
+            r.ctx.present();
+        };
+        for _ in 0..300 {
+            step(&mut r);
+        }
+        let scene = |r: &Running| r.ctx.w.game.scene;
+        assert_eq!(scene(&r), th08_core::types::SceneId::Game);
+        assert!(crate::platform::quittitle::available(&r.ctx.w));
+        let score = || std::fs::read(saves.join("score.dat")).ok();
+        let before = score();
+        r.quit = Some(crate::platform::quittitle::Quit::default());
+        let mut n = 0;
+        let mut paused = false;
+        while r.quit.is_some() {
+            step(&mut r);
+            paused |= r.ctx.w.game.paused != 0;
+            n += 1;
+            assert!(n < 1000, "quit to title did not finish");
+        }
+        assert!(paused, "the pause menu never opened");
+        assert_eq!(
+            scene(&r),
+            th08_core::types::SceneId::Menu,
+            "after {n} frames"
+        );
+        assert!(!crate::platform::quittitle::available(&r.ctx.w));
+        eprintln!(
+            "title after {n} frames; score.dat {} → {} bytes",
+            before.as_ref().map_or(0, Vec::len),
+            score().as_ref().map_or(0, Vec::len)
+        );
+        for _ in 0..120 {
+            step(&mut r);
+        }
+        assert_eq!(scene(&r), th08_core::types::SceneId::Menu);
+        // The pause-menu quit saves (Result_Register(2)): only the PLST play statistics (15 §2.9) and the
+        // container header may differ; scores, clears and card history stay as they were.
+        let old = th08_formats::scoredat::decode_container(&before.unwrap()).unwrap();
+        let new = th08_formats::scoredat::decode_container(&score().unwrap()).unwrap();
+        assert_eq!(old.len(), new.len());
+        let plst = old.windows(4).position(|w| w == b"PLST").unwrap();
+        let header = old.windows(4).position(|w| w == b"HSCR").unwrap();
+        for i in (0..old.len()).filter(|&i| old[i] != new[i]) {
+            assert!(
+                i < header || (plst..plst + 0x228).contains(&i),
+                "score.dat byte {i:#x} changed"
+            );
+        }
         let _ = std::fs::remove_dir_all(&saves);
     }
 

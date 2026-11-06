@@ -178,6 +178,7 @@ pub const UI: &[(&str, &str)] = &[
     ("port_menu", "Port menu"),
     ("paused", "the game is paused"),
     ("resume", "Resume"),
+    ("quit_title", "Quit to title"),
     ("key_back", "Back"),
     ("controller", "Controller: {name}"),
     ("no_controller", "none"),

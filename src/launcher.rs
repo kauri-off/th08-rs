@@ -215,6 +215,11 @@ pub enum Folder {
     Bundled(Vec<String>),
 }
 
+#[derive(Clone, Copy)]
+struct LiveRows {
+    touch: bool,
+}
+
 // What a screen pass asks the app's Shell to do (app.rs).
 pub enum Action {
     Play,
@@ -227,6 +232,8 @@ pub enum Action {
     Screenshot,
     // Port menu: practice slow motion / replay transport rate (logic frames, frame periods).
     Speed((u32, u32)),
+    // Port menu: back to the game, which then quits to the title through its own pause menu.
+    QuitToTitle,
     // The Fullscreen box was changed on screen; the app applies it to the window.
     Fullscreen(bool),
 }
@@ -241,8 +248,6 @@ pub enum View {
     Loading,
     // Start-up error, with Back / Quit.
     Error(String),
-    // In-game port menu over the paused game (stub: Resume only; never logic-affecting settings).
-    PortMenu,
 }
 
 // A row's value, typed by the entry's `Kind`; "" / None = unset. `text` is the port.cfg / `Settings` value text.
@@ -355,6 +360,8 @@ pub struct Model {
     tr: Tr,
     // Developer view: Cheats and Tools rows and the origin tags are shown.
     pub dev: bool,
+    // In-game port menu: only `live` rows (Touch rows only while the touch overlay is on).
+    live: Option<LiveRows>,
     // The game folder row holds this build's bundled data: never saved to port.cfg.
     bundled: bool,
     #[cfg(not(target_os = "android"))]
@@ -444,6 +451,7 @@ impl Model {
                 filter: String::new(),
             },
             dev,
+            live: None,
             bundled: s.origin("game_dir") == Origin::Bundled,
             #[cfg(not(target_os = "android"))]
             saves: SavesUi::default(),
@@ -466,6 +474,59 @@ impl Model {
         };
         m.refresh_installed();
         m
+    }
+
+    // The port menu's rows: the `live` entries of the held game's settings.
+    pub fn port_menu(s: &Settings, touch: bool) -> Self {
+        let mut m = Self::new(s, Folder::Native);
+        m.dev = false;
+        m.last_error = None;
+        m.live = Some(LiveRows { touch });
+        m
+    }
+
+    // The port menu's settings sheet: the shown live groups; true when a row changed this pass.
+    pub fn live_ui(&mut self, ui: &mut egui::Ui, lang: Lang) -> bool {
+        let before: Vec<Value> = self.rows.iter().map(|r| r.value.clone()).collect();
+        for g in Group::ALL {
+            self.group_ui(ui, g, lang);
+        }
+        self.rows.iter().zip(&before).any(|(r, b)| r.value != *b)
+    }
+
+    // Keys of the rows the port menu shows.
+    pub fn live_keys(&self) -> Vec<&'static str> {
+        (0..self.rows.len())
+            .filter(|&i| self.shown(i))
+            .map(|i| self.rows[i].e.key)
+            .collect()
+    }
+
+    // Writes the rows changed on screen to port.cfg (nothing when none changed).
+    pub fn save_changes(&self) {
+        let changes = self.changes();
+        if !changes.is_empty() {
+            let c: Vec<(&str, Option<&str>)> =
+                changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+            settings::write_port_cfg(&self.dirs, &c);
+        }
+    }
+
+    // The row's value text as edited (None: unset).
+    pub fn value_text(&self, key: &str) -> Option<String> {
+        let r = self.row(key);
+        (!r.value.is_unset()).then(|| r.value.text())
+    }
+
+    // Whether row `i` is on this screen.
+    fn shown(&self, i: usize) -> bool {
+        let e = self.rows[i].e;
+        e.key != "game_dir"
+            && e.shown_on_this_platform()
+            && (self.dev || e.audience == Audience::Player)
+            && self
+                .live
+                .is_none_or(|l| e.live && (l.touch || e.group != Group::Touch))
     }
 
     // The translation job manager (tools drive it directly for screenshots).
@@ -780,7 +841,6 @@ impl Model {
                 None
             }
             View::Error(msg) => error_ui(ui, lang, msg),
-            View::PortMenu => port_menu_ui(ui, lang),
         }
     }
 
@@ -1001,13 +1061,7 @@ impl Model {
         // The game folder row is at the top.
         let dev = self.dev;
         let rows: Vec<usize> = (0..self.rows.len())
-            .filter(|&i| {
-                let e = self.rows[i].e;
-                e.group == g
-                    && e.key != "game_dir"
-                    && e.shown_on_this_platform()
-                    && (dev || e.audience == Audience::Player)
-            })
+            .filter(|&i| self.rows[i].e.group == g && self.shown(i))
             .collect();
         if rows.is_empty() {
             return;
@@ -1017,7 +1071,8 @@ impl Model {
         egui::CollapsingHeader::new(egui::RichText::new(i18n::group_title(lang, g)).strong())
             .id_salt(g.id())
             .default_open(
-                matches!(g, Group::GameData | Group::Language | Group::Display)
+                self.live.is_some()
+                    || matches!(g, Group::GameData | Group::Language | Group::Display)
                     || set_here
                     || (g == Group::Gamepad && self.pad.capture.is_some()),
             )
@@ -1045,7 +1100,7 @@ impl Model {
                             ui.end_row();
                         }
                     });
-                if g == Group::Language {
+                if g == Group::Language && self.live.is_none() {
                     ui.add_space(6.0);
                     self.translations_ui(ui, lang);
                 }
@@ -1619,31 +1674,6 @@ fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.colored_label(ui.visuals().error_fg_color, msg);
-        });
-    });
-    act
-}
-
-// Port menu stub: the hook for the touch-layout editor; host settings only will go here, never core ones (seed,
-// stage, cheats), so a mid-game visit cannot change the game's logic.
-fn port_menu_ui(ui: &mut egui::Ui, lang: Lang) -> Option<Action> {
-    let mut act = None;
-    egui::CentralPanel::default_margins().show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() / 3.0);
-            ui.heading(i18n::ui(lang, "port_menu"));
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(i18n::ui(lang, "paused")).weak());
-            ui.add_space(12.0);
-            if ui
-                .button(egui::RichText::new(format!("  {}  ", i18n::ui(lang, "resume"))).strong())
-                .clicked()
-            {
-                act = Some(Action::Resume);
-            }
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("F1 / Esc").small().weak());
-            ui.label(egui::RichText::new(version_line()).small().weak());
         });
     });
     act
@@ -2336,6 +2366,105 @@ mod tests {
         edit(&mut m, "save_dir", "saves");
         let abs = std::env::current_dir().unwrap().join("saves");
         assert_eq!(m.changes(), some(&[("save_dir", &abs.to_string_lossy())]));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The port menu shows only live rows, never one that needs a restart or sets game-start values; every live row
+    // edited there is saved to port.cfg and read back.
+    #[test]
+    fn port_menu_live_rows() {
+        let root = std::env::temp_dir().join(format!("th08-port-menu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dirs = settings::PlatformDirs {
+            config: Some(root.clone()),
+            ..Default::default()
+        };
+        let s = Settings::game_environment(dirs.clone());
+        let mut m = Model::port_menu(&s, true);
+        let shown = m.live_keys();
+        for e in ENTRIES {
+            if !e.live {
+                assert!(!shown.contains(&e.key), "{} is not live", e.key);
+                continue;
+            }
+            assert_eq!(e.audience, Audience::Player, "{}", e.key);
+            assert!(e.persist, "{}", e.key);
+            assert!(
+                !matches!(
+                    e.group,
+                    Group::GameData | Group::StartGame | Group::Cheats | Group::Tools
+                ),
+                "{}",
+                e.key
+            );
+            assert_eq!(
+                shown.contains(&e.key),
+                e.shown_on_this_platform(),
+                "{}",
+                e.key
+            );
+        }
+        for k in [
+            "game_dir",
+            "game_text",
+            "stage",
+            "rank",
+            "seed",
+            "replay",
+            "invuln",
+            "fullscreen",
+            "vsync",
+            "scale",
+            "audio_buffer",
+            "font",
+            "pack",
+            "save_dir",
+            "touch",
+        ] {
+            assert!(!shown.contains(&k), "{k} shown");
+        }
+        let no_touch = Model::port_menu(&s, false).live_keys();
+        assert!(
+            no_touch
+                .iter()
+                .all(|k| settings::find(k).unwrap().group != Group::Touch)
+        );
+        assert!(shown.contains(&"touch_opacity") && !no_touch.contains(&"touch_opacity"));
+
+        let other = |e: &Entry| -> String {
+            match e.kind {
+                Kind::Bool => if Value::parse(e.kind, e.default) == Value::Bool(true) {
+                    "off"
+                } else {
+                    "on"
+                }
+                .into(),
+                Kind::Int { min, max } => {
+                    let v = if e.default == min.to_string() {
+                        max
+                    } else {
+                        min
+                    };
+                    v.to_string()
+                }
+                Kind::Enum(c) => c.iter().find(|&&x| x != e.default).unwrap().to_string(),
+                _ => panic!("{}: no live row of this kind", e.key),
+            }
+        };
+        let want: Vec<(&str, String)> = shown
+            .iter()
+            .map(|k| (*k, other(settings::find(k).unwrap())))
+            .collect();
+        for (k, v) in &want {
+            edit(&mut m, k, v);
+        }
+        m.save_changes();
+        let back = Settings::game_environment(dirs);
+        for (k, v) in &want {
+            assert_eq!(back.value(k), Some(v.as_str()), "{k}");
+            assert_eq!(back.origin(k), Origin::PortCfg, "{k}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -187,6 +187,8 @@ pub struct Entry {
     pub platforms: Platforms,
     // Saved to port.cfg / localStorage when edited on a screen; false = this run only.
     pub persist: bool,
+    // Shown in the in-game port menu and applied to the held game; only presentation rows that need no restart.
+    pub live: bool,
     pub help: &'static str,
     set: Setter,
 }
@@ -533,6 +535,7 @@ macro_rules! key_entry {
             audience: Audience::Player,
             platforms: Platforms::DESKTOP_WEB,
             persist: true,
+            live: false,
             help: $help,
             set: |s, v| s.keys.set($i, v),
         }
@@ -555,6 +558,7 @@ macro_rules! pad_entry {
             audience: Audience::Player,
             platforms: Platforms::DESKTOP,
             persist: true,
+            live: false,
             help: $help,
             set: |s, v| s.pads.set($i, v),
         }
@@ -575,6 +579,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "game folder with th08.dat and thbgm.dat (also the first plain argument)",
         set: |s, v| {
             s.game_dir = Some(PathBuf::from(v));
@@ -599,6 +604,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "language of this screen and the port menu: auto (system language), ja, en or ru",
         set: |s, v| {
             s.language = match v.trim() {
@@ -625,6 +631,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "language of dialogue and other game text: follow (the screen language), ja (original) or the code \
                of an installed translation (en, ru, de, pt-br…)",
         set: |s, v| {
@@ -649,6 +656,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "window size 640x480 times this (native)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -669,6 +677,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "start fullscreen (native; F11 or Alt+Enter toggles and saves)",
         set: |s, v| {
             s.fullscreen = parse_bool(v)?;
@@ -688,6 +697,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "present with vsync (default on); on displays below 60 Hz logic still runs at 60 frames per second",
         set: |s, v| {
             s.vsync = parse_bool(v)?;
@@ -707,6 +717,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::TOUCH,
         persist: true,
+        live: false,
         help: "extra margin on every screen edge in dp, for phones whose cutout / corner insets are wrong",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -727,6 +738,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP_WEB,
         persist: true,
+        live: false,
         help: "show this screen at start; when off, hold Shift while th08 starts (web: ?launcher=1) to see it again",
         set: |s, v| {
             s.launcher = parse_bool(v)?;
@@ -746,6 +758,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::NATIVE,
         persist: true,
+        live: false,
         help: "ask GitHub at most once a day, from this screen only, whether a newer release exists; nothing is sent but the request itself",
         set: |s, v| {
             s.update_check = parse_bool(v)?;
@@ -765,6 +778,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "show the character, difficulty and stage (or replay / menu) in your Discord status; only the Discord app running on this computer is contacted, nothing goes to the internet from the game",
         set: |s, v| {
             s.discord = parse_bool(v)?;
@@ -784,6 +798,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "open the port menu when the window, browser tab or Android app loses focus during a stage (notification shade, split screen)",
         set: |s, v| {
             s.pause_unfocused = parse_bool(v)?;
@@ -807,6 +822,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "window scaling: smooth (bilinear), sharp (crisp pixels with smooth edges) or nearest",
         set: |s, v| {
             use th08_render::gfx::ScaleFilter;
@@ -832,6 +848,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "scale the picture by the largest whole multiple of 640x480 that fits",
         set: |s, v| {
             s.blit.integer = parse_bool(v)?;
@@ -851,6 +868,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "port master volume in percent (the game's own BGM volume option stays as it is)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -871,6 +889,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "port music volume in percent",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -891,6 +910,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "port sound effect volume in percent",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -911,6 +931,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP_WEB,
         persist: true,
+        live: true,
         help: "mute the sound while the window or browser tab is not focused",
         set: |s, v| {
             s.mute_unfocused = parse_bool(v)?;
@@ -930,6 +951,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "show the music room title of a BGM track (translated by the active pack) for a few seconds when it starts",
         set: |s, v| {
             s.now_playing = parse_bool(v)?;
@@ -949,6 +971,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP_WEB,
         persist: true,
+        live: false,
         help: "audio output buffer in frames (0 = the device default); raise it if the sound crackles",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -975,6 +998,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "colour filter on the window picture: off, protan, deutan, tritan (colour-vision correction) or high_contrast",
         set: |s, v| {
             use th08_render::gfx::ColorFilter;
@@ -1002,6 +1026,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "picture gamma in percent (100 = unchanged; higher brightens dark areas)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -1022,6 +1047,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "hitbox viewer: off, player (the player's hit box and graze area) or all (plus bullets, lasers and enemies); F3 or the port menu switches it in the game",
         set: |s, v| {
             s.hitboxes =
@@ -1182,6 +1208,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "screenshot size: game (the 640x480 frame) or window (scaled like the window)",
         set: |s, v| {
             s.screenshot_window = match v.trim() {
@@ -1211,6 +1238,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "input display: off, or the window corner where the arrows, shot, bomb, focus and pause of each frame are shown",
         set: |s, v| {
             s.input_display = match v.trim() {
@@ -1236,6 +1264,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "input display opacity in percent",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -1256,6 +1285,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "touch overlay: auto (touch platforms), on, off",
         set: |s, v| {
             use crate::platform::touch::TouchMode;
@@ -1281,6 +1311,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "movement: drag (the player follows the finger's movement) or a floating stick",
         set: |s, v| {
             use crate::platform::touch::Movement;
@@ -1305,6 +1336,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "drag sensitivity in percent (100 = the player follows the finger 1:1 on the game picture)",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -1325,6 +1357,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "FOCUS button: held, or a toggle",
         set: |s, v| {
             s.touch.focus_toggle = match v.trim() {
@@ -1348,6 +1381,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: false,
         help: "auto-fire at start (in play only; the AUTO button toggles it)",
         set: |s, v| {
             s.touch.autofire = parse_bool(v)?;
@@ -1367,6 +1401,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
+        live: true,
         help: "overlay opacity in percent",
         set: |s, v| {
             let n: u32 = num(v)?;
@@ -1387,6 +1422,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::NONE,
         persist: true,
+        live: false,
         help: "overlay layout per orientation (empty = default; written by the layout editor)",
         set: |s, v| {
             s.touch.layout = crate::platform::touch::TouchLayout::parse(v)?;
@@ -1406,6 +1442,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "where score.dat and replays are saved (default: the port config dir)",
         set: |s, v| {
             s.save_dir = Some(PathBuf::from(v));
@@ -1425,6 +1462,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::NATIVE,
         persist: true,
+        live: false,
         help: "append play events (runs, deaths, bombs, spell cards, continues, play time) to stats.jsonl in the save folder; local only, never for replays, demos or tool runs",
         set: |s, v| {
             s.stats = parse_bool(v)?;
@@ -1444,6 +1482,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "Japanese font for dialogue text (native)",
         set: |s, v| {
             s.font = Some(v.to_string());
@@ -1463,6 +1502,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP,
         persist: false,
+        live: false,
         help: "presentation pack to mount: a folder or .zip, or a pack id in <game folder>/packs or \
                <config folder>/packs; empty = the pack of the game text language (texts, fonts, images only)",
         set: |s, v| {
@@ -1483,6 +1523,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,
+        live: false,
         help: "General MIDI SoundFont (.sf2) for music mode MIDI (native; default: system soundfonts dirs)",
         set: |s, v| {
             s.soundfont = Some(PathBuf::from(v));
@@ -1502,6 +1543,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "fixed boot RNG seed (0-65535)",
         set: |s, v| {
             s.seed = Some(num(v)?);
@@ -1532,6 +1574,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "start a game at that stage (also stageN[.std], idx:N)",
         set: |s, v| {
             s.stage = Some(th08_core::stage::parse_stage_arg(v).ok_or("unknown stage")?);
@@ -1551,6 +1594,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "fast-forward the stage n frames on its first calc",
         set: |s, v| {
             s.stage_frame = num(v)?;
@@ -1597,6 +1641,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "shot type 0-11 or a name (reimu&yukari, ry, marisa, ...) for --stage/--ending",
         set: |s, v| {
             s.player = Some(th08_core::player::parse_shot(v).ok_or("unknown shot type")?);
@@ -1623,6 +1668,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "difficulty for --stage/--ending (also e/n/h/l/x, 0-4)",
         set: |s, v| {
             s.rank = Some(th08_core::enemy::parse_difficulty(v).ok_or("unknown difficulty")?);
@@ -1642,6 +1688,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "player power at the first stage",
         set: |s, v| {
             s.power = Some(num(v)?);
@@ -1661,6 +1708,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "continues used, for --ending",
         set: |s, v| {
             s.continues = num(v)?;
@@ -1680,6 +1728,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "start an ending: <shot><a|b|c> (bad / good 6A / good 6B) or a .end file",
         set: |s, v| {
             s.ending = Some(parse_ending(v)?);
@@ -1699,6 +1748,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "play a replay file or an attract demo",
         set: |s, v| {
             s.replay = Some(v.to_string());
@@ -1718,6 +1768,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "replay playback speed",
         set: |s, v| {
             s.replay_speed = num(v)?;
@@ -1745,6 +1796,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "port replay transport rate at the start of playback (F7 / F8 change it while it plays)",
         set: |s, v| {
             let r =
@@ -1771,6 +1823,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "save the recording to that replay slot when the game ends",
         set: |s, v| {
             s.replay_save = Some(num(v)?);
@@ -1790,6 +1843,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "input script file or inline `frames:mask,...`",
         set: |s, v| {
             s.input = Some(v.to_string());
@@ -1809,6 +1863,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "the player can't die",
         set: |s, v| {
             s.invuln = parse_bool(v)?;
@@ -1828,6 +1883,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "unlock everything in the menus",
         set: |s, v| {
             s.unlock = parse_bool(v)?;
@@ -1847,6 +1903,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "damage per frame to every on-screen shootable enemy",
         set: |s, v| {
             s.enemy_dmg = num(v)?;
@@ -1866,6 +1923,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "force the bomb index (4 = dissolve spell)",
         set: |s, v| {
             let i: usize = num(v)?;
@@ -1886,6 +1944,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "set that shot's clear masks on every difficulty",
         set: |s, v| {
             let m = v.split(',').map(mask).collect::<Result<Vec<_>, _>>()?;
@@ -1910,6 +1969,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::ALL,
         persist: false,
+        live: false,
         help: "queue screen effect T at game frame F",
         set: |s, v| {
             let n: Vec<i64> = v.split([':', ',']).map(num).collect::<Result<_, _>>()?;
@@ -1930,6 +1990,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "save /tmp/th08_shot.png at that frame and exit (web: freeze)",
         set: |s, v| {
             s.shot = Some(num(v)?);
@@ -1949,6 +2010,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "send --shot through the window's scaling blit at that size",
         set: |s, v| {
             s.shot_size = Some(pair(v, 'x')?);
@@ -1968,6 +2030,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP,
         persist: false,
+        live: false,
         help: "the mouse acts as one finger and the touch overlay is shown (test touch without a phone)",
         set: |s, v| {
             s.touch.mouse = parse_bool(v)?;
@@ -1987,6 +2050,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "N logic frames per drawn frame, no frame pacing",
         set: |s, v| {
             s.turbo = num(v)?;
@@ -2006,6 +2070,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "each present waits for the next tick of an N Hz grid (test pacing on slow displays); pace is logged",
         set: |s, v| {
             s.present_hz = Some(num(v)?);
@@ -2025,6 +2090,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "draw that ANM slot's sprites in a grid",
         set: |s, v| {
             s.slot_test = Some(num(v)?);
@@ -2044,6 +2110,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "run ANM scripts live instead of the game",
         set: |s, v| {
             s.anm = Some(v.to_string());
@@ -2063,6 +2130,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "--anm interrupts at those frames",
         set: |s, v| {
             s.anm_int = v
@@ -2085,6 +2153,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "--anm VM i at (x + i*dx, y)",
         set: |s, v| {
             s.anm_pos = list(v)?;
@@ -2107,6 +2176,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "--anm forced draw mode",
         set: |s, v| {
             s.anm_mode = Some(num(v)?);
@@ -2126,6 +2196,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "log each frame's flushed sound effect ids",
         set: |s, v| {
             s.se_log = parse_bool(v)?;
@@ -2145,6 +2216,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::DESKTOP_WEB,
         persist: false,
+        live: false,
         help: "write a plain-text draw log: <path>[,from-to] (.xz logs: session / drawrun tools)",
         set: |s, v| {
             s.drawlog = Some(v.to_string());
@@ -2164,6 +2236,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "tests: result-screen screenshots at those frames",
         set: |s, v| {
             s.result_shots = list(v)?;
@@ -2183,6 +2256,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "tests: frames per shot type in the scripted player test",
         set: |s, v| {
             s.test_frames = num(v)?;
@@ -2205,6 +2279,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "session tool: RNG call sites of that menu frame",
         set: |s, v| {
             s.session_rng = Some(num(v)?);
@@ -2224,6 +2299,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "session tool: player and items after each calc of menu frames A..B",
         set: |s, v| {
             s.session_dump = Some(pair(v, '-')?);
@@ -2243,6 +2319,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "session tool: also dump player bullets",
         set: |s, v| {
             s.session_pb = parse_bool(v)?;
@@ -2262,6 +2339,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "demosync tool: enemies and bullets per frame",
         set: |s, v| {
             s.bdump = parse_bool(v)?;
@@ -2281,6 +2359,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "demosync tool: player and items per frame",
         set: |s, v| {
             s.idump = parse_bool(v)?;
@@ -2300,6 +2379,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "demosync tool: effects of that type per frame",
         set: |s, v| {
             s.edump = Some(num(v)?);
@@ -2319,6 +2399,7 @@ pub const ENTRIES: &[Entry] = &[
         audience: Audience::Dev,
         platforms: Platforms::NATIVE,
         persist: false,
+        live: false,
         help: "tests: print every parsed .sht file",
         set: |s, v| {
             s.sht_dump = parse_bool(v)?;

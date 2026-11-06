@@ -9,6 +9,7 @@ pub mod keymap;
 pub mod overlay;
 pub mod padmap;
 pub mod portmenu;
+pub mod quittitle;
 pub mod safearea;
 pub mod screenshot;
 pub mod touch;

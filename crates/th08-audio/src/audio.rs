@@ -294,6 +294,18 @@ impl Default for PortVolume {
     }
 }
 
+// Port volume rows of a running `Audio` (port menu changes).
+#[derive(Clone)]
+pub struct VolumeHandle(Arc<Mutex<Mixer>>);
+
+impl VolumeHandle {
+    pub fn set(&self, v: PortVolume) {
+        let mut m = lock(&self.0);
+        m.bgm_gain = v.master * v.bgm;
+        m.se_gain = v.master * v.se;
+    }
+}
+
 // Background loader, standing in for the original's loader threads (00 §3.2, §6).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn spawn(fut: impl std::future::Future<Output = ()> + Send + 'static) {
@@ -517,6 +529,11 @@ impl Audio {
     // Port: silence the output without holding it (window unfocused); BGM and SE keep playing underneath.
     pub fn set_muted(&mut self, on: bool) {
         lock(&self.mixer).muted = on;
+    }
+
+    // A handle that sets the port volume rows while the game holds this device behind `AudioOut`.
+    pub fn volume_handle(&self) -> VolumeHandle {
+        VolumeHandle(self.mixer.clone())
     }
 
     // Must be called from a user gesture on the web (AudioContext policy).
