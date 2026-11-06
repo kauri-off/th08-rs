@@ -203,7 +203,8 @@ private fun LazyListScope.playItems(o: JSONObject, w: Words) {
             for (c in failed) {
                 val a = c.getInt("attempts")
                 val cap = c.getInt("captures")
-                Text(c.getString("name").ifEmpty { str(R.string.stats_card_no, c.getInt("card") + 1) },
+                val no = c.getInt("card") + 1
+                Text(c.getString("name").ifEmpty { str(R.string.stats_card_no, no) }.let { "%03d  %s".format(no, it) },
                     style = MaterialTheme.typography.bodyMedium)
                 Weak(str(R.string.stats_failed_line, a - cap, cap, a))
             }

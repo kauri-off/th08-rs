@@ -281,9 +281,9 @@ fn play_ui(ui: &mut egui::Ui, lang: Lang, d: &Data) {
             egui::Grid::new("st_failed")
                 .striped(true)
                 .spacing([18.0, 4.0])
-                .num_columns(3)
+                .num_columns(4)
                 .show(ui, |ui| {
-                    for h in ["st_card", "st_failures", "st_capture_rate"] {
+                    for h in ["st_no", "st_card", "st_failures", "st_capture_rate"] {
                         ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
                     }
                     ui.end_row();
@@ -299,6 +299,7 @@ fn play_ui(ui: &mut egui::Ui, lang: Lang, d: &Data) {
                         } else {
                             name
                         };
+                        ui.label(format!("{:03}", c.card + 1));
                         ui.label(name);
                         ui.monospace((c.attempts - c.captures).to_string());
                         ui.monospace(ratio((c.captures, c.attempts)));
