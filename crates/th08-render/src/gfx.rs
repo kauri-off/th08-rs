@@ -944,10 +944,14 @@ impl Gfx {
         vsync: bool,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::util::new_instance_with_webgpu_detection(
-            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display)).with_env(),
-        )
-        .await;
+        #[allow(unused_mut)]
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
+        // Windows: DX12 only; Vulkan ICDs of older Intel drivers crash in device creation.
+        #[cfg(windows)]
+        {
+            desc.backends = wgpu::Backends::DX12;
+        }
+        let instance = wgpu::util::new_instance_with_webgpu_detection(desc.with_env()).await;
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
