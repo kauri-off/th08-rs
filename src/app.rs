@@ -1965,6 +1965,8 @@ mod tests {
         assert_eq!(r.ctx.w.game.scene, th08_core::types::SceneId::Game);
         let before = state(&r);
         let rng = r.ctx.w.rng.clone();
+        // Test loads skip the save files; a real run writes them, so this one does too.
+        r.ctx.w.game.persist = true;
         let saved = close_save(&mut r).expect("not a tool run");
         assert_eq!(state(&r), before);
         assert_eq!(format!("{:?}", r.ctx.w.rng), format!("{rng:?}"));
