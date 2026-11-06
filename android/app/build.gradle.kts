@@ -4,7 +4,7 @@
 //                                                                                (preferred) or th08.dat + thbgm.dat
 //   th08.channel    release | dev (default) | debug: applicationId org.th08.port[.dev|.debug] and app label
 //   th08.keystore   keystore.properties for release signing       th08.debugKey  debug keystore (default
-//                   (storeFile relative to the file)                             target/android/debug.keystore)
+//                   (storeFile relative to the file)                             ~/.local/share/th08-dev/debug.keystore)
 //   th08.versionCode (1)   th08.versionName   th08.minSdk (26)   th08.profile (cargo profile, release)
 //   th08.packs + th08.packIds   folder of translation packs + comma list of lang_xx ids to bundle (personal builds)
 import java.util.Properties
@@ -134,7 +134,8 @@ fun keyConfig(): Map<String, Any> {
         if (!store.isFile) throw GradleException("keystore named by $path not found")
         return mapOf("file" to store, "storePass" to v("storePassword"), "alias" to v("keyAlias"), "keyPass" to v("keyPassword"))
     }
-    val ks = File(prop("th08.debugKey") ?: File(repoDir, "target/android/debug.keystore").path).absoluteFile
+    // Shared by every checkout and worktree, so debug APKs from any of them update each other.
+    val ks = File(prop("th08.debugKey") ?: File(System.getProperty("user.home"), ".local/share/th08-dev/debug.keystore").path).absoluteFile
     if (!ks.isFile) {
         ks.parentFile.mkdirs()
         val p = ProcessBuilder("keytool", "-genkeypair", "-keystore", ks.path, "-storepass", "android", "-keypass",

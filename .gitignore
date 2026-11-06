@@ -1,4 +1,6 @@
 /target
+# Local dev state outside target/ (arch_check reference and config, agent task log): never committed.
+/devdata/
 /web/dist/
 /.playwright-mcp/
 __pycache__/

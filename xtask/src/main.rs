@@ -46,7 +46,7 @@ pub struct DistArgs {
     /// dev defaults to TH08_KEYSTORE_PROPS.
     #[arg(long, conflicts_with = "debug_key")]
     keystore: Option<PathBuf>,
-    /// Android: sign with the throwaway key target/android/debug.keystore (debug channel only).
+    /// Android: sign with the throwaway key ~/.local/share/th08-dev/debug.keystore (debug channel only).
     #[arg(long)]
     debug_key: bool,
     /// Android channel: release (org.th08.port, public), dev (org.th08.port.dev, personal key; default when

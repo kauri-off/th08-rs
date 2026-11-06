@@ -115,7 +115,7 @@ Android has three channels, installable side by side:
 |---|---|---|---|---|
 | `release` | `org.th08.port` | th08 | `--keystore PROPS` only | GitHub Releases; `--assets none` only, no `--packs` |
 | `dev` | `org.th08.port.dev` | th08 dev | `--keystore PROPS` or `TH08_KEYSTORE_PROPS` | personal builds, may bundle game data and packs; the default when a key is configured |
-| `debug` | `org.th08.port.debug` | th08 debug | throwaway `target/android/debug.keystore` | contributors, emulators; the default without a key |
+| `debug` | `org.th08.port.debug` | th08 debug | throwaway `~/.local/share/th08-dev/debug.keystore` | contributors, emulators; the default without a key |
 
 `PROPS` is a `keystore.properties` file with `storeFile` (absolute or relative to the file), `storePassword`,
 `keyAlias` and `keyPassword`. Only its path is passed on; Gradle reads the passwords. Never commit a keystore.

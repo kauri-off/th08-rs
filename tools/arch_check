@@ -23,7 +23,7 @@ J=${J:-$(awk -v c="$(nproc)" -v m="$JOB_MB" '/^MemAvailable/ {j = int($2 / 1024 
 { systemctl --user list-units 'th-b-*' --state=active --no-legend 2>/dev/null | grep -q . || [[ -e $ROOT/target/queue/batch.running ]]; } && (( J > 6 )) && J=6
 TIME=; [[ -x /usr/bin/time ]] && TIME=/usr/bin/time
 export TH08_DIR="${TH08_DIR:-$TH08_GAME_SRC/}"
-export XDG_CONFIG_HOME=$ROOT/target/verify-42/cfg
+export XDG_CONFIG_HOME=$ROOT/devdata/arch_cfg
 export CARGO_TARGET_DIR=$TARGET
 if [[ -n ${PACK:-} ]]; then export TH08_PACK=$(realpath "$PACK") RUST_LOG=th08::packs=info; echo "pack $TH08_PACK"; else unset TH08_PACK; fi
 export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC TIME

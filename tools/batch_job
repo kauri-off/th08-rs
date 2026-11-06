@@ -3,7 +3,7 @@
 #        tools/batch_job run NAME — the job: builds session (profile TH08_BATCH_PROFILE, default release) once, runs
 # tools/batch_run on both sets with it into target/batch_NAME/, prints the regressed replays; exit 1 on a regression
 # or a missing replay.
-# Env: J, TH08_BATCH_LIMIT (passed to tools/batch_run), KIND, TH08_BATCH_PROFILE (ship = the shipped packages' profile).
+# Keeps the newest 3 target/batch_* dirs. Env: J, TH08_BATCH_LIMIT (passed to tools/batch_run), KIND, TH08_BATCH_PROFILE (ship = the shipped packages' profile).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SETS="ref500 ref_b2"
@@ -42,4 +42,6 @@ for s in $SETS; do
 done
 if [[ -n $failed ]]; then echo "== batch $n: FAIL:$failed"; else echo "== batch $n: PASS"; fi
 for s in $SETS; do [[ -s $O/$s/regressions.txt ]] && cut -d' ' -f1 "$O/$s/regressions.txt" | sed "s/^/regressed $s: /"; done
+# Keep the newest 3 batch dirs.
+ls -dt "$ROOT"/target/batch_*/ 2> /dev/null | tail -n +4 | xargs -r rm -rf --
 exit $rc

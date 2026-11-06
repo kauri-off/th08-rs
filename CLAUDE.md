@@ -35,6 +35,10 @@ Wine (Windows builds, the original exe) runs only through `tools/wine_headless <
 
 ## Worktrees and heavy runs
 
+- `target/` holds only output that a rebuild recreates; `cargo clean` must never lose anything. Local state that tools
+  keep (arch_check reference and config, agent task log) lives in the gitignored `devdata/`; the Android debug key in
+  `~/.local/share/th08-dev/`.
+
 - Every git worktree builds in its own `target/`; never link or share target dirs between worktrees. Plain cargo
   build / check / clippy / fmt / unit tests need no lock.
 - Heavy runs (arch_check, cargo tests with game data, the emulator, replay batches) go through the job queue:

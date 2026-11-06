@@ -1,0 +1,21 @@
+#!/bin/bash
+# usage: tools/merge_wt WORKTREE NAME — stage everything in an agent's worktree, 3-way apply it to this checkout
+# (conflicts are left as markers to resolve), then remove the worktree and its branch; on a failed apply the worktree
+# stays and nothing is removed. NAME labels the output only.
+set -u
+W=${1:?worktree}; N=${2:?name}
+M=$(cd "$(dirname "$0")/.." && pwd)
+p=$(mktemp "${TMPDIR:-/tmp}/merge_wt.$N.XXXXXX.patch")
+trap 'rm -f "$p"' EXIT
+git -C "$W" add -A || exit 1
+git -C "$W" diff --cached --stat | tail -1
+git -C "$W" diff --cached --binary > "$p" || exit 1
+[[ -s $p ]] || { echo "merge_wt: $N has no changes; worktree kept"; exit 1; }
+b=$(git -C "$W" branch --show-current)
+out=$(git -C "$M" apply --3way "$p" 2>&1); rc=$?
+grep -viE "без ошибок|cleanly|Falling back" <<< "$out"
+if (( rc != 0 )) && ! git -C "$M" diff --name-only --diff-filter=U | grep -q .; then
+  echo "merge_wt: apply failed; worktree $W kept"; exit 1
+fi
+git -C "$M" worktree remove --force "$W" && { [[ -n $b ]] && git -C "$M" branch -D "$b" > /dev/null; }
+git -C "$M" diff --name-only --diff-filter=U

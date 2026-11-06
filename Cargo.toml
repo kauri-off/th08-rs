@@ -126,6 +126,10 @@ wasm-bindgen = "0.2.129"
 wasm-bindgen-futures = "0.4.79"
 web-sys = { version = "0.3.106", features = ["Window", "Document", "HtmlCanvasElement", "HtmlInputElement", "Element", "File", "FileList", "Location", "UrlSearchParams", "Blob", "Event", "console", "CanvasRenderingContext2d", "ImageData", "TextMetrics", "Storage", "Navigator", "HtmlAnchorElement", "Url", "BlobPropertyBag", "EventTarget", "Response", "StorageManager", "FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetDirectoryOptions", "FileSystemGetFileOptions", "FileSystemWritableFileStream"] }
 
+# Debug builds (tests, clippy, tools): line tables only, so panics keep file:line but target/debug stays small.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 opt-level = 2
 

@@ -2,4 +2,4 @@
 # usage: tools/arch_job NAME [arch_check run args…] — full arch_check as a high-priority q job (kind full); prints the
 # job ID; follow with `tools/q wait ID` (75 = still queued/running), `tools/q ls`, output in the job's out.log.
 n=$1; shift
-cd "$(dirname "$0")/.." && exec tools/q submit --kind full --prio high --label "$n" -C "$PWD" -- tools/arch_check run "$PWD/target/arch_ref" "$@"
+cd "$(dirname "$0")/.." && exec tools/q submit --kind full --prio high --label "$n" -C "$PWD" -- tools/arch_check run "$PWD/devdata/arch_ref" "$@"
