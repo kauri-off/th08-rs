@@ -1,11 +1,11 @@
-//! Spell manager g_Gui (12 §5.8): player/boss spell-name plates, cut-ins, streak strips and the bonus line.
+//! Spell manager g_Gui (12 §5.8), calc and draw step: spell-name plates, cut-ins, streak strips, the bonus line.
 
 use crate::anmmgr::{AnmManager, Tint};
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::builtin::Builtin;
-use crate::drawlist::{Align, PLAYFIELD, Recorder, TextCmd, TextSite};
+use crate::drawlist::{Align, TextCmd, TextSite};
 use crate::enemy::EnemyManager;
-use crate::game::{Ctx, View};
+use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
 use crate::textref::Text;
 use crate::types::lo8;
@@ -73,11 +73,11 @@ pub type Queue = Vec<Req>;
 #[derive(Clone)]
 pub struct Gui {
     // VMs at +0x120 + k·0x2A4, roles in the §5.8 table; 3 and 5 never get a script.
-    vms: [AnmVm; 14],
+    pub(crate) vms: [AnmVm; 14],
     // Pending Text_RenderToVm requests: (VM, text, colour, x inside the strip, placement).
     texts: Vec<(usize, Text, [u8; 3], f32, Align)>,
     // Spell flag bit 10: name-only show (native 22), no bonus line and no VM 13 interrupts.
-    name_only: bool,
+    pub(crate) name_only: bool,
     card: i32,
     shot: u8,
     // Spell +0xFC bonus and spell flag bit 2 (still capturable), read live from the card or what it left (step 4).
@@ -86,10 +86,10 @@ pub struct Gui {
     // Captures / attempts of the card for this shot type (CATK story +0x158 / +0x124, practice +0x1F4 / +0x1C0).
     history: (u32, u32),
     // +0x2620 bonus-line tint, 0x80808080 at Spell_Start; alpha +0x2623 fades 0x80 ↔ 0x20 (07 §11.1 step 1.2).
-    tint: u32,
+    pub(crate) tint: u32,
     // Port-only draw-phase scratch: the global tint VMs 0–6 were drawn under when the VM-7 block's tint-off followed
     // (06 §10.2); None = the emit-time tint is the right one.
-    pre_tint: Option<Tint>,
+    pub(crate) pre_tint: Option<Tint>,
 }
 
 impl Gui {
@@ -314,7 +314,7 @@ impl Gui {
         }
     }
 
-    fn shown(vm: &AnmVm) -> bool {
+    pub(crate) fn shown(vm: &AnmVm) -> bool {
         vm.script.is_some() && vm.visible()
     }
 
@@ -330,7 +330,7 @@ impl Gui {
     }
 
     // Draw step 4: VM 12 stamps sprite 0x88 + d from VM 13 pos + (−40, +1), advance 7; (x, y, digit) each.
-    fn bonus_stamps(&self) -> Vec<(f32, f32, u32)> {
+    pub(crate) fn bonus_stamps(&self) -> Vec<(f32, f32, u32)> {
         let (captures, attempts) = self.history;
         let base = self.vms[13].pos;
         let mut x = base[0] + STAMP_DX;
@@ -373,7 +373,7 @@ impl Gui {
     }
 
     // VM 12 with the sprite and position of one stamp.
-    fn stamp(vm: &mut AnmVm, anm: &AnmManager, (x, y, d): (f32, f32, u32)) {
+    pub(crate) fn stamp(vm: &mut AnmVm, anm: &AnmManager, (x, y, d): (f32, f32, u32)) {
         vm.set_sprite(anm, DIGIT_SPRITE + d.cast_signed());
         vm.pos = [x, y, 0.0];
     }
@@ -406,14 +406,6 @@ impl Task<Ctx> for GuiTask {
 
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         with_gui(ctx, |g, ctx| g.draw_step(ctx, tag)).unwrap_or(Ret::Next)
-    }
-}
-
-impl GuiTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        if let Some(g) = ctx.w.gui.as_deref() {
-            g.emit(ctx, rec, tag);
-        }
     }
 }
 
@@ -530,55 +522,5 @@ impl Gui {
             self.pre_tint = None;
         }
         Ret::Next
-    }
-
-    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        let anm = &ctx.w.anm;
-        rec.set_viewport(PLAYFIELD);
-        // No 0xFFF01010 freeze tint here: the only tint of Spell_Draw is +0x2620 of step 4.
-        let v = &self.vms;
-        // VMs 0–6 are drawn before the VM-7 block, under the global tint still on then.
-        let pre = self.pre_tint;
-        let draw = |rec: &mut Recorder, vm: &AnmVm, mode| {
-            crate::emit::anm::emit_tinted(anm, rec, vm, mode, vm.pos[2], pre);
-        };
-        // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (step 1).
-        if Self::shown(&v[0]) {
-            draw(rec, &v[0], 0);
-            draw(rec, &v[2], 0);
-            draw(rec, &v[4], 2);
-        }
-        if Self::shown(&v[1]) {
-            // Boss cut-in drawn at pos + pos_offset, restored afterwards (step 2).
-            let mut c = v[1].clone();
-            let (p, o) = (c.pos, c.pos_offset);
-            c.pos = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
-            draw(rec, &c, 0);
-        }
-        if Self::shown(&v[6]) {
-            draw(rec, &v[10], 0);
-            draw(rec, &v[6], 2);
-        }
-        if Self::shown(&v[7]) {
-            // Tint +0x2620 (step 4), turned off by the step; the alpha-0 skip tests the untinted colour.
-            let t = Some(Tint(self.tint));
-            let draw = |rec: &mut Recorder, vm: &AnmVm, mode| {
-                crate::emit::anm::emit_tinted(anm, rec, vm, mode, vm.pos[2], t);
-            };
-            draw(rec, &v[11], 0);
-            for k in [7, 8, 9] {
-                if v[k].script.is_some() {
-                    draw(rec, &v[k], 2);
-                }
-            }
-            draw(rec, &v[13], 0);
-            if !self.name_only {
-                let mut vm = v[12].clone();
-                for st in self.bonus_stamps() {
-                    Self::stamp(&mut vm, anm, st);
-                    draw(rec, &vm, 0);
-                }
-            }
-        }
     }
 }

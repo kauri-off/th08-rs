@@ -753,7 +753,7 @@ impl Supervisor {
                     rec.image(t, 0.0, 0.0);
                 }
                 // Then the "Press Shot Button" prompt with the whole queue (12 §1).
-                crate::ascii::emit_texts(&ctx.w.anm, rec, &self.prompt);
+                crate::emit::ascii::emit_texts(&ctx.w.anm, rec, &self.prompt);
             }
             2 => {
                 // The scripts' own positions (slide-in, z) are relative to the loading position.

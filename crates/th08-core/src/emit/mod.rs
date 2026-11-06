@@ -5,9 +5,12 @@ use crate::drawlist::{FULLSCREEN, Recorder};
 use crate::game::View;
 
 pub mod anm;
+pub mod ascii;
 pub mod bullet;
 pub mod effect;
 pub mod enemy;
+pub mod gui;
+pub mod hud;
 pub mod player;
 pub mod stage;
 
@@ -19,15 +22,15 @@ impl Emit {
         match node {
             Node::Supervisor => crate::supervisor::SupervisorTask.emit(v, rec, tag),
             Node::Scene => crate::supervisor::SceneTask.emit(v, rec, tag),
-            Node::Ascii => crate::ascii::AsciiTask.emit(v, rec, tag),
+            Node::Ascii => ascii::node(v, rec, tag),
             Node::AnmDebug => crate::anmdebug::AnmDebugTask.emit(v, rec, tag),
             Node::GameManager | Node::Replay => {}
             Node::Player => player::node(v, rec, tag),
             Node::Bullets => bullet::node(v, rec, tag),
             Node::Enemies => enemy::node(v, rec, tag),
             Node::Stage => stage::node(v, rec, tag),
-            Node::Hud => crate::hud::HudTask.emit(v, rec, tag),
-            Node::Gui => crate::gui::GuiTask.emit(v, rec, tag),
+            Node::Hud => hud::node(v, rec, tag),
+            Node::Gui => gui::node(v, rec, tag),
             Node::Effects => effect::node(v, rec, tag),
             Node::Screen { slot } => effect::screen_node(slot, v, rec, tag),
         }
