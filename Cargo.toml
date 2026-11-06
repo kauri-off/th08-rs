@@ -97,6 +97,8 @@ rfd = "0.17"
 # "Open folder" on the launcher's last-error notice.
 open = "5.3"
 sys-locale = "0.3.2"
+# The Windows launcher's update download check (selfupdate.rs).
+sha2 = "0.10"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = { version = "0.15.1", default-features = false }
@@ -108,7 +110,7 @@ th08-repack = { path = "crates/th08-repack", features = ["device"] }
 winit = { version = "0.30", features = ["android-native-activity"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Registry"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"

@@ -359,7 +359,12 @@ pub struct Model {
 enum Update {
     Off,
     Pending,
-    Running(crate::update::Background),
+    Running {
+        bg: crate::update::Background,
+        // The installed Windows copy offers Update; everything else the Download link only.
+        in_app: bool,
+        job: Option<crate::selfupdate::Job>,
+    },
 }
 
 // Save export / import on the settings screen: the port.cfg box and the last outcome (Ok / Err message).
@@ -601,27 +606,32 @@ impl Model {
         }
     }
 
-    // "Version X is available" with What is new / Download (update.rs).
+    // "Version X is available" with What is new / Download, and Update on an installed Windows copy (selfupdate.rs).
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-    fn update_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+    fn update_ui(&mut self, ui: &mut egui::Ui, lang: Lang) -> Option<Action> {
+        use crate::selfupdate::{Fail, Job, Status};
         if matches!(self.update, Update::Pending) {
             let on = self.row("update_check").value == Value::Bool(true);
             self.update = if on {
                 let ctx = ui.ctx().clone();
-                Update::Running(crate::update::Background::start(
-                    self.dirs.config.clone(),
-                    move || ctx.request_repaint(),
-                ))
+                Update::Running {
+                    bg: crate::update::Background::start(self.dirs.config.clone(), move || {
+                        ctx.request_repaint();
+                    }),
+                    in_app: crate::update::Platform::here()
+                        == crate::update::Platform::WindowsInstalled,
+                    job: None,
+                }
             } else {
                 Update::Off
             };
         }
-        let Update::Running(bg) = &self.update else {
-            return;
+        let Update::Running { bg, in_app, job } = &mut self.update else {
+            return None;
         };
-        let Some(r) = bg.get() else {
-            return;
-        };
+        let r = bg.get()?;
+        let status = job.as_ref().map(Job::status);
+        let mut act = None;
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
@@ -632,16 +642,64 @@ impl Model {
                     ))
                     .strong(),
                 );
-                for (key, url) in [("update_notes", &r.page), ("update_download", &r.download)] {
-                    if ui.button(i18n::ui(lang, key)).clicked()
-                        && let Err(e) = open::that_detached(url)
-                    {
-                        log::warn!("{url}: {e}");
+                match &status {
+                    Some(Status::Downloading(frac)) => {
+                        let progress = frac.map_or(String::new(), |f| format!("{:.0}%", f * 100.0));
+                        ui.label(i18n::ui_fmt(
+                            lang,
+                            "update_downloading",
+                            &[("version", &r.version), ("progress", &progress)],
+                        ));
+                        if ui.button(i18n::ui(lang, "update_cancel")).clicked()
+                            && let Some(j) = job
+                        {
+                            j.cancel();
+                        }
+                    }
+                    Some(Status::Verifying) => {
+                        ui.label(i18n::ui(lang, "update_verifying"));
+                    }
+                    Some(Status::Launched) => {
+                        ui.label(i18n::ui(lang, "update_installing"));
+                        act = Some(Action::Quit);
+                    }
+                    _ => {
+                        let link = |ui: &mut egui::Ui, key: &str, url: &str| {
+                            if ui.button(i18n::ui(lang, key)).clicked()
+                                && let Err(e) = open::that_detached(url)
+                            {
+                                log::warn!("{url}: {e}");
+                            }
+                        };
+                        link(ui, "update_notes", &r.page);
+                        if *in_app
+                            && r.asset.is_some()
+                            && r.sums.is_some()
+                            && ui.button(i18n::ui(lang, "update_install")).clicked()
+                        {
+                            let ctx = ui.ctx().clone();
+                            *job = Some(Job::start(&r, move || ctx.request_repaint()));
+                        }
+                        link(ui, "update_download", &r.download);
                     }
                 }
             });
+            let note = match &status {
+                Some(Status::Cancelled) => Some(i18n::ui(lang, "update_cancelled").to_string()),
+                Some(Status::Failed(f)) => Some(match f {
+                    Fail::Network(e) => i18n::ui_fmt(lang, "update_fail_network", &[("err", e)]),
+                    Fail::Sums => i18n::ui(lang, "update_fail_sums").to_string(),
+                    Fail::Hash => i18n::ui(lang, "update_fail_hash").to_string(),
+                    Fail::Install(e) => i18n::ui_fmt(lang, "update_fail_install", &[("err", e)]),
+                }),
+                _ => None,
+            };
+            if let Some(n) = note {
+                ui.colored_label(ui.visuals().error_fg_color, n);
+            }
         });
         ui.add_space(6.0);
+        act
     }
 
     // Active Cheats rows as edited on screen (keys).
@@ -735,7 +793,9 @@ impl Model {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-                self.update_ui(ui, lang);
+                if let Some(a) = self.update_ui(ui, lang) {
+                    act = Some(a);
+                }
                 self.last_error_ui(ui, lang);
                 if !self.dev {
                     let active: Vec<&str> = self

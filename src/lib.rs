@@ -11,6 +11,8 @@ pub mod pacer;
 pub mod packs;
 pub mod platform;
 pub mod saves;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+pub mod selfupdate;
 pub mod settings;
 pub mod sources;
 pub mod translations;

@@ -1,6 +1,7 @@
 ; th08 installer template for `cargo xtask dist --target windows-nsis` (xtask/src/desktop.rs); per-user, no admin.
 ; No game data here: with -DWITH_GAME xtask stages game\ plus game_install.nsh / game_uninstall.nsh (personal builds).
 ; Saves and port.cfg stay in %APPDATA%\th08, never in the install folder.
+; Update mode (the launcher's Update): `/S /UPDATE` over the install waits for its th08.exe to exit, then relaunches it.
 Unicode true
 ManifestDPIAware true
 !include "MUI2.nsh"
@@ -9,6 +10,8 @@ ManifestDPIAware true
 
 !define APP "th08 (Touhou 8 port)"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\th08-port"
+; Half-second polls before asking to close th08: 30 s.
+!define WAIT_POLLS 60
 
 Name "${APP}"
 OutFile "${OUT}"
@@ -55,14 +58,47 @@ Function DedicatedDir
   ${EndIf}
 FunctionEnd
 
+Var UPDATE
+
 Function .onInit
+  StrCpy $UPDATE 0
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/UPDATE" $R1
+  ${IfNot} ${Errors}
+    StrCpy $UPDATE 1
+  ${EndIf}
   ; (A silent install skips the directory page: `/D=` gets the same rule.)
   ${If} ${Silent}
     Call DedicatedDir
   ${EndIf}
 FunctionEnd
 
+; A running th08.exe cannot be opened for writing: poll until it can, then ask to close it (Retry) or stop (Cancel,
+; exit code 2, nothing changed). The message box shows in silent mode too.
+Function WaitForGame
+  StrCpy $R2 0
+  ${DoWhile} ${FileExists} "$INSTDIR\th08.exe"
+    ClearErrors
+    FileOpen $R1 "$INSTDIR\th08.exe" a
+    ${IfNot} ${Errors}
+      FileClose $R1
+      ${Break}
+    ${EndIf}
+    ${If} $R2 >= ${WAIT_POLLS}
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "th08 is still running from $INSTDIR.$\r$\nClose the game, then press Retry to finish the update." IDRETRY retry
+      SetErrorLevel 2
+      Quit
+      retry:
+      StrCpy $R2 0
+    ${EndIf}
+    Sleep 500
+    IntOp $R2 $R2 + 1
+  ${Loop}
+FunctionEnd
+
 Section
+  Call WaitForGame
   SetOutPath "$INSTDIR"
   File "${SRC}\th08.exe"
   File "${SRC}\th08.ico"
@@ -74,8 +110,11 @@ Section
 !endif
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  CreateShortcut "$SMPROGRAMS\${APP}.lnk" "$INSTDIR\th08.exe" "" "$INSTDIR\th08.ico"
-  CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\th08.exe" "" "$INSTDIR\th08.ico"
+  ; An update keeps the shortcuts as they are (one the user deleted stays deleted).
+  ${If} $UPDATE == 0
+    CreateShortcut "$SMPROGRAMS\${APP}.lnk" "$INSTDIR\th08.exe" "" "$INSTDIR\th08.ico"
+    CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\th08.exe" "" "$INSTDIR\th08.ico"
+  ${EndIf}
 
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
@@ -86,6 +125,9 @@ Section
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" "$0"
+  ${If} $UPDATE == 1
+    Exec '"$INSTDIR\th08.exe"'
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"

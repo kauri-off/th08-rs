@@ -145,6 +145,31 @@ pub const UI: &[(&str, &str)] = &[
     ("update_available", "Version {version} is available"),
     ("update_notes", "What is new"),
     ("update_download", "Download"),
+    ("update_install", "Update"),
+    ("update_cancel", "Cancel"),
+    (
+        "update_downloading",
+        "Downloading version {version}… {progress}",
+    ),
+    ("update_verifying", "Checking the download…"),
+    (
+        "update_installing",
+        "Installing… the launcher closes now and the game starts again when the update is in.",
+    ),
+    ("update_fail_network", "Download failed: {err}"),
+    (
+        "update_fail_sums",
+        "The release has no checksum for the installer; use Download.",
+    ),
+    (
+        "update_fail_hash",
+        "The download does not match its SHA-256 checksum and was deleted.",
+    ),
+    (
+        "update_fail_install",
+        "The installer could not start: {err}",
+    ),
+    ("update_cancelled", "The update was cancelled."),
     ("save_failed", "Could not save {name}: {err}"),
     ("not_set", "(not set)"),
     ("changed", "changed"),

@@ -49,20 +49,92 @@ impl Platform {
         if cfg!(target_os = "android") {
             Platform::Android
         } else if cfg!(windows) {
-            // The NSIS installer puts uninstall.exe beside th08.exe; a portable copy has none.
-            let installed = std::env::current_exe()
-                .ok()
-                .and_then(|e| Some(e.parent()?.join("uninstall.exe").is_file()))
-                .unwrap_or(false);
-            if installed {
-                Platform::WindowsInstalled
-            } else {
-                Platform::WindowsPortable
+            #[cfg(windows)]
+            if std::env::current_exe().is_ok_and(|e| installed_copy(&HkcuUninstall, &e)) {
+                return Platform::WindowsInstalled;
             }
+            Platform::WindowsPortable
         } else {
             Platform::Linux
         }
     }
+}
+
+// The NSIS installer's InstallLocation (HKCU uninstall key), behind a trait for the tests.
+#[cfg(any(windows, test))]
+pub trait InstallRegistry {
+    fn install_location(&self) -> Option<String>;
+}
+
+#[cfg(windows)]
+pub struct HkcuUninstall;
+
+#[cfg(windows)]
+impl InstallRegistry for HkcuUninstall {
+    fn install_location(&self) -> Option<String> {
+        use windows_sys::Win32::System::Registry::{
+            HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW,
+        };
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\th08-port");
+        let value = wide("InstallLocation");
+        let mut buf = vec![0u16; 1024];
+        let mut len = (buf.len() * 2) as u32;
+        // SAFETY: both names are NUL-terminated and `len` is the byte size of `buf`.
+        let rc = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        buf.truncate(len as usize / 2);
+        let s = String::from_utf16_lossy(&buf);
+        let s = s.trim_end_matches('\0');
+        (!s.is_empty()).then(|| s.to_string())
+    }
+}
+
+// Windows paths compare without case, separator style or a trailing separator.
+#[cfg(any(windows, test))]
+fn norm_path(p: &Path) -> String {
+    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = p.to_string_lossy().replace('/', "\\").to_lowercase();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    s.trim_end_matches('\\').to_string()
+}
+
+// The running exe is the copy the installer put there (its folder is InstallLocation).
+#[cfg(any(windows, test))]
+pub fn installed_copy(reg: &dyn InstallRegistry, exe: &Path) -> bool {
+    let (Some(loc), exe) = (reg.install_location(), norm_path(exe)) else {
+        return false;
+    };
+    exe.rsplit_once('\\')
+        .is_some_and(|(dir, _)| !dir.is_empty() && norm_path(Path::new(&loc)) == dir)
+}
+
+// SHA256SUMS (`<hex>  <name>` or `<hex> *<name>`): the lowercase checksum listed first for `asset`.
+pub fn expected_sum(sums: &str, asset: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let line = line.trim_end_matches('\r');
+        let (hex, rest) = line.split_at_checked(64)?;
+        let name = rest.strip_prefix(' ')?;
+        let name = name.strip_prefix(['*', ' '])?;
+        (hex.bytes().all(|b| b.is_ascii_hexdigit()) && name == asset)
+            .then(|| hex.to_ascii_lowercase())
+    })
+}
+
+pub fn sum_matches(sums: &str, asset: &str, actual_hex: &str) -> bool {
+    expected_sum(sums, asset).is_some_and(|e| e.eq_ignore_ascii_case(actual_hex))
 }
 
 // Release channel: the public APK (`org.th08.port`) or a desktop build with TH08_RELEASE_TAG.
@@ -387,5 +459,56 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sums() {
+        let (a, b) = ("a".repeat(64), "B".repeat(64));
+        let nsis = "th08-0.2.0-windows-nsis.exe";
+        let text = format!(
+            "{a}  th08-0.2.0-windows-exe.exe\r\n{b} *{nsis}\r\nnot a line\r\n{}  short.exe\r\n{a}  {nsis}\r\n",
+            "c".repeat(63)
+        );
+        assert_eq!(
+            expected_sum(&text, "th08-0.2.0-windows-exe.exe"),
+            Some(a.clone())
+        );
+        // The first line for a name wins; the checksum comes back lowercase.
+        assert_eq!(expected_sum(&text, nsis), Some("b".repeat(64)));
+        assert_eq!(expected_sum(&text, "short.exe"), None);
+        assert_eq!(expected_sum(&text, "th08-0.2.0-windows-nsis"), None);
+        assert_eq!(expected_sum("", nsis), None);
+        assert!(sum_matches(&text, nsis, &"b".repeat(64)));
+        assert!(sum_matches(&text, nsis, &b));
+        assert!(!sum_matches(&text, nsis, &a));
+        assert!(!sum_matches(&text, "missing.exe", &a));
+        let x = "\u{e9}".repeat(40);
+        assert_eq!(expected_sum(&format!("{x}  {nsis}"), nsis), None);
+    }
+
+    struct Reg(Option<&'static str>);
+
+    impl InstallRegistry for Reg {
+        fn install_location(&self) -> Option<String> {
+            self.0.map(String::from)
+        }
+    }
+
+    #[test]
+    fn installed() {
+        let exe = Path::new(r"C:\Users\me\AppData\Local\Programs\th08\th08.exe");
+        let here = |loc| installed_copy(&Reg(loc), exe);
+        assert!(here(Some(r"C:\Users\me\AppData\Local\Programs\th08")));
+        assert!(here(Some(r"c:\users\ME\AppData\Local\Programs\th08\")));
+        assert!(here(Some("C:/Users/me/AppData/Local/Programs/th08")));
+        assert!(!here(Some(r"D:\Games\th08")));
+        assert!(!here(Some(r"C:\Users\me\AppData\Local\Programs")));
+        assert!(!here(None));
+        let unix = Path::new("/opt/th08/th08");
+        assert!(installed_copy(&Reg(Some("/opt/th08")), unix));
+        assert!(!installed_copy(
+            &Reg(Some("/opt/th08")),
+            Path::new("/home/x/th08")
+        ));
     }
 }

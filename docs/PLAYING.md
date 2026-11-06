@@ -101,6 +101,20 @@ launcher itself:
 - Any failure shows the reason and the **Download** button, which opens the APK in your browser as before. It works
   only from the launcher screen, never while the game is running.
 
+On Windows the installed copy (the one the installer put in place, as recorded in the uninstall entry) also offers
+**Update**:
+
+- It downloads the release's installer into the temp folder (with progress and **Cancel**) and the release's
+  `SHA256SUMS`, and refuses the file unless its SHA-256 matches. It then starts the installer silently in update mode
+  (`/S /UPDATE`) and closes the launcher.
+- The installer waits for th08 to close (up to 30 seconds; after that it asks you to close the game and press
+  **Retry**, or **Cancel** to leave the old version as it is), replaces the program files, and starts the game again.
+  Saves, `port.cfg` and translations in `%APPDATA%\th08` stay as they are, and so do your shortcuts.
+- Any failure shows the reason, and **Download** still opens the installer in your browser. The portable exe has no
+  in-app update; it keeps the **Download** link.
+- The same update by hand: `th08-<version>-windows-nsis.exe /S /UPDATE` (without `/UPDATE` it does not restart the
+  game and re-creates the shortcuts).
+
 On Android, [Obtainium](https://github.com/ImranR98/Obtainium) can track the GitHub releases and install new APKs;
 the Linux AppImage updates itself with AppImageUpdate (see Downloads).
 
