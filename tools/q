@@ -37,8 +37,28 @@ def rjson(p, d=None):
 
 def wjson(p, o):
     t = f"{p}.tmp{os.getpid()}"
-    with open(t, "w") as f: json.dump(o, f)
+    with os.fdopen(os.open(t, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: json.dump(o, f)
     os.replace(t, p)
+
+
+# Variables never written to env.json or passed to jobs: credentials and desktop-session handles.
+SECRET = re.compile(r"TOKEN|SECRET|PASS|AUTH|COOKIE|CREDENTIAL|PRIVATE|API_?KEY|SESSION")
+KEEP_DAYS, KEEP_JOBS = 14, 300
+
+
+def job_env(src):
+    return {k: v for k, v in src.items() if k.startswith("TH08_") or not SECRET.search(k)}
+
+
+def gc_jobs(s):
+    """Removes finished job dirs older than KEEP_DAYS beyond the newest KEEP_JOBS; log.jsonl keeps their records."""
+    try: ids = sorted(os.listdir(f"{QDIR}/jobs"), reverse=True)
+    except OSError: return
+    for i in ids[KEEP_JOBS:]:
+        d = jdir(i)
+        if i in s["jobs"] or now() - os.path.getmtime(d) < KEEP_DAYS * 86400: continue
+        if rjson(f"{d}/status.json", {}).get("state") in ("queued", "running"): continue
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class Locked:
@@ -171,7 +191,7 @@ def cmd_submit(a):
     a = a[1:] if a[:1] == ["--"] else a
     if kind not in WEIGHT or prio not in ("high", "normal") or not a: die(__doc__, 2)
     if not os.path.isdir(cwd): die(f"submit: no directory {cwd}")
-    env = dict(os.environ)
+    env = job_env(os.environ)
     try:  # local paths (gitignored, so missing in worktrees) from the main checkout
         for ln in open(f"{MAIN}/packaging/local/local.env"):
             k, eq, v = ln.strip().partition("=")
@@ -180,7 +200,7 @@ def cmd_submit(a):
     env.setdefault("J", str(max(2, 16 * WEIGHT[kind] // CAP)))
     i = time.strftime("%Y%m%d-%H%M%S") + "-" + "".join(random.choices("0123456789abcdef", k=4))
     d = jdir(i)
-    os.makedirs(d)
+    os.makedirs(d, mode=0o700)
     job = {"id": i, "cmd": a, "cwd": cwd, "label": label, "kind": kind, "prio": prio, "weight": WEIGHT[kind],
            "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}", "progress": prog}
     wjson(f"{d}/job.json", job)
@@ -188,6 +208,7 @@ def cmd_submit(a):
     wjson(f"{d}/status.json", {"state": "queued", "submit": job["submit"]})
     shutil.copy(os.path.abspath(__file__), f"{d}/runner.py")  # the unit survives removal of the caller's worktree
     with Locked() as s:
+        gc_jobs(s)
         s["seq"] += 1
         s["jobs"][i] = {"state": "queued", "kind": kind, "prio": prio, "weight": WEIGHT[kind], "seq": s["seq"],
                         "submit": job["submit"], "label": label, "cwd": cwd, "pid": None}
@@ -267,7 +288,7 @@ def cmd_run(a):
         st.update(start=None); st.setdefault("reason", "cancelled")
         finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path); return
     st.update(start=now(), lock="shared"); wjson(f"{d}/status.json", st)
-    with open(out_path, "wb") as out:
+    with os.fdopen(os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as out:
         try:
             child[0] = subprocess.Popen(job["cmd"], cwd=job["cwd"], env=env, stdout=out, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL, start_new_session=True)
