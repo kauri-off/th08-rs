@@ -1,0 +1,14 @@
+[package]
+name = "th08-out"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+th08-formats = { path = "../th08-formats" }
+anyhow = "1.0.104"
+bytemuck = { version = "1.25.2", features = ["derive"] }

@@ -89,6 +89,6 @@ that implements it. The numbered specs stay the source of truth.
 
 ## Draw log — source: specs/data/drawlog/FORMAT.md (crates/th08-tools/src/drawlog.rs)
 - Writer: one `F` per presented frame (sampled after the draw), `T`/`S`/`V` before a primitive when changed in the frame; `R` exactly when the formatted values satisfy the rectangle rule, else `Q`; untextured = `T -` + `-` UVs; numbers: xy 2, z/rhw 4, uv 5 decimals, trailing zeros removed. Port vertices are converted back from clip space: x = (ndc.x + 1)·320 − 0.5 (the port's +0.5 wgpu shift removed), z = z/w, rhw = 1/w.
-- Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Recorder::load_image(name, …)` (crates/th08-core/src/drawlist.rs) labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.
+- Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Recorder::load_image(name, …)` (crates/th08-out/src/drawlist.rs) labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.
 - Port specifics: atest always `ge4`, ztest `le` (stage) / `always`, blend `alpha` / `add` only; Clear → `C tz <colour>` / `C z ff000000`.
 - Fans (`Recorder::fan`, spell-practice pies): one `T -` + `S` with zwrite 0 and `P fan <n>` with untextured vertices; screen captures (`Recorder::capture_screen`, logo before stage / music-room exit) log `K screen <label> 0 0 640 480 0 0`.

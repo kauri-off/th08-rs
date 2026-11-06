@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port reference traces and draw hashes.
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core), emit rule, wasm + android
+# run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core / th08-out), emit rule, wasm + android
 # check, cargo test, then rerun every item (plus emit-off session replays) and compare with DIR; exit 1 on any diff.
 # Env: J, CARGO_TARGET_DIR, RUN_OUT, ONLY (item regex), FAST=1 (traces only), SCOPE=logic (LOGIC_ITEMS), PACK (pack mounted, same results).
 set -u
@@ -126,7 +126,7 @@ elif cl=$("$ROOT/tools/lint_subset" 2>&1); then
   read -r cw cp < <(awk -v p=" $CLIPPY_PENDING " '$2 != "total" {if (index(p, " " $2 " ")) n += $1; else w += $1} END {print w + 0, n + 0}' <<< "$cl")
   [[ $cw == 0 ]] && echo "clippy ok, 0 warnings ($cp in pending files)" || { echo "clippy: $cw warnings"; grep -vE "total|${CLIPPY_PENDING// /|}" <<< "$cl" | head; fail=1; }
 else echo "clippy FAILED"; tail -5 <<< "$cl"; fail=1; fi
-cdeps=$(cargo tree -q -p th08-core -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
+cdeps=$(cargo tree -q -p th08-core -p th08-out -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
 [[ -z $cdeps ]] && echo "core deps ok" || { echo "core deps FAILED: $cdeps"; fail=1; }
 "$ROOT/tools/emit_rule" | head -20; [[ ${PIPESTATUS[0]} == 0 ]] || fail=1
 srefs=$(python3 "$ROOT/tools/spec_refs.py" 2>&1 | grep "^spec_refs:")

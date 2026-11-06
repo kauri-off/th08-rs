@@ -6,19 +6,21 @@ plans in [arch/](arch/ARCH_SUMMARY.md); behaviour itself is described only by th
 ## Crates
 
 ```
-th08-formats ─► th08-core ─┬─► th08-render ─┐
-  (parsers)     (logic)    ├─► th08-audio ──┼─► th08 (app: src/) ─► th08-tools (debug bins)
-                           ├─► th08-thcrap ─┘        ▲
-                           ├─► th08-repack ──────────┘ (Android import only)
-                           └─► th08-replay (headless runner, core only)
+th08-formats ─► th08-out ─┬──────────────► th08-render ─┐
+  (parsers)     (output)  │                               │
+                          └─► th08-core ─┬─► th08-audio ──┼─► th08 (app: src/) ─► th08-tools (debug bins)
+                               (logic)   ├─► th08-thcrap ─┘        ▲
+                                         ├─► th08-repack ──────────┘ (Android import only)
+                                         └─► th08-replay (headless runner, core only)
 xtask (packaging, no game crates)
 ```
 
 | Crate | Owns | Does not touch |
 |---|---|---|
 | `th08-formats` | parsers and writers of the original files (archive, ANM, ECL, STD, MSG, replay, score.dat…); bytes in, structs out | IO, `unsafe` |
+| `th08-out` | output types both sides write: `Recorder`, `DrawCmd` / `ResCmd` / `TextCmd`, `TexId`s, the draw log format (`drawfmt`), text keys (`textref`, `builtin`); th08-core re-exports them | game state |
 | `th08-core` | all game logic: `World`, the frame driver `Ctx`, every ported subsystem, the emits that turn state into draw commands, `fmath` | window, GPU, sound device, file system, clocks, threads |
-| `th08-render` | `Gfx`: executes the core's `DrawCmd` / `ResCmd` lists on wgpu; text rasterising and translated text (`textdb`) | game state |
+| `th08-render` | `Gfx`: executes the `DrawCmd` / `ResCmd` lists (depends on th08-out only) on wgpu; text rasterising and translated text (`textdb`) | game state |
 | `th08-audio` | `Audio`: executes the core's `SoundCmd`s on cpal; WAV BGM from `thbgm.dat`, MIDI sequencer and synth | game state |
 | `th08-thcrap` | thpatch translations → presentation packs (download, key mapping, fonts, build, install) | logic |
 | `th08-repack` | `th08.pak` / `thbgm.pak` from the `.dat` files; the Android import job | logic |
@@ -62,7 +64,7 @@ end is `web/` (wasm-bindgen).
 
 - Logic floats use only `th08-core/src/fmath.rs` (pinned transcendentals, the AMD `rsqrtss` model).
   `crates/th08-core/clippy.toml` bans the std `sin` / `cos` / `atan2` / … and interior-mutability types, so an emit
-  holding `&World` cannot change logic state. `tools/arch_check` fails when `th08-core` depends on wgpu, cpal,
+  holding `&World` cannot change logic state. `tools/arch_check` fails when `th08-core` or `th08-out` depends on wgpu, cpal,
   winit, egui, rfd, clap or liblzma.
 - `tools/fmath_xplat/run.sh` (CI) checks `fmath` bit for bit on x86_64, wasm32 and aarch64.
 - `tools/xplat_replays` plays recorded replays with `th08-replay` on x86_64, aarch64 (qemu), wasm32-wasip1

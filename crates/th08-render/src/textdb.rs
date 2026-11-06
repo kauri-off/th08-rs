@@ -2,8 +2,8 @@
 //! as before, so with nothing mounted every `TextCmd` rasterises the original string (10 §6).
 
 use std::collections::HashMap;
-use th08_core::drawlist::TextSite;
-use th08_core::textref::{SjisString, TextRef, sprintf};
+use th08_out::drawlist::TextSite;
+use th08_out::textref::{SjisString, TextRef, sprintf};
 
 use crate::text::Overflow;
 
@@ -76,8 +76,8 @@ impl TextDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use th08_core::builtin::Builtin;
-    use th08_core::textref::{FmtArg, SpellField, Text};
+    use th08_out::builtin::Builtin;
+    use th08_out::textref::{FmtArg, SpellField, Text};
 
     fn name() -> Text {
         Text::new(

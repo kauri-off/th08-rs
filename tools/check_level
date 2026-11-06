@@ -10,7 +10,7 @@ base=${1:-HEAD}
 untracked=$(git ls-files --others --exclude-standard)
 files=$( { git diff --name-only "$base"; echo "$untracked"; } | grep -v '^$' | sort -u)
 # th08-core modules that only draw (src/emit/), trace or test; they need the full check but not the replay batch.
-draw='^crates/th08-core/src/((anmdebug|drawfmt|drawlist|trace|testdata)\.rs|emit/.*)$'
+draw='^crates/th08-core/src/((anmdebug|trace|testdata)\.rs|emit/.*)$'
 # True when every changed line of tracked .rs file $1 is a // comment or blank.
 comment_only() {
   [[ $1 == *.rs ]] && ! grep -qxF "$1" <<<"$untracked" || return 1
@@ -18,9 +18,9 @@ comment_only() {
   body=$(git diff -U0 "$base" -- "$1" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ')
   [[ -n $body ]] && ! grep -qvE '^[-+][[:space:]]*(//.*)?$' <<<"$body"
 }
-batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
+batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats|out)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
   while read -r f; do comment_only "$f" || echo "$f"; done)
-full=$(grep -E '^crates/th08-(core|formats|tools|render)/|^specs/data/|^src/(settings|platform)\.rs$|^tools/arch_check$' <<<"$files")
+full=$(grep -E '^crates/th08-(core|formats|out|tools|render)/|^specs/data/|^src/(settings|platform)\.rs$|^tools/arch_check$' <<<"$files")
 if [[ -n $batch ]]; then echo batch; echo "$batch" | sed 's/^/  /' | head -20
 elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
 else echo light; fi

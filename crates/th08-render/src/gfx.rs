@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::util::DeviceExt;
 
-pub use th08_core::drawlist::{
+pub use th08_out::drawlist::{
     Blend, DrawCmd, FULLSCREEN, LogFog, LogRec, LogTex, PLAYFIELD, Recorder, Rect, ResCmd,
     SCREEN_H, SCREEN_W, TexId, TexInfo, Vertex, clip_in_viewport,
 };
@@ -2302,7 +2302,7 @@ impl Gfx {
     // Text_RenderToVm 0x4663B0 (10 §6): translation or Shift-JIS decode, CPU raster, upload over the strip.
     // Text equal to the vanilla decode takes the vanilla path (system font, byte-formula `x`), so untranslated
     // strings keep their pixels with a pack mounted.
-    fn do_text(&mut self, t: &th08_core::drawlist::TextCmd) {
+    fn do_text(&mut self, t: &th08_out::drawlist::TextCmd) {
         let s = self.pack.db.resolve(&t.key, &t.text);
         let translated = !self.pack.db.is_empty() && s != t.text.decode();
         let (font, pack_font) = (self.font.as_deref(), &self.pack.fonts);
@@ -2328,7 +2328,7 @@ impl Gfx {
     }
 }
 
-impl th08_core::drawlist::Renderer for Gfx {
+impl th08_out::drawlist::Renderer for Gfx {
     fn submit(&mut self, rec: &mut Recorder) {
         Gfx::submit(self, rec);
     }

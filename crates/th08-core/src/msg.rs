@@ -714,6 +714,20 @@ pub fn argb(c: u32) -> [u8; 4] {
 mod tests {
     use super::*;
 
+    // Every msg::FILES name is in textref::MSG_FILES.
+    #[test]
+    fn msg_files_cover_the_table() {
+        for stage in 0..9 {
+            for shot in 0..12 {
+                let n = file_name(stage, shot);
+                assert!(
+                    crate::textref::MSG_FILES.contains(&n.trim_end_matches(".dat")),
+                    "{n}"
+                );
+            }
+        }
+    }
+
     // Face tables: normal per stage and team, spell practice by card id.
     #[test]
     fn face_file_tables() {

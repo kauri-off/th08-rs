@@ -247,17 +247,6 @@ mod tests {
         );
     }
 
-    // Every msg::FILES name is in MSG_FILES.
-    #[test]
-    fn msg_files_cover_the_table() {
-        for stage in 0..9 {
-            for shot in 0..12 {
-                let n = crate::msg::file_name(stage, shot);
-                assert!(MSG_FILES.contains(&n.trim_end_matches(".dat")), "{n}");
-            }
-        }
-    }
-
     #[test]
     fn builtin_keys_unique_and_sjis() {
         let all = Builtin::all();

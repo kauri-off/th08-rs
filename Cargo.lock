@@ -3307,6 +3307,7 @@ dependencies = [
  "libm",
  "log",
  "th08-formats",
+ "th08-out",
 ]
 
 [[package]]
@@ -3322,6 +3323,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "th08-out"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "th08-formats",
+]
+
+[[package]]
 name = "th08-render"
 version = "0.1.0"
 dependencies = [
@@ -3331,7 +3341,7 @@ dependencies = [
  "image",
  "log",
  "pollster 1.0.1",
- "th08-core",
+ "th08-out",
  "wasm-bindgen",
  "web-sys",
  "wgpu",

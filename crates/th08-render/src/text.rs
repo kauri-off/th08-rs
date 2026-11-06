@@ -2,7 +2,7 @@
 //! Renderer side (ARCH_SUMMARY decision 7): `Gfx` runs it for `ResCmd::Text`; core never rasterises or reads fonts.
 //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
 
-use th08_core::drawlist::Align;
+use th08_out::drawlist::Align;
 
 // Port font metric, no spec section: baseline of the glyph cell as a fraction of the cell height (MS Gothic ascent ≈ 0.86 em).
 const BASELINE: f32 = 0.86;
