@@ -1,17 +1,9 @@
 //! ANM emit half: DrawByMode, EmitQuad, Draw3DWorld and ring-strip / billboard draws over `&AnmManager` (05 §9).
 
-use crate::anmmgr::{AnmManager, SlotSprite, Tint, length3};
+use crate::anmmgr::{AnmManager, Fog, SlotSprite, Tint, length3};
 use crate::anmvm::{self, AnmVm};
 use crate::camera::Camera;
 use crate::drawlist::{self, Blend, Recorder, Vertex};
-
-// Linear vertex fog (06 §10.1): f = clamp((far − z) / (far − near), 0, 1) on eye-space z (no range fog); RGB bytes.
-#[derive(Clone, Copy, Debug)]
-pub struct Fog {
-    pub near: f32,
-    pub far: f32,
-    pub color: [u8; 3],
-}
 
 pub fn emit(anm: &AnmManager, rec: &mut Recorder, vm: &AnmVm) {
     emit_mode_z(anm, rec, vm, vm.draw_mode, vm.pos[2]);

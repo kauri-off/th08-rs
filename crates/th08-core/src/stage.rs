@@ -1,10 +1,9 @@
 //! Stage background g_Stage 0x4E4030: .std script VM, 3D camera, fog, layers, spell background, draw step (06, 13 §5).
 
-use crate::anmmgr::AnmManager;
+use crate::anmmgr::{AnmManager, Fog};
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::{PLAYFIELD, Rect, Vertex};
-use crate::emit::anm::Fog;
 use crate::game::{Ctx, Sys};
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::lo8;

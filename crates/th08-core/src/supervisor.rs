@@ -1,11 +1,10 @@
-//! Supervisor g_Supervisor 0x17CE758 (11 §7): scene switches, input poll, boot / loading screens; calc 0, draw 0/2/16.
+//! Supervisor g_Supervisor 0x17CE758 (11 §7): scene switches, input poll, boot / loading screens; calc 0, draw step 0/2/16.
 
 use crate::anmvm::AnmVm;
 use crate::chain::Node;
 use crate::coreconfig::{CoreConfig, Ending};
-use crate::drawlist::{Blend, PLAYFIELD, Rect};
-use crate::drawlist::{Recorder, TexId};
-use crate::game::{Ctx, View};
+use crate::drawlist::TexId;
+use crate::game::Ctx;
 use crate::gamemgr::{self, Game, GameManager};
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::SceneId;
@@ -15,18 +14,18 @@ use anyhow::{Context, Result};
 #[derive(Clone)]
 pub struct Supervisor {
     // Debug `TH08_SLOT_TEST` / `TH08_INPUT`.
-    debug_sprites: Option<usize>,
+    pub(crate) debug_sprites: Option<usize>,
     script: Option<Vec<u16>>,
     frame: usize,
     // Chain node of the registered scene (`Node::Scene`, or `Node::GameManager` for the GM); the scene
     // state is `Ctx.scene` / `Ctx.gm`.
     scene_task: Option<Node>,
     // Full-screen surface slot 8 (logo, captured frame or result.jpg), drawn at prio 0 while loading (12 §1).
-    logo: Option<TexId>,
+    pub(crate) logo: Option<TexId>,
     // The three nowloading.anm VMs (scripts 0–2) and their screen position (12 §1 state 1).
-    boot_vms: Vec<AnmVm>,
+    pub(crate) boot_vms: Vec<AnmVm>,
     boot_frames: u32,
-    load_pos: [f32; 2],
+    pub(crate) load_pos: [f32; 2],
     // Loading state of a stage start: Loading_Wait / Loading_End follow the GM loader (12 §1).
     stage_load: bool,
     // Pending post-present capture into surface 8 (0x44886F, 12 §1).
@@ -35,7 +34,7 @@ pub struct Supervisor {
     fps_text: String,
     fps_frames: u32,
     // Queue entries the prio-0 loading prompt drained this frame (12 §1), drawn by the emit.
-    prompt: Vec<crate::ascii::Text>,
+    pub(crate) prompt: Vec<crate::ascii::Text>,
 }
 
 // The boot and menu-load holds end when the loader threads finish (Supervisor_Calc returns 1 until then; MainMenu
@@ -204,12 +203,6 @@ impl Task<Ctx> for SceneTask {
     }
 }
 
-impl SceneTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        on_scene!(&ctx.w.scene, x => x.emit(ctx, rec, tag), ());
-    }
-}
-
 // Chain nodes of `ctx.w.supervisor` (calc 0, draw 0 / 2 / 16): stateless forwarder.
 pub struct SupervisorTask;
 
@@ -224,14 +217,6 @@ impl Task<Ctx> for SupervisorTask {
 
     fn draw_step(&mut self, ctx: &mut Ctx, tag: u8) -> Ret {
         Supervisor::with(ctx, |s, ctx| s.draw_step(ctx, tag))
-    }
-}
-
-impl SupervisorTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        if let Some(s) = ctx.w.supervisor.as_deref() {
-            s.emit(ctx, rec, tag);
-        }
     }
 }
 
@@ -742,58 +727,5 @@ impl Supervisor {
             _ => {}
         }
         Ret::Next
-    }
-
-    // TH08_SLOT_TEST=<slot>: draws that slot's sprites in a grid, clipped to the playfield.
-    fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        match tag {
-            0 => {
-                if let Some(t) = self.logo {
-                    rec.set_viewport(crate::drawlist::FULLSCREEN);
-                    rec.image(t, 0.0, 0.0);
-                }
-                // Then the "Press Shot Button" prompt with the whole queue (12 §1).
-                crate::emit::ascii::emit_texts(&ctx.w.anm, rec, &self.prompt);
-            }
-            2 => {
-                // The scripts' own positions (slide-in, z) are relative to the loading position.
-                // 0x445D3E: pos += pos_offset, Draw2DRot, pos −= pos_offset (12 §1): a shifted copy, no net write.
-                for vm in &self.boot_vms {
-                    let (p, o) = (vm.pos, vm.pos_offset);
-                    let mut v = vm.clone();
-                    v.pos = [
-                        p[0] + o[0] + self.load_pos[0],
-                        p[1] + o[1] + self.load_pos[1],
-                        p[2] + o[2],
-                    ];
-                    crate::emit::anm::emit_mode(&ctx.w.anm, rec, &v, 2);
-                }
-            }
-            _ => {}
-        }
-        let (Some(slot), 16) = (self.debug_sprites, tag) else {
-            return;
-        };
-        let Some(anm) = ctx.w.anm.get(slot) else {
-            return;
-        };
-        rec.set_viewport(PLAYFIELD);
-        rec.clear_viewport([0, 0, 64, 255]);
-        let (mut x, mut y, mut row) = (0.0, 0.0, 0.0f32);
-        for s in &anm.sprites {
-            if x + s.w > 640.0 {
-                (x, y, row) = (0.0, y + row, 0.0);
-            }
-            rec.sprite(
-                s.tex,
-                Blend::Alpha,
-                Rect::new(x, y, s.w, s.h),
-                s.uv,
-                [255; 4],
-            );
-            x += s.w;
-            row = row.max(s.h);
-        }
-        rec.set_viewport(crate::drawlist::FULLSCREEN);
     }
 }

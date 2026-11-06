@@ -1,11 +1,10 @@
-//! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking, end panel and the result viewer.
+//! Result object `Result_Register(mode)` 0x4582A0 (16 §2): name entry, ranking, end panel, result viewer; calc and draw step.
 
 use crate::anmvm::{self, AnmVm, table_index};
 use crate::ascii::Text;
 use crate::builtin::Builtin;
 use crate::drawlist::TexId;
-use crate::drawlist::{FULLSCREEN, Recorder};
-use crate::game::{Ctx, View};
+use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{
     BOMB, DOWN, ENTER, FOCUS, Input, KEY_D, KEY_Q, KEY_S, LEFT, PAUSE, RIGHT, SHOT, SKIP, UP,
@@ -27,14 +26,14 @@ const ANM_SLOT: usize = 21;
 const RT_SLOT: usize = 22;
 const VM_COUNT: usize = 72;
 // Invisible anchor of the ranking / card list (16 §2.3).
-const VM_ANCHOR: usize = 40;
+pub(crate) const VM_ANCHOR: usize = 40;
 // End-panel picture result03.png (16 §2.5).
 const VM_PANEL: usize = 71;
 
 // Result states (+8, 16 §2.1 / §2.4 / §2.6); `ScoreLoad` 0x12 is mode 2's (score.dat loader), which never calcs.
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum State {
+pub(crate) enum State {
     Init = 0,
     Top = 1,
     Leave = 2,
@@ -66,7 +65,7 @@ enum State {
 
 impl State {
     // Replay-save dialogue states 10–14 (16 §2.6).
-    fn is_save(self) -> bool {
+    pub(crate) fn is_save(self) -> bool {
         matches!(
             self,
             Self::Save | Self::SaveMsg | Self::SaveSlot | Self::SaveName | Self::SaveOver
@@ -74,7 +73,7 @@ impl State {
     }
 
     // Play-data states 0x13–0x15 (16 §2.4).
-    fn is_play(self) -> bool {
+    pub(crate) fn is_play(self) -> bool {
         matches!(self, Self::Play | Self::PlayWait | Self::PlayOut)
     }
 }
@@ -126,7 +125,7 @@ fn group_cards(g: i32) -> Vec<usize> {
 pub struct ResultScreen {
     // Result_Register mode: 0 viewer, 1 after a game (2 = flush only, handled by Game::save_score).
     mode: u8,
-    state: State,
+    pub(crate) state: State,
     // Result +4 frame counter, +0x10 sub-state, +0x18 sub-frame, +0x1C cursor (16 §2.4).
     frame: i32,
     sub: i32,
@@ -138,7 +137,7 @@ pub struct ResultScreen {
     accordion: bool,
     // +0x3C ranking shot, +0x40 card page built, +0x44 ranking difficulty, +0x48 card group, +0x54 leaving.
     rank_shot: i32,
-    card_page: i32,
+    pub(crate) card_page: i32,
     rank_diff: i32,
     card_group: i32,
     card_leaving: bool,
@@ -147,15 +146,15 @@ pub struct ResultScreen {
     name_pos: i32,
     char_cursor: i32,
     // 72 result00.anm VMs at +0x1A0, VM i runs script i.
-    vms: Vec<AnmVm>,
+    pub(crate) vms: Vec<AnmVm>,
     // 28 Text_RenderToVm targets: k 0–13 text.anm sprites 21–34, k 14–27 resulttext.anm sprites 2–15.
-    text_vms: Vec<AnmVm>,
+    pub(crate) text_vms: Vec<AnmVm>,
     // VM +0x1119C: result00.anm sprite 32, the 256×16 separator bar (centred anchor).
-    bar: AnmVm,
+    pub(crate) bar: AnmVm,
     // Surface slot 0: result/result.jpg.
-    surface: Option<TexId>,
+    pub(crate) surface: Option<TexId>,
     // Calc node removed (16 §2.4 exit, P+20): the draw node stays until the scene switch and draws nothing.
-    removed: bool,
+    pub(crate) removed: bool,
     // +0x64: captured-card counts [group][character] (Result_OnRegister).
     captured: [[u32; 13]; 6],
     // Run-time seconds kept at Result+0x19C (play-data page, 16 §2.4).
@@ -190,13 +189,6 @@ fn text_vm(w: &World, slot: usize, sprite: i32, centred: bool) -> AnmVm {
     }
     vm.color = [255; 4];
     vm
-}
-
-// Mode-0 draw of a copy at (x, y): the original's draws of these VMs leave no persistent write (16 §2.4).
-fn emit_at(ctx: &View, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
-    let mut vm = vm.clone();
-    vm.pos = [x, y, 0.0];
-    crate::emit::anm::emit_mode(&ctx.w.anm, rec, &vm, 0);
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
@@ -1337,7 +1329,7 @@ impl ResultScreen {
     }
 
     // Rows (i, card id, x, y) of the shown card page; y steps 33, or the accordion step while +0x38 is set.
-    fn card_layout(&self) -> Vec<(i32, usize, f32, f32)> {
+    pub(crate) fn card_layout(&self) -> Vec<(i32, usize, f32, f32)> {
         let a = self.vms[VM_ANCHOR].pos;
         let ids = group_cards(self.card_group);
         let (x, mut y) = (a[0], a[1] + 16.0);
@@ -1356,22 +1348,6 @@ impl ResultScreen {
             };
         }
         rows
-    }
-
-    // Emit of the card list: header text VM 10, then per row the bar (×2.375) and the row text VM, all copies.
-    fn emit_cards(&self, ctx: &View, rec: &mut Recorder) {
-        let a = self.vms[VM_ANCHOR].pos;
-        if a[0] >= 640.0 || self.card_page < 0 {
-            return;
-        }
-        emit_at(ctx, rec, &self.text_vms[10], a[0] + 320.0, a[1] - 16.0);
-        for (i, _, x, y) in self.card_layout() {
-            let mut bar = self.bar.clone();
-            bar.scale = [2.375, 1.0];
-            bar.flags |= anmvm::F_SCALE_DIRTY;
-            emit_at(ctx, rec, &bar, x + 320.0, y + 16.0);
-            emit_at(ctx, rec, &self.text_vms[table_index(i)], x + 78.0, y);
-        }
     }
 }
 
@@ -1502,36 +1478,6 @@ impl ResultScreen {
             self.draw_save(ctx);
         }
         Ret::Next
-    }
-
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        if self.removed {
-            return;
-        }
-        rec.set_viewport(FULLSCREEN);
-        if let Some(t) = self.surface {
-            rec.image(t, 0.0, 0.0);
-        }
-        for vm in &self.vms {
-            let mut vm = vm.clone();
-            for k in 0..3 {
-                vm.pos[k] += vm.pos_offset[k];
-            }
-            crate::emit::anm::emit(&ctx.w.anm, rec, &vm);
-        }
-        if self.state == State::Cards {
-            self.emit_cards(ctx, rec);
-        }
-        if self.state.is_play() {
-            for vm in &self.text_vms[..20] {
-                crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
-            }
-        }
-        if self.state.is_save() {
-            for vm in &self.vms[49..55] {
-                crate::emit::anm::emit(&ctx.w.anm, rec, vm);
-            }
-        }
     }
 }
 

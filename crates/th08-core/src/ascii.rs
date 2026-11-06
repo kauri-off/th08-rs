@@ -718,30 +718,24 @@ fn gauge_step(
         colour,
         stamps,
     };
-    gauge_glyphs(anm, &mut g.vms[G_GLYPH], &draw, None);
+    gauge_glyphs(anm, &mut g.vms[G_GLYPH], &draw, |_| {});
     Some(draw)
 }
 
-// G4's glyph sequence: percent text, then the stamps; with `rec` each glyph is also emitted (from a copy in the emit).
+// G4's glyph sequence: percent text, then the stamps; `each` sees each glyph (a no-op in the step, a draw in the emit).
 pub(crate) fn gauge_glyphs(
     anm: &crate::anmmgr::AnmManager,
     vm: &mut AnmVm,
     d: &GaugeDraw,
-    mut rec: Option<&mut Recorder>,
+    mut each: impl FnMut(&AnmVm),
 ) {
-    percent_glyphs(anm, vm, d.gv, [d.at[0], d.at[1], 0.0], d.colour, |vm| {
-        if let Some(rec) = rec.as_deref_mut() {
-            crate::emit::anm::emit_mode(anm, rec, vm, 0);
-        }
-    });
+    percent_glyphs(anm, vm, d.gv, [d.at[0], d.at[1], 0.0], d.colour, &mut each);
     vm.color = d.colour;
     for &(glyph, x, y) in &d.stamps {
         vm.set_sprite(anm, 136 + glyph);
         vm.pos = [x, y, 0.0];
         vm.scale = [1.0, 1.0];
-        if let Some(rec) = rec.as_deref_mut() {
-            crate::emit::anm::emit_mode(anm, rec, vm, 0);
-        }
+        each(vm);
     }
     vm.scale = [1.0, 1.0];
 }

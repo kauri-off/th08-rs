@@ -231,7 +231,9 @@ fn gauge_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, d:
     }
     // Every glyph rewrites sprite, pos and scale, and the colour is fixed: replaying on a copy draws the same quads.
     let mut vm = g.vms[G_GLYPH].clone();
-    gauge_glyphs(anm, &mut vm, d, Some(rec));
+    gauge_glyphs(anm, &mut vm, d, |vm| {
+        crate::emit::anm::emit_mode(anm, rec, vm, 0);
+    });
 }
 
 fn markers_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder) {

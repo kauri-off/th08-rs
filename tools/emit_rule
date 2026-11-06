@@ -1,0 +1,19 @@
+#!/bin/bash
+# usage: tools/emit_rule — th08-core logic must not name the emit side: fail when a file under crates/th08-core/src/
+# outside src/emit/ names `emit::` (or `emit` in a `crate::{…}` / `super::{…}` list), test modules and comment lines
+# excepted. Prints the offending lines; exit 1 on any.
+set -o pipefail
+cd "$(dirname "$0")/.." || exit 2
+# file:text pairs that may name the emit side: the module declaration and the dispatcher calls in Ctx.
+export ALLOW='^crates/th08-core/src/lib[.]rs:mod emit;$|^crates/th08-core/src/game[.]rs:.*crate::emit::Emit[.](node|info)[(]'
+hits=$(find crates/th08-core/src -name '*.rs' -not -path 'crates/th08-core/src/emit/*' | sort |
+  xargs awk '
+    FNR == 1 { skip = 0 }
+    /^mod tests \{/ { skip = 1 }
+    skip || /^[[:space:]]*\/\// { next }
+    /(^|[^[:alnum:]_])emit::|(crate|super)::\{([^}]*[^[:alnum:]_])?emit[^[:alnum:]_]|^[[:space:]]*(pub(\([^)]*\))? )?mod emit;/ {
+      t = $0; sub(/^[[:space:]]+/, "", t)
+      if ((FILENAME ":" t) !~ ENVIRON["ALLOW"]) print FILENAME ":" FNR ": " t
+    }') || { echo "emit rule FAILED (scan error)"; exit 1; }
+[[ -z $hits ]] && { echo "emit rule ok"; exit 0; }
+echo "emit rule FAILED (emit:: outside src/emit/):"; echo "$hits"; exit 1

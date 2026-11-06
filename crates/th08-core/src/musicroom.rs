@@ -1,10 +1,10 @@
-//! Music room `MusicRoom_Register` 0x449254, scene 8 (16 §5.1–§5.3): musiccmt.txt list, heard flags, track selection.
+//! Music room `MusicRoom_Register` 0x449254, scene 8 (16 §5.1–§5.3): musiccmt.txt list, heard flags, track selection, draw step.
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::Text;
 use crate::builtin::Builtin;
-use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
-use crate::game::{Ctx, View};
+use crate::drawlist::{Align, TexId, TextCmd, TextSite};
+use crate::game::Ctx;
 use crate::gamemgr;
 use crate::input::{BOMB, DOWN, ENTER, KEY_R, PAUSE, SHOT, SKIP, UP};
 use crate::task::{Chain, Ret};
@@ -161,19 +161,19 @@ pub struct MusicRoom {
     state: i32,
     cursor: i32,
     playing: i32,
-    top: i32,
+    pub(crate) top: i32,
     // VM +0x88: music00.anm script 0.
-    bg: AnmVm,
+    pub(crate) bg: AnmVm,
     // VM 0x32C + i·0x2A4: music00.anm script i + 1, one per entry.
-    rows: Vec<AnmVm>,
+    pub(crate) rows: Vec<AnmVm>,
     // VM 0x5508 + k·0x2A4: text.anm script 10 + k from the first reveal.
-    comments: [AnmVm; COMMENT_LINES],
+    pub(crate) comments: [AnmVm; COMMENT_LINES],
     // VM +0x6784 (8th VM of that array): playing title, text.anm script 0x11.
     title: AnmVm,
     // Surface slot 0: music.jpg.
-    surface: Option<TexId>,
+    pub(crate) surface: Option<TexId>,
     // Calc returned 0 on the exit frame; the on-remove also removes the draw node (16 §5.3 step 1).
-    removed: bool,
+    pub(crate) removed: bool,
 }
 
 impl MusicRoom {
@@ -182,7 +182,7 @@ impl MusicRoom {
     }
 
     // Rows top..end shown by the draw, at y = 18·(i − top + 1) + 84 (16 §5.2).
-    fn row_end(&self) -> i32 {
+    pub(crate) fn row_end(&self) -> i32 {
         (self.top + ROWS).min(self.n())
     }
 
@@ -191,7 +191,7 @@ impl MusicRoom {
     }
 
     // The title is drawn at a forced pos and colour 0xFFFFFFFF, both restored after (16 §5.2).
-    fn shown_title(&self) -> AnmVm {
+    pub(crate) fn shown_title(&self) -> AnmVm {
         let mut t = self.title.clone();
         t.pos = [320.0, 52.0, 0.0];
         t.color = [255; 4];
@@ -421,24 +421,6 @@ impl MusicRoom {
         self.title.world_matrix = title.world_matrix;
         self.title.flags = title.flags;
         Ret::Next
-    }
-
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        if self.removed {
-            return;
-        }
-        rec.set_viewport(FULLSCREEN);
-        if let Some(t) = self.surface {
-            rec.image(t, 0.0, 0.0);
-        }
-        crate::emit::anm::emit(&ctx.w.anm, rec, &self.bg);
-        for i in self.top..self.row_end() {
-            crate::emit::anm::emit(&ctx.w.anm, rec, &self.rows[anmvm::table_index(i)]);
-        }
-        for vm in &self.comments {
-            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
-        }
-        crate::emit::anm::emit(&ctx.w.anm, rec, &self.shown_title());
     }
 }
 

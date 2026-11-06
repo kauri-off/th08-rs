@@ -10,6 +10,14 @@ use crate::drawlist::{Recorder, TexId};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 
+// Linear vertex fog (06 §10.1): f = clamp((far − z) / (far − near), 0, 1) on eye-space z (no range fog); RGB bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Fog {
+    pub near: f32,
+    pub far: f32,
+    pub color: [u8; 3],
+}
+
 // ANM file slots 0..24; index ≥ 25 is an error.
 pub const SLOTS: usize = 25;
 

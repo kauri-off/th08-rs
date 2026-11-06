@@ -1,8 +1,7 @@
-//! Debug tool: live ANM script viewer (TH08_ANM), not a port of the original.
+//! Debug tool: live ANM script viewer (TH08_ANM) calc and draw step, not a port of the original.
 
 use crate::anmvm::AnmVm;
-use crate::drawlist::{FULLSCREEN, PLAYFIELD, Recorder};
-use crate::game::{Ctx, View};
+use crate::game::Ctx;
 use crate::task::{self, Chain, Ret, Task};
 use anyhow::{Context, Result};
 
@@ -11,11 +10,11 @@ use anyhow::{Context, Result};
 // TH08_ANM_MODE=<n> forces a draw mode (owners choose it; scripts rarely set one).
 #[derive(Clone)]
 pub struct AnmDebug {
-    vms: Vec<AnmVm>,
-    playfield: bool,
+    pub(crate) vms: Vec<AnmVm>,
+    pub(crate) playfield: bool,
     interrupts: Vec<(u64, u16)>,
     frame: u64,
-    mode: Option<i32>,
+    pub(crate) mode: Option<i32>,
 }
 
 const SLOT: usize = 24;
@@ -80,14 +79,6 @@ impl Task<Ctx> for AnmDebugTask {
     }
 }
 
-impl AnmDebugTask {
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        if let Some(a) = ctx.w.anm_debug.as_deref() {
-            a.emit(ctx, rec, tag);
-        }
-    }
-}
-
 impl AnmDebug {
     fn calc(&mut self, ctx: &mut Ctx, _: u8) -> Ret {
         self.frame += 1;
@@ -108,18 +99,5 @@ impl AnmDebug {
             ctx.w.anm.prepare(vm, mode);
         }
         Ret::Next
-    }
-
-    fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        rec.set_viewport(if self.playfield {
-            PLAYFIELD
-        } else {
-            FULLSCREEN
-        });
-        rec.clear_viewport([32, 32, 64, 255]);
-        for vm in &self.vms {
-            crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, self.mode.unwrap_or(vm.draw_mode));
-        }
-        rec.set_viewport(FULLSCREEN);
     }
 }

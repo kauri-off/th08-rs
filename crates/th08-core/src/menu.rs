@@ -1,11 +1,11 @@
-//! Main menu `MainMenu_Register` 0x47146D (12 §2): top menu, difficulty / character select, option screen.
+//! Main menu `MainMenu_Register` 0x47146D (12 §2), calc and draw step: top menu, difficulty / character select, options.
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{int, lo16, short, uidx};
 use crate::builtin::Builtin;
 use crate::config::Config;
-use crate::drawlist::{Align, FULLSCREEN, Recorder, TexId, TextCmd, TextSite};
-use crate::game::{Ctx, View};
+use crate::drawlist::{Align, TexId, TextCmd, TextSite};
+use crate::game::Ctx;
 use crate::gamemgr::{self, F_DEMO, F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{BOMB, DOWN, ENTER, Input, LEFT, PAUSE, RIGHT, SHOT, UP};
 use crate::sound;
@@ -37,7 +37,7 @@ pub(crate) const CHAR_PRACTICE: i32 = 9;
 const CHAR_EXTRA: i32 = 13;
 // Spell-practice character select: only reached through the +0x6C forward (12 §2.2); the top menu goes to 16.
 const CHAR_SPELL: i32 = 15;
-const REPLAY: i32 = 7;
+pub(crate) const REPLAY: i32 = 7;
 const PRACTICE_STAGE: i32 = 11;
 pub(crate) const SPELL_PRACTICE: i32 = 16;
 pub(crate) const SPELL_CARD: i32 = 17;
@@ -1409,43 +1409,15 @@ impl MainMenu {
         }
         Ret::Next
     }
-
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, tag: u8) {
-        if !self.drawn(ctx.w) {
-            return;
-        }
-        rec.set_viewport(FULLSCREEN);
-        if tag == SURFACE_PRIO as u8 {
-            if let Some((t, _)) = self.surface {
-                rec.image(t, 0.0, 0.0);
-            }
-            return;
-        }
-        for vm in &self.vms {
-            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
-        }
-        if let Some(i) = self.desc_cur {
-            crate::emit::anm::emit(&ctx.w.anm, rec, &self.desc[i]);
-        }
-        match self.screen {
-            REPLAY => self.replay_emit(ctx, rec),
-            SPELL_PRACTICE => self.spell_char_emit(ctx, rec),
-            SPELL_CARD => self.spell_card_emit(ctx, rec),
-            _ => {}
-        }
-        if self.notice_sprite(ctx.w).is_some() {
-            crate::emit::anm::emit_mode(&ctx.w.anm, rec, &self.notice, 0);
-        }
-    }
 }
 
 impl MainMenu {
     // The draw runs only once loading is done and the VMs exist (12 §2.2).
-    fn drawn(&self, w: &World) -> bool {
+    pub(crate) fn drawn(&self, w: &World) -> bool {
         w.game.menu_loading == 0 && !self.vms.is_empty()
     }
 
-    fn notice_sprite(&self, w: &World) -> Option<i32> {
+    pub(crate) fn notice_sprite(&self, w: &World) -> Option<i32> {
         if self.screen != CHAR || self.frames <= 8 {
             return None;
         }

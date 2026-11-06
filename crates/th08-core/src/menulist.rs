@@ -1,11 +1,10 @@
-//! Main-menu list screens: practice stage select (12 §2.5), spell practice 16/17 (16 §6), replay (12 §2.8, 15 §3.8).
+//! Main-menu list screens (calc, draw step): practice stage (12 §2.5), spell practice (16 §6), replay (12 §2.8, 15 §3.8).
 
 use crate::anmvm::{self, AnmVm};
 use crate::ascii::{Text, int, percent_glyphs, short, uidx};
 use crate::builtin::Builtin;
-use crate::drawlist::{Align, Blend, Recorder, TextCmd, TextSite, Vertex};
-use crate::fmath;
-use crate::game::{Ctx, View};
+use crate::drawlist::{Align, TextCmd, TextSite};
+use crate::game::Ctx;
 use crate::gamemgr::{F_PRACTICE, F_REPLAY, F_SPELL_PRACTICE};
 use crate::input::{DOWN, LEFT, RIGHT, UP};
 use crate::menu::{CANCEL, CONFIRM, MainMenu, Pending};
@@ -216,32 +215,32 @@ const PC: usize = 5;
 #[derive(Default, Clone)]
 pub struct Lists {
     // Scratch VMs from menu+0xE7B8 (screen 16: E7B8 / EA5C / ED00; screen 17: 15 row VMs) and the screen they belong to.
-    scratch: Vec<AnmVm>,
+    pub(crate) scratch: Vec<AnmVm>,
     scratch_for: i32,
     // Screen-17 header VM menu+0x10F54 and the 7 info VMs menu+0x11F2C (16 §6.3, §6.5).
-    header: AnmVm,
-    info: Vec<AnmVm>,
+    pub(crate) header: AnmVm,
+    pub(crate) info: Vec<AnmVm>,
     // ascii.anm VM for Ascii_DrawGaugePercent.
-    glyph: AnmVm,
+    pub(crate) glyph: AnmVm,
     // Eased pie values +0xC2A0..+0xC2AC (16 §6.4).
-    pies: [f32; 4],
+    pub(crate) pies: [f32; 4],
     // Spell-practice stage row (g_StageIdx on screens 16/17).
     pub sp_row: i32,
     // Screen 16 in its input sub-state (16 §6.1).
     sp_input: bool,
     // Screen-17 cursor (index in the row's card list), page = card / 15.
     pub card: i32,
-    page: i32,
+    pub(crate) page: i32,
     prev_card: i32,
     // Info refresh counter +0xC29C (16 §6.3).
     info_counter: u32,
     // Replay screen sub-state +0x0C (1 list, 2 stage, 3 speed), list row +0xC28C, displayed / chosen stage row
     // +0xC290, loaded file +0xC280. The cursor +0x00 is shared by all three sub-states (15 §3.8).
-    rpy_sub: u8,
+    pub(crate) rpy_sub: u8,
     rpy_file: i32,
     // Zeroed with the menu object (memset at MainMenu_Register); the replay screen entry keeps it (15 §3.8).
     rpy_stage: usize,
-    rpy_loaded: Option<usize>,
+    pub(crate) rpy_loaded: Option<usize>,
     // Sub-state counter +0x10 of the list (sub-state 1): zeroed in call 8 and by a press, += 1 per call (12 §2).
     rpy_t: u32,
 }
@@ -302,7 +301,7 @@ fn scratch(w: &World, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 }
 
 // The four percent readouts of 16 §6.4 step 6 in draw order: (pie value index, centre, colour).
-const PERCENTS: [(usize, [f32; 2], [u8; 4]); 4] = [
+pub(crate) const PERCENTS: [(usize, [f32; 2], [u8; 4]); 4] = [
     (0, [514.0, 404.0], [255; 4]),
     (1, [514.0, 412.0], 0x80C0_C080_u32.to_le_bytes()),
     (2, [580.0, 451.0], [255; 4]),
@@ -310,17 +309,13 @@ const PERCENTS: [(usize, [f32; 2], [u8; 4]); 4] = [
 ];
 
 // Pie value → percent ×100 for the glyph readout (16 §6.4 step 6).
-fn pct(v: f32) -> i32 {
+pub(crate) fn pct(v: f32) -> i32 {
     (v * 10000.0) as i32
 }
 
 // Step half of a mode-0 draw at (x, y): only the position is written (mode 0 prepares nothing, 05 §9).
 fn place(vm: &mut AnmVm, x: f32, y: f32) {
     vm.pos = [x, y, 0.0];
-}
-
-fn emit0(ctx: &View, rec: &mut Recorder, vm: &AnmVm) {
-    crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
 }
 
 fn set_alpha(vm: &mut AnmVm, a: u8) {
@@ -340,24 +335,6 @@ fn vm_argb(vm: &AnmVm) -> u32 {
 
 fn text(x: f32, y: f32, s: impl Into<String>, argb: u32, hl: bool) -> Text {
     Text::new(x, y, s).argb(argb).highlight(hl)
-}
-
-// Menu_DrawPie 0x46FDC2 → AnmManager_DrawFan: 64-vertex fan from 12 o'clock, clockwise over v·360° (16 §6.4).
-fn pie(rec: &mut Recorder, c: [f32; 2], r: f32, z: f32, argb: u32, v: f32) {
-    let col = [
-        (argb >> 16) as u8,
-        (argb >> 8) as u8,
-        argb as u8,
-        (argb >> 24) as u8,
-    ];
-    let p = |x: f32, y: f32| Vertex::screen(x + 0.5, y + 0.5, z, [0.0, 0.0], col);
-    let mut verts = vec![p(c[0], c[1])];
-    let step = 0.101_342 * v;
-    for k in 0..63 {
-        let a = -std::f32::consts::FRAC_PI_2 + k as f32 * step;
-        verts.push(p(c[0] + r * fmath::cos_f(a), c[1] + r * fmath::sin_f(a)));
-    }
-    rec.fan(Blend::Alpha, &verts);
 }
 
 // Text_RenderToVm (white, outline 0, font 15, 16 §6.3 / §6.5) into the VM's sprite strip, then visible (10 §6).
@@ -763,42 +740,13 @@ impl MainMenu {
     }
 
     // The draw follows the screen variable, so the press frame already draws this screen (VMs not created yet).
-    fn spell_char_own(&self) -> bool {
+    pub(crate) fn spell_char_own(&self) -> bool {
         self.lists.scratch_for == crate::menu::SPELL_PRACTICE && self.lists.scratch.len() >= 3
-    }
-
-    // Emit of 0x46F5CB: scratch 0, scratch 1 / 2, then pies and percent glyphs interleaved (16 §6.4 steps 1, 4, 6).
-    pub(crate) fn spell_char_emit(&self, ctx: &View, rec: &mut Recorder) {
-        if self.spell_char_own() {
-            emit0(ctx, rec, &self.lists.scratch[0]);
-            emit0(ctx, rec, &self.lists.scratch[1]);
-            emit0(ctx, rec, &self.lists.scratch[2]);
-        }
-        let v = self.lists.pies;
-        let mut glyph = self.lists.glyph.clone();
-        let mut percent = |rec: &mut Recorder, (k, z, c): (usize, [f32; 2], [u8; 4])| {
-            percent_glyphs(
-                &ctx.w.anm,
-                &mut glyph,
-                pct(v[k]),
-                [z[0], z[1], 0.01],
-                c,
-                |vm| emit0(ctx, rec, vm),
-            );
-        };
-        pie(rec, [530.0, 420.0], 24.0, 0.02, 0x60C0_C0F0, v[0]);
-        pie(rec, [530.0, 420.0], 12.0, 0.01, 0x80C0_C0F0, v[1]);
-        percent(rec, PERCENTS[0]);
-        percent(rec, PERCENTS[1]);
-        pie(rec, [562.0, 438.0], 16.0, 0.02, 0x6080_C0C0, v[2]);
-        pie(rec, [562.0, 438.0], 8.0, 0.01, 0x8080_C0C0, v[3]);
-        percent(rec, PERCENTS[2]);
-        percent(rec, PERCENTS[3]);
     }
 
     // ---- screen 17 (16 §6.2, §6.3, §6.5) ----
 
-    fn card_ids(&self) -> (usize, usize) {
+    pub(crate) fn card_ids(&self) -> (usize, usize) {
         ROW_IDS[uidx(self.lists.sp_row.clamp(0, 9))]
     }
 
@@ -1109,25 +1057,8 @@ impl MainMenu {
         }
     }
 
-    fn spell_card_own(&self) -> bool {
+    pub(crate) fn spell_card_own(&self) -> bool {
         self.lists.scratch_for == crate::menu::SPELL_CARD && self.lists.scratch.len() >= 15
-    }
-
-    pub(crate) fn spell_card_emit(&self, ctx: &View, rec: &mut Recorder) {
-        if !self.spell_card_own() {
-            return;
-        }
-        let (a, b) = self.card_ids();
-        emit0(ctx, rec, &self.lists.header);
-        for j in 0..15 {
-            if a + uidx(self.lists.page) * 15 + j >= b {
-                break;
-            }
-            emit0(ctx, rec, &self.lists.scratch[j]);
-        }
-        for vm in &self.lists.info {
-            emit0(ctx, rec, vm);
-        }
     }
 
     // ---- screen 7 (12 §2.8, 15 §3.8) ----
@@ -1444,14 +1375,6 @@ impl MainMenu {
                     ctx.w.ascii.push(text(x, y, line, c, hl));
                 }
             }
-        }
-    }
-
-    pub(crate) fn replay_emit(&self, ctx: &View, rec: &mut Recorder) {
-        if let (2 | 3, Some(i)) = (self.lists.rpy_sub, self.lists.rpy_loaded)
-            && self.replays[i].1.spell_id() >= 0
-        {
-            emit0(ctx, rec, &self.notice);
         }
     }
 }

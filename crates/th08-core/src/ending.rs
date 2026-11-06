@@ -1,8 +1,8 @@
-//! Ending object and `.end` script interpreter (16 §1.2–§1.7): Ending_Register 0x4296A0, calc prio 5, draw prio 4.
+//! Ending object and `.end` script interpreter (16 §1.2–§1.7): Ending_Register 0x4296A0, calc prio 5, draw step prio 4.
 
 use crate::anmvm::{self, AnmVm};
-use crate::drawlist::{Align, Recorder, TexId, TextCmd, TextSite};
-use crate::game::{Ctx, View};
+use crate::drawlist::{Align, TexId, TextCmd, TextSite};
+use crate::game::Ctx;
 use crate::gamemgr::{self, F_ENDING_OK};
 use crate::input::{ENTER, SHOT, SKIP};
 use crate::task::{Chain, Ret};
@@ -34,11 +34,11 @@ pub struct Ending {
     // Port: `END_FILES` index of the loaded script, for text keys (None = not a retail name).
     file: Option<u8>,
     // Surface slot 0 (`@b` picture); +8 / +0xC source x / y, +0x10 scroll speed (px per frame).
-    picture: Option<TexId>,
-    pic_x: f32,
-    pic_y: f32,
+    pub(crate) picture: Option<TexId>,
+    pub(crate) pic_x: f32,
+    pub(crate) pic_y: f32,
     speed: f32,
-    vms: Vec<AnmVm>,
+    pub(crate) vms: Vec<AnmVm>,
     // +0x2A58 skip-allowed (Ctrl fast-forward), +0x2A5C skip-allowed for the next `@F` file.
     skip_allowed: bool,
     skip_next: bool,
@@ -61,9 +61,9 @@ pub struct Ending {
     fade_n: i32,
     fade_argb: u32,
     // Port: this frame's `fade_step` colour, written by the draw step for the emit (0 = no overlay).
-    fade_shown: u32,
+    pub(crate) fade_shown: u32,
     // Port: the object is freed by its on-remove, so the draw node does nothing afterwards.
-    done: bool,
+    pub(crate) done: bool,
 }
 
 // Team of a shot: solo shots 4,5 → 0, 6,7 → 1, 8,9 → 2, 10,11 → 3 (16 §1.2 step 5).
@@ -514,30 +514,6 @@ impl Ending {
         }
         self.fade_shown = self.fade_step();
         Ret::Next
-    }
-
-    pub(crate) fn emit(&self, ctx: &View, rec: &mut Recorder, _: u8) {
-        if self.done {
-            return;
-        }
-        rec.set_viewport(crate::drawlist::FULLSCREEN);
-        if let Some(t) = self.picture {
-            // The float source offset is truncated (ftol) to whole pixels (16 §1.5).
-            #[expect(
-                clippy::cast_sign_loss,
-                reason = "ftol of a value clamped to ≥ 0 (16 §1.5)"
-            )]
-            let (sx, sy) = (self.pic_x.max(0.0) as u32, self.pic_y.max(0.0) as u32);
-            rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
-        }
-        for vm in &self.vms {
-            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
-        }
-        let c = self.fade_shown;
-        if c >> 24 != 0 {
-            let rgba = [(c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8];
-            rec.rect(0.0, 0.0, 640.0, 480.0, rgba);
-        }
     }
 
     // On-remove 0x429D40 (16 §1.6): ANM slot 0x18 and surface 0 released, next scene 6 (result, name entry).
