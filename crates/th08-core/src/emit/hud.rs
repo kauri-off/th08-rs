@@ -133,6 +133,7 @@ fn boss(h: &Hud, ctx: &View, rec: &mut Recorder) {
 }
 
 // Bar part, emit: fill, ECL markers, remaining-bars gauge, the timer frame VM.
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 fn bar(h: &Hud, ctx: &View, rec: &mut Recorder) {
     let Some(e) = ctx.w.enemies.as_deref() else {
         return;

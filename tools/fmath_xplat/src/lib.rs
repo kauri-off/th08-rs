@@ -1,7 +1,7 @@
 //! Cross-target check of `crates/th08-core/src/fmath.rs` (05 §10): per-chunk digests of every fmath function, wasm vs native.
 
 #[path = "../../../crates/th08-core/src/fmath.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, unexpected_cfgs)]
 mod fmath;
 
 pub const KINDS: u32 = 10;

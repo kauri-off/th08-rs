@@ -712,7 +712,8 @@ impl Effects {
             }
             // Burst: pos = centre + dir·128·(1 − (1 − t/90)²).
             21 | 26 => {
-                let f = 1.0 - (1.0 - (t / 90.0).min(1.0)).powi(2);
+                let x = 1.0 - crate::fmath::fmin(t / 90.0, 1.0);
+                let f = 1.0 - x * x;
                 e.pos = [
                     e.centre[0] + e.dir[0] * 128.0 * f,
                     e.centre[1] + e.dir[1] * 128.0 * f,
@@ -939,7 +940,8 @@ fn bomb_ring_update(
         // Alice 0x2A–0x2D (14 §2.3): k = 1 − (1 − t/40)², expand 40 frames then collapse; 0x2A amplitude
         // stays 0 (plain ring) until t = 40. Freed by script 83's hide_stop.
         42..=45 => {
-            let k = 1.0 - (1.0 - tf / 40.0).powi(2);
+            let x = 1.0 - tf / 40.0;
+            let k = 1.0 - x * x;
             match e.kind {
                 42 => {
                     r.radius = 256.0 * k;
@@ -962,7 +964,9 @@ fn bomb_ring_update(
         // Youmu slash 0x30 (14 §2.11): thin line until t = 30, then f = ((t − 30)/30)⁴; life 60.
         _ => {
             if t >= 30 {
-                let f = ((tf - 30.0) / 30.0).powi(4);
+                let x = (tf - 30.0) / 30.0;
+                let x2 = x * x;
+                let f = x2 * x2;
                 // EffUpd_Slash 0x413070: minor axis 192·f + 0.0001, never 0.
                 (r.amp, r.width) = (192.0 * f + 0.0001, 80.0 * f + 3.0);
             }
@@ -1435,7 +1439,8 @@ impl ScreenEffect {
         let dur = p0.max(1);
         match self.kind {
             0 => {
-                self.alpha = (255.0 - tf * 255.0 / f64::from(dur)).trunc().max(0.0) as f32;
+                let a = (255.0 - tf * 255.0 / f64::from(dur)).trunc();
+                self.alpha = (if a > 0.0 { a } else { 0.0 }) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }
@@ -1463,7 +1468,8 @@ impl ScreenEffect {
                 if env.load_frames != 0 {
                     return Ret::Remove;
                 }
-                self.alpha = (tf * 255.0 / f64::from(dur)).trunc().max(0.0) as f32;
+                let a = (tf * 255.0 / f64::from(dur)).trunc();
+                self.alpha = (if a > 0.0 { a } else { 0.0 }) as f32;
                 if t >= dur {
                     return Ret::Remove;
                 }

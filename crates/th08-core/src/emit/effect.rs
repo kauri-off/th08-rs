@@ -187,6 +187,7 @@ fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
 }
 
 // Types 0/4/5 full screen, 2/3/6 playfield; colour p1 (p2 for the flash).
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 fn screen(s: &ScreenEffect, rec: &mut Recorder) {
     let colour = D3dColor(match s.kind {
         0 | 2 | 4 | 5 | 6 => s.p[1].cast_unsigned(),

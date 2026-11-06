@@ -1087,8 +1087,8 @@ impl Player {
         }
         self.last_v = [vx, vy];
         self.last_disp = [vx * gs, vy * gs];
-        self.pos[0] = (self.pos[0] + vx * gs).clamp(CLAMP[0], CLAMP[2]);
-        self.pos[1] = (self.pos[1] + vy * gs).clamp(CLAMP[1], CLAMP[3]);
+        self.pos[0] = crate::fmath::fclamp(self.pos[0] + vx * gs, CLAMP[0], CLAMP[2]);
+        self.pos[1] = crate::fmath::fclamp(self.pos[1] + vy * gs, CLAMP[1], CLAMP[3]);
         self.update_boxes();
         self.update_options(anm, inp.down(input::SHOT), sys);
         if inp.down(input::SHOT) && self.shot_timer.cur < 0 && !self.env.dialogue {

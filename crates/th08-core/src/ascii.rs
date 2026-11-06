@@ -453,7 +453,10 @@ pub(crate) fn darkness_rects(p: [f32; 2], r: f32, s: [f32; 2]) -> Vec<[f32; 4]> 
     if right < 416.0 {
         out.push([right, 16.0, 416.0, 464.0]);
     }
-    let (x0, x1) = (left.max(32.0), right.min(416.0));
+    let (x0, x1) = (
+        crate::fmath::fmax(left, 32.0),
+        crate::fmath::fmin(right, 416.0),
+    );
     if top > 16.0 {
         out.push([x0, 16.0, x1, top]);
     }

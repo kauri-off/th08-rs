@@ -191,7 +191,7 @@ fn yukari_calc(o: &mut Opt, env: &OptEnv, aimed: &mut Option<usize>) {
     if o.sub < 3 {
         // `Option_YukariFollow` 0x44E770: follow step, then the attack test.
         let entered = o.sub;
-        yukari_smooth(o, [px, (py - 96.0).max(32.0)]);
+        yukari_smooth(o, [px, fmath::fmax(py - 96.0, 32.0)]);
         if env.shooting && aimed.is_some() && t >= 10 {
             o.vm.pending_interrupt = 3;
             o.sub = 3;
@@ -238,7 +238,7 @@ fn yukari_calc(o: &mut Opt, env: &OptEnv, aimed: &mut Option<usize>) {
         // pointer is set; then the exit test, so the option still moves on the exit frame.
         let ap = env.aimed_pos;
         if aimed.is_some() {
-            yukari_smooth(o, [ap[0], (ap[1] + 32.0).max(32.0)]);
+            yukari_smooth(o, [ap[0], fmath::fmax(ap[1] + 32.0, 32.0)]);
         }
         if aimed.is_none() || !(env.shooting || env.shot_held) {
             o.vm.pending_interrupt = 1;
@@ -403,7 +403,7 @@ impl Player {
         o.vel = [0.0; 2];
         match o.kind {
             OptKind::Yukari => {
-                o.pos = [p[0], (p[1] - 96.0).max(32.0), 0.0];
+                o.pos = [p[0], fmath::fmax(p[1] - 96.0, 32.0), 0.0];
                 self.aimed = None;
             }
             // Created during a bomb she keeps the zeroed slot pos (0, 0, 0).
@@ -762,15 +762,15 @@ impl Player {
                 {
                     let d = [tg[0] - b.pos[0], tg[1] - b.pos[1]];
                     let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
-                    let k = (len / (b.speed / 4.0)).max(1.0);
+                    let k = fmath::fmax(len / (b.speed / 4.0), 1.0);
                     let v = [b.vel[0] + d[0] / k, b.vel[1] + d[1] / k];
-                    let vl = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-6);
-                    b.speed = vl.clamp(1.0, 10.0);
+                    let vl = fmath::fmax((v[0] * v[0] + v[1] * v[1]).sqrt(), 1e-6);
+                    b.speed = fmath::fclamp(vl, 1.0, 10.0);
                     b.vel = [v[0] * b.speed / vl, v[1] * b.speed / vl];
                 } else if b.state == 1 && b.speed < 10.0 {
                     // Rescale by the current |v|, not the old speed field.
                     b.speed += 1.0 / 3.0;
-                    let vl = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt().max(1e-6);
+                    let vl = fmath::fmax((b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt(), 1e-6);
                     b.vel = [b.vel[0] * b.speed / vl, b.vel[1] * b.speed / vl];
                 }
                 b.angle = Angle(fmath::atan2_f(b.vel[1], b.vel[0]));

@@ -26,6 +26,18 @@ disallowed-methods = [
     { path = "f64::powf", reason = "use crate::fmath (05 §10: same bits on every target)" },
     { path = "f64::hypot", reason = "use crate::fmath (05 §10: same bits on every target)" },
     { path = "f64::mul_add", reason = "use crate::fmath (05 §10: same bits on every target)" },
+    { path = "f32::min", reason = "±0 / NaN pick differs per target: write the original's compares" },
+    { path = "f32::max", reason = "±0 / NaN pick differs per target: write the original's compares" },
+    { path = "f32::clamp", reason = "built on min / max semantics: write the original's compares" },
+    { path = "f32::powi", reason = "precision unspecified: write out the multiplications" },
+    { path = "f32::exp2", reason = "precision unspecified: not in the original" },
+    { path = "f32::log2", reason = "precision unspecified: not in the original" },
+    { path = "f64::min", reason = "±0 / NaN pick differs per target: write the original's compares" },
+    { path = "f64::max", reason = "±0 / NaN pick differs per target: write the original's compares" },
+    { path = "f64::clamp", reason = "built on min / max semantics: write the original's compares" },
+    { path = "f64::powi", reason = "precision unspecified: write out the multiplications" },
+    { path = "f64::exp2", reason = "precision unspecified: not in the original" },
+    { path = "f64::log2", reason = "precision unspecified: not in the original" },
 ]
 too-many-lines-threshold = 150
 too-many-arguments-threshold = 7

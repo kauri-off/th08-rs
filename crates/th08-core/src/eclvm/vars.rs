@@ -213,7 +213,8 @@ pub(super) fn read_f(m: &EnemyManager, e: &Enemy, c: &Context, r: &FltVar) -> f3
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
-    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+    let (dx, dy) = (a[0] - b[0], a[1] - b[1]);
+    (dx * dx + dy * dy).sqrt()
 }
 
 // Var 10096, Enemy_ChainChildCount 0x41FD40: a root (no parent, +8 set) counts the enemies reached by +8;

@@ -1245,6 +1245,7 @@ impl ResultScreen {
     }
 
     // Result_DrawEndPanel 0x457E00 (16 §2.5); the queue colour follows VM 71 so the text fades with it.
+    #[expect(clippy::disallowed_methods, reason = "display text only")]
     fn draw_panel(&self, ctx: &mut Ctx) {
         let vm = &self.vms[VM_PANEL];
         let col = vm_argb(vm);

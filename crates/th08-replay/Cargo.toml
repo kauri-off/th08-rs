@@ -9,6 +9,10 @@ description = "Headless session / demo replay on th08-core only, for cross-targe
 [lints]
 workspace = true
 
+[features]
+# Prints th08-core's NaN counts (stderr) after the run.
+nan-probe = ["th08-core/nan-probe"]
+
 [dependencies]
 th08-core = { path = "../th08-core" }
 anyhow = "1.0.104"

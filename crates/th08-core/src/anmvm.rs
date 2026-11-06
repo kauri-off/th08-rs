@@ -1,6 +1,7 @@
 //! ANM script VM `AnmVm_Run` 0x45EA00: timers, variables, opcodes, per-frame POST (05 §1–§8).
 
 use crate::anmmgr::AnmManager;
+use crate::nanprobe::{self, Site};
 use crate::types::D3dColor;
 use th08_formats::anm::{
     AnmOff, Arg, Arith, Cmp, FlowOp, Ins, InterpOp, MathFn, Op, SpriteOp, VarOp, signature,
@@ -567,8 +568,12 @@ impl AnmVm {
                 } else {
                     bits.cast_signed() as f32
                 };
+                nanprobe::store(Site::AnmStore, self.fvars[i]);
             }
             Dest::Lit(_) => {
+                if is_float {
+                    nanprobe::store(Site::AnmStore, f32::from_bits(bits));
+                }
                 let o = ip.at() + 8;
                 if let Some((slot, idx)) = self.script
                     && let Some(s) = anm.script_mut(slot, idx)
@@ -1227,7 +1232,7 @@ fn int_arith(f: Arith, x: i32, b: i32, c: i32) -> i32 {
 
 // Float ops 38–58.
 fn float_arith(f: Arith, x: f32, b: f32, c: f32) -> f32 {
-    match f {
+    let r = match f {
         Arith::Set => b,
         Arith::Add => x + b,
         Arith::Sub => x - b,
@@ -1240,7 +1245,9 @@ fn float_arith(f: Arith, x: f32, b: f32, c: f32) -> f32 {
         Arith::Mul3 => b * c,
         Arith::Div3 => b / c,
         Arith::Rem3 => b % c,
-    }
+    };
+    nanprobe::fresh(Site::AnmArith, r, x.is_nan() || b.is_nan() || c.is_nan());
+    r
 }
 
 #[cfg(test)]

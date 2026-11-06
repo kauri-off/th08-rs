@@ -494,7 +494,7 @@ impl ItemManager {
                     } else {
                         it.vel[0] = 0.0;
                         it.vel[2] = 0.0;
-                        it.vel[1] = it.vel[1].max(-2.2);
+                        it.vel[1] = crate::fmath::fmax(it.vel[1], -2.2);
                     }
                 }
             }

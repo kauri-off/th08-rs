@@ -54,5 +54,10 @@ fn main() -> anyhow::Result<()> {
     }
     let (digest, rows) = s.finish()?;
     eprintln!("digest {digest:016x} rows {rows}");
+    if th08_core::nanprobe::ENABLED {
+        for (site, n) in th08_core::nanprobe::counts() {
+            eprintln!("nan {site:?} {n}");
+        }
+    }
     Ok(())
 }

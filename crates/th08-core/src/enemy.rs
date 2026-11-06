@@ -430,8 +430,8 @@ pub struct Enemy {
 // Trail strip angle midpoint: lo + d/2 with d = min(|a − c|, lo + 2π − hi).
 // QUIRK: the wrap distance is taken from lo, not the true shortest-arc midpoint.
 pub(crate) fn trail_mid(a: f32, c: f32) -> f32 {
-    let (lo, hi) = (a.min(c), a.max(c));
-    lo + 0.5 * (a - c).abs().min(lo + 2.0 * std::f32::consts::PI - hi)
+    let (lo, hi) = (crate::fmath::fmin(a, c), crate::fmath::fmax(a, c));
+    lo + 0.5 * crate::fmath::fmin((a - c).abs(), lo + 2.0 * std::f32::consts::PI - hi)
 }
 
 // Chain-kill popup colour, chosen once from the undivided child count n (13 §4).
@@ -708,8 +708,9 @@ impl Enemy {
     pub fn clamp_pos(&mut self) {
         if self.has(EnemyFlags::CLAMP) {
             let [x0, y0, x1, y1] = self.clamp;
-            self.pos[0] = self.pos[0].max(x0).min(x1);
-            self.pos[1] = self.pos[1].max(y0).min(y1);
+            // SPEC-GAP: 07 §8 says "x into [xmin, xmax]" only; compare-and-store, min first, NaN and ±0 kept.
+            self.pos[0] = crate::fmath::fclamp(self.pos[0], x0, x1);
+            self.pos[1] = crate::fmath::fclamp(self.pos[1], y0, y1);
         }
     }
 
@@ -733,7 +734,7 @@ impl Enemy {
             2 => {
                 self.move_timer.dec(gs, sr);
                 let dur = self.move_dur.max(1) as f32;
-                let t = (1.0 - self.move_timer.getf() / dur).max(0.0);
+                let t = crate::fmath::fmax(1.0 - self.move_timer.getf() / dur, 0.0);
                 let t = anmvm::ease(((self.flags >> A_EASE_SHIFT) & 7) as u8, t);
                 let target: [f32; 3] =
                     std::array::from_fn(|k| self.interp_start[k] + self.interp_delta[k] * t);

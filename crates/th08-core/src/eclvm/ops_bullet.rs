@@ -130,7 +130,8 @@ impl Exec<'_> {
         }
         let p = self.m.g.player;
         let e = &*self.e;
-        let dd = (e.final_pos[0] - p[0]).powi(2) + (e.final_pos[1] - p[1]).powi(2);
+        let (dx, dy) = (e.final_pos[0] - p[0], e.final_pos[1] - p[1]);
+        let dd = dx * dx + dy * dy;
         if e.nofire_r2 > 0.0 && dd < e.nofire_r2 {
             return;
         }
@@ -147,10 +148,10 @@ impl Exec<'_> {
             d.count2 = (i32::from(d.count2) + lerp_i(c2a, c2b, rank)).max(1) as i16;
             let s = lerp_f(s0, s1, rank);
             if d.speed1 != 0.0 {
-                d.speed1 = (d.speed1 + s).max(0.3);
+                d.speed1 = crate::fmath::fmax(d.speed1 + s, 0.3);
             }
             // Speed2's add is unconditional (the speed1 == 0 branch jumps to it).
-            d.speed2 = (d.speed2 + s / 2.0).max(0.3);
+            d.speed2 = crate::fmath::fmax(d.speed2 + s / 2.0, 0.3);
         }
         self.spawn_desc();
     }

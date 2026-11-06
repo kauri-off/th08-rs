@@ -35,6 +35,7 @@ pub fn bgm_volume_curve(p: i32, v: u8) -> i32 {
     curve(p, v, 2)
 }
 
+#[expect(clippy::disallowed_methods, reason = "volume curve, not logic")]
 fn curve(table: i32, v: u8, exp: i32) -> i32 {
     if v == 0 {
         return -10000;

@@ -287,6 +287,7 @@ impl Exec<'_> {
     }
 
     fn write_f(&mut self, t: &mut Thread, r: FltVar, v: f32) {
+        crate::nanprobe::store(crate::nanprobe::Site::EclStore, v);
         let e = &mut *self.e;
         match r {
             FltVar::Ctx(k) => t.ctx.set_flt(k, v),
@@ -337,9 +338,11 @@ impl Exec<'_> {
     }
 
     fn set_f(&mut self, t: &mut Thread, ins: &Ins, d: Dst, v: f32) {
-        match FltVar::from_id(f32::from_bits(d.arg.raw) as i32).filter(|_| d.arg.var) {
-            Some(r) => self.write_f(t, r, v),
-            None => std::sync::Arc::make_mut(&mut self.m.ecl).set_arg(ins, d.k(), v.to_bits()),
+        if let Some(r) = FltVar::from_id(f32::from_bits(d.arg.raw) as i32).filter(|_| d.arg.var) {
+            self.write_f(t, r, v);
+        } else {
+            crate::nanprobe::store(crate::nanprobe::Site::EclStore, v);
+            std::sync::Arc::make_mut(&mut self.m.ecl).set_arg(ins, d.k(), v.to_bits());
         }
     }
 

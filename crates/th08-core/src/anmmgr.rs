@@ -139,6 +139,7 @@ impl Default for AnmManager {
     clippy::cast_sign_loss,
     reason = "sprite rects lie inside the texture; clamped to it"
 )]
+#[expect(clippy::disallowed_methods, reason = "texture atlas rects, not logic")]
 fn thtx_rects(c: &anm::Chunk, tw: u32, th: u32) -> Vec<[u32; 4]> {
     let (kx, ky) = (
         tw as f32 / c.width.max(1) as f32,

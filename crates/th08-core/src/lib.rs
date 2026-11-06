@@ -41,6 +41,7 @@ pub mod menu;
 pub mod menulist;
 pub mod msg;
 pub mod musicroom;
+pub mod nanprobe;
 pub mod player;
 pub mod pshot;
 pub mod replay;

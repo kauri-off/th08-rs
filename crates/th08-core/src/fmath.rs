@@ -4,14 +4,24 @@
 // x87 fsin/fcos/fpatan/fptan are extended; the port evaluates them in f64 with the pinned `libm` (the same
 // bits on every target, unlike the platform libm) and rounds once to f32. Single-precision libm is never used.
 
+// Feature `nan-probe` only; compiled out otherwise, and in `tools/fmath_xplat`.
+macro_rules! probe {
+    ($site:ident, $out:expr, $($x:expr),+) => {{
+        let r = $out;
+        #[cfg(feature = "nan-probe")]
+        crate::nanprobe::fresh(crate::nanprobe::Site::$site, r, false $(|| $x.is_nan())+);
+        r
+    }};
+}
+
 /// `Math_Sin` result stored to f32.
 pub fn sin_f(a: f32) -> f32 {
-    libm::sin(f64::from(a)) as f32
+    probe!(Sin, libm::sin(f64::from(a)) as f32, a)
 }
 
 /// `Math_Cos` result stored to f32.
 pub fn cos_f(a: f32) -> f32 {
-    libm::cos(f64::from(a)) as f32
+    probe!(Cos, libm::cos(f64::from(a)) as f32, a)
 }
 
 /// `Math_SinCosF32` 0x433880: `fsincos`, both stored as f32. Returns (sin, cos).
@@ -22,37 +32,63 @@ pub fn sin_cos_f(a: f32) -> (f32, f32) {
 /// `Vec3_FromPolar` 0x4286E0: f32(cos a·r), f32(sin a·r), the product taken in f64 and rounded once.
 pub fn polar(a: f32, r: f32) -> [f32; 3] {
     let (a, r) = (f64::from(a), f64::from(r));
-    [(libm::cos(a) * r) as f32, (libm::sin(a) * r) as f32, 0.0]
+    [
+        probe!(Polar, (libm::cos(a) * r) as f32, a, r),
+        probe!(Polar, (libm::sin(a) * r) as f32, a, r),
+        0.0,
+    ]
 }
 
 /// `call Math_Sin; fmul` site: f32(sin a·k) rounded once; k is f64 so qword constants stay exact.
 pub fn sin_mul(a: f32, k: f64) -> f32 {
-    (libm::sin(f64::from(a)) * k) as f32
+    probe!(SinMul, (libm::sin(f64::from(a)) * k) as f32, a, k)
 }
 
 /// `call Math_Cos; fmul` site: f32(cos a·k) rounded once.
 pub fn cos_mul(a: f32, k: f64) -> f32 {
-    (libm::cos(f64::from(a)) * k) as f32
+    probe!(CosMul, (libm::cos(f64::from(a)) * k) as f32, a, k)
 }
 
 /// x87 `fpatan` rounded to f32.
 pub fn atan2_f(y: f32, x: f32) -> f32 {
-    libm::atan2(f64::from(y), f64::from(x)) as f32
+    probe!(Atan2, libm::atan2(f64::from(y), f64::from(x)) as f32, y, x)
 }
 
 /// x87 `fptan` rounded to f32 (ANM op 63).
 pub fn tan_f(x: f32) -> f32 {
-    libm::tan(f64::from(x)) as f32
+    probe!(Tan, libm::tan(f64::from(x)) as f32, x)
 }
 
 /// CRT `acos` (x87) rounded to f32 (ANM op 64).
 pub fn acos_f(x: f32) -> f32 {
-    libm::acos(f64::from(x)) as f32
+    probe!(Acos, libm::acos(f64::from(x)) as f32, x)
+}
+
+/// `f32::max` without its per-target ±0 pick: `b` on a tie (as x86 does), the non-NaN operand when one is NaN.
+pub fn fmax(a: f32, b: f32) -> f32 {
+    if a > b || b.is_nan() { a } else { b }
+}
+
+/// `f32::min` without its per-target ±0 pick: `b` on a tie (as x86 does), the non-NaN operand when one is NaN.
+pub fn fmin(a: f32, b: f32) -> f32 {
+    if a < b || b.is_nan() { a } else { b }
+}
+
+/// Compare-and-store clamp: below `lo` → `lo`, then above `hi` → `hi`; a NaN `x` stays NaN.
+pub fn fclamp(x: f32, lo: f32, hi: f32) -> f32 {
+    let mut x = x;
+    if x < lo {
+        x = lo;
+    }
+    if x > hi {
+        x = hi;
+    }
+    x
 }
 
 /// x87 `fpatan(x, 1)` rounded to f32 (ANM op 65).
 pub fn atan_f(x: f32) -> f32 {
-    libm::atan(f64::from(x)) as f32
+    probe!(Atan, libm::atan(f64::from(x)) as f32, x)
 }
 
 // `rsqrtss` of the reference CPU (AMD Ryzen 9 7945HX). rsqrt_amd.bin (from `src/bin/rsqrt_table.rs`): runs of equal
@@ -128,6 +164,27 @@ mod tests {
             differs += u32::from(v[0] != cos_f(a) * r || v[1] != sin_f(a) * r);
         }
         assert!(differs > 0);
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_methods, reason = "checked against std")]
+    fn min_max_ties_and_nan() {
+        let (p, n, nan) = (0.0f32, -0.0f32, f32::NAN);
+        assert_eq!(fmax(p, n).to_bits(), n.to_bits());
+        assert_eq!(fmax(n, p).to_bits(), p.to_bits());
+        assert_eq!(fmin(n, p).to_bits(), p.to_bits());
+        assert_eq!(fmin(p, n).to_bits(), n.to_bits());
+        assert_eq!(fmax(nan, 1.0), 1.0);
+        assert_eq!(fmax(1.0, nan), 1.0);
+        assert_eq!(fmin(nan, 1.0), 1.0);
+        assert_eq!(fmin(1.0, nan), 1.0);
+        assert!(fclamp(nan, 0.0, 1.0).is_nan());
+        assert_eq!(fclamp(n, p, 1.0).to_bits(), n.to_bits());
+        for (a, b) in [(1.0, 2.0), (-3.5, 0.25), (7.0, -7.0), (1e30, f32::INFINITY)] {
+            assert_eq!((fmax(a, b), fmin(a, b)), (a.max(b), a.min(b)));
+            assert_eq!((fmax(b, a), fmin(b, a)), (b.max(a), b.min(a)));
+            assert_eq!(fclamp(a, -1.0, 1.0), a.clamp(-1.0, 1.0));
+        }
     }
 
     #[test]

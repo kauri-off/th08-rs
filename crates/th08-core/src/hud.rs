@@ -1418,9 +1418,9 @@ fn bar_step(
     // The fill moves only once the bar is shown: +0.01 up, −0.02 down, clamped at the target.
     if state >= 2 {
         if disp < target {
-            disp = (disp + 0.01).min(target);
+            disp = crate::fmath::fmin(disp + 0.01, target);
         } else if disp > target {
-            disp = (disp - 0.02).max(target);
+            disp = crate::fmath::fmax(disp - 0.02, target);
         }
     }
     (state, alpha, disp)
@@ -1485,6 +1485,7 @@ fn stage_plate(stage: usize, g: &crate::gamemgr::Game) -> Option<usize> {
 
 // Hud_SetBossNamePlate 0x437F5C (12 §5.2): copies front.anm sprite n's pixels into sprite 10's rect (copy 0x467040).
 #[expect(clippy::cast_sign_loss, reason = "ftol of sprite uv / size in pixels")]
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 pub fn set_boss_plate(anm: &AnmManager, rec: &mut Recorder, n: usize) {
     if let (Some(&src), Some(&dst)) = (anm.sprite(FRONT_SLOT, n), anm.sprite(FRONT_SLOT, 10)) {
         let px = |s: &crate::anmmgr::SlotSprite, rec: &Recorder| {

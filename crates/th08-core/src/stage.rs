@@ -657,7 +657,7 @@ impl Stage {
         }
         self.fog_elapsed.tick(speed);
         let d = self.fog_dur as f32;
-        let t = (self.fog_elapsed.getf() / d).min(1.0);
+        let t = crate::fmath::fmin(self.fog_elapsed.getf() / d, 1.0);
         let (a, b) = (
             self.fog_start.color.to_le_bytes(),
             self.fog_target.color.to_le_bytes(),

@@ -980,10 +980,10 @@ impl Player {
                 if self.bomb.objs[i].state == ObjState::Active && b.adv {
                     let o = &mut self.bomb.objs[i];
                     let d = [target[0] - o.pos[0], target[1] - o.pos[1]];
-                    let k = (len(d) / (o.f8 / 8.0)).max(1.0);
+                    let k = crate::fmath::fmax(len(d) / (o.f8 / 8.0), 1.0);
                     let v = [d[0] / k + o.v[0], d[1] / k + o.v[1]];
-                    let l = len(v).max(1e-6);
-                    o.f8 = l.clamp(1.0, 10.0);
+                    let l = crate::fmath::fmax(len(v), 1e-6);
+                    o.f8 = crate::fmath::fclamp(l, 1.0, 10.0);
                     o.v = [v[0] * o.f8 / l, v[1] * o.f8 / l, 0.0];
                     let q = xy(o.pos);
                     self.cancel_circle(q, 128.0, 0.0, 0, 6);
@@ -1140,7 +1140,8 @@ impl Player {
         let doll = &mut self.options[0];
         // T < 60: doll pos = S + (centre − S)·(T/60)², spin −π/10, one-frame C/D r 32.
         if b.t < 60 {
-            let f = (b.t as f32 / 60.0).powi(2);
+            let x = b.t as f32 / 60.0;
+            let f = x * x;
             doll.pos = [
                 s[0] + (centre[0] - s[0]) * f,
                 s[1] + (centre[1] - s[1]) * f,
@@ -1423,7 +1424,8 @@ impl Player {
             self.speed_mult = [0.0; 2];
         }
         if b.t < 60 {
-            let f = (b.t as f32 / 60.0).powi(2);
+            let x = b.t as f32 / 60.0;
+            let f = x * x;
             for (k, a) in targets.iter().enumerate() {
                 let s = self.bomb.objs[k].centre;
                 self.options[k].anchor = [s[0] + (a[0] - s[0]) * f, s[1] + (a[1] - s[1]) * f, 0.0];
@@ -1480,7 +1482,8 @@ impl Player {
         }
         let (s, pd) = (self.bomb.start, self.bomb.dash);
         if b.t < 40 {
-            let f = 1.0 - (1.0 - b.t as f32 / 40.0).powi(2);
+            let x = 1.0 - b.t as f32 / 40.0;
+            let f = 1.0 - x * x;
             self.pos[0] = s[0] + (pd[0] - s[0]) * f;
             self.pos[1] = s[1] + (pd[1] - s[1]) * f;
         }
@@ -1539,7 +1542,8 @@ impl Player {
         // Return dash; the original function exits early here.
         if (back0..back0 + 30).contains(&b.t) {
             let q = self.bomb.back;
-            let f = 1.0 - (1.0 - (b.t - back0) as f32 / 30.0).powi(2);
+            let x = 1.0 - (b.t - back0) as f32 / 30.0;
+            let f = 1.0 - x * x;
             self.pos[0] = q[0] + (s[0] - q[0]) * f;
             self.pos[1] = q[1] + (s[1] - q[1]) * f;
             return;

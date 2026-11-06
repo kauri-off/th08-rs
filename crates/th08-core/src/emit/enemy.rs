@@ -46,6 +46,7 @@ fn layer(
 }
 
 // Trail emit: the sprite copies replayed on a copy of the (restored) main VM, or the ring strip.
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 fn draw_trail(anm: &AnmManager, rec: &mut Recorder, e: &Enemy, tint: Option<Tint>) {
     let (f, n) = (e.trail[0], e.trail_len());
     let b = e.trail[3].max(1);

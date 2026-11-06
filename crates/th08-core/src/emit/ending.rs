@@ -5,6 +5,7 @@ use crate::ending::Ending;
 use crate::game::View;
 
 // Draw 0x4298F0: picture, 15 VMs, fade overlay.
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 pub fn ending(e: &Ending, ctx: &View, rec: &mut Recorder, _: u8) {
     if e.done {
         return;

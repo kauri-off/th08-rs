@@ -22,6 +22,7 @@ pub fn scene_node(ctx: &View, rec: &mut Recorder, tag: u8) {
 
 // Tag 0 the loading surface and prompt, tag 2 the loading VMs; TH08_SLOT_TEST=<slot> draws that slot's sprites in a
 // grid, clipped to the playfield (tag 16).
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 fn supervisor(s: &Supervisor, ctx: &View, rec: &mut Recorder, tag: u8) {
     match tag {
         0 => {

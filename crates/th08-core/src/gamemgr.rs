@@ -993,7 +993,7 @@ impl GameManager {
         }
         // Port-only debug override.
         if let Some(pw) = ctx.core.power.filter(|_| ctx.w.game.stages_started == 0) {
-            s.power = pw.clamp(0.0, 128.0);
+            s.power = crate::fmath::fclamp(pw, 0.0, 128.0);
         }
     }
 

@@ -4,6 +4,7 @@ use super::{Exec, ease, var_f, var_i};
 use crate::anmvm::{self, wrap_add};
 use crate::enemy::{Interp, Thread};
 use crate::fmath;
+use crate::nanprobe::{self, Site};
 use std::f32::consts::PI;
 use th08_formats::ecl::{Arg, Arith, Dst, Ins, VarOp};
 
@@ -20,13 +21,15 @@ fn int_arith(kind: Arith, a: i32, b: i32) -> i32 {
 
 // Ops 15–19 / 25–29 (f32, fmod = C `%`).
 fn flt_arith(kind: Arith, a: f32, b: f32) -> f32 {
-    match kind {
+    let r = match kind {
         Arith::Add => a + b,
         Arith::Sub => a - b,
         Arith::Mul => a * b,
         Arith::Div => a / b,
         Arith::Mod => a % b,
-    }
+    };
+    nanprobe::fresh(Site::EclArith, r, a.is_nan() || b.is_nan());
+    r
 }
 
 // Ops 8 / 9: one Rng_Next16, bit 0 set keeps the sign.
@@ -109,7 +112,11 @@ impl Exec<'_> {
                     self.af(t, x2),
                     self.af(t, y2),
                 );
-                self.set_f(t, ins, dst, fmath::atan2_f(y2 - y1, x2 - x1));
+                let (dy, dx) = (y2 - y1, x2 - x1);
+                let in_nan = x1.is_nan() || y1.is_nan() || x2.is_nan() || y2.is_nan();
+                nanprobe::fresh(Site::EclDelta, dy, in_nan);
+                nanprobe::fresh(Site::EclDelta, dx, in_nan);
+                self.set_f(t, ins, dst, fmath::atan2_f(dy, dx));
             }
             VarOp::FDist {
                 dst,
@@ -124,11 +131,17 @@ impl Exec<'_> {
                     self.af(t, x2),
                     self.af(t, y2),
                 );
-                self.set_f(t, ins, dst, ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt());
+                let (dx, dy) = (x1 - x2, y1 - y2);
+                let d = (dx * dx + dy * dy).sqrt();
+                let in_nan = x1.is_nan() || y1.is_nan() || x2.is_nan() || y2.is_nan();
+                nanprobe::fresh(Site::EclDist, d, in_nan);
+                self.set_f(t, ins, dst, d);
             }
             VarOp::FLerp { dst, b, c, d } => {
                 let (b, c, d) = (self.af(t, b), self.af(t, c), self.af(t, d));
-                self.set_f(t, ins, dst, (b - c) * d + c);
+                let v = (b - c) * d + c;
+                nanprobe::fresh(Site::EclLerp, v, b.is_nan() || c.is_nan() || d.is_nan());
+                self.set_f(t, ins, dst, v);
             }
             VarOp::Interp {
                 target_bits,

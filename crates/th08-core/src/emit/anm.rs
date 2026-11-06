@@ -55,6 +55,7 @@ pub fn blend_for(rec: &mut Recorder, vm: &AnmVm) -> Blend {
 
 // Emit half of AnmManager_Draw3DWorld 0x464470 (after `prepare` mode 5): unit quad ±128 through `cam` with vertex
 // fog; the screen-shake offset is added to the translation.
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 pub fn emit_3d_world(
     anm: &AnmManager,
     rec: &mut Recorder,
@@ -292,6 +293,7 @@ fn emit_quad(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::disallowed_methods, reason = "draw only")]
 fn emit_quad_at(
     anm: &AnmManager,
     rec: &mut Recorder,
