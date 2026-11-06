@@ -12,7 +12,7 @@ workspace = true
 encoding_rs = "0.8"
 midly = { version = "0.5.3", default-features = false, features = ["std"] }
 # th08.pak decode (pack.rs): pure Rust so wasm32 and Android need no C toolchain; the zstd encoder lives in th08-tools.
-ruzstd = "0.8"
+ruzstd = "0.9"
 sha2 = "0.10"
 thiserror = "2"
 
