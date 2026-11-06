@@ -113,7 +113,8 @@ pub struct Pacer {
     // Debug `TH08_TURBO=<n>`: n logic frames per drawn frame, no pacing; 0 = off.
     turbo: u32,
     suspended: bool,
-    // Replay transport: `rate.0` logic frames every `rate.1` deadlines; held = paused, `step` = one frame owed.
+    // Replay transport / practice slow motion: `rate.0` logic frames per `rate.1` frame periods; held = paused,
+    // `step` = one frame owed.
     rate: (u32, u32),
     held: bool,
     step: bool,
@@ -174,11 +175,8 @@ impl Pacer {
         if paced && now <= self.deadline - early {
             return Tick::Wait(self.deadline - early - now);
         }
-        let step = if self.held {
-            FRAME
-        } else {
-            FRAME * f64::from(self.rate.1)
-        };
+        let (period, draws) = self.period_draws();
+        let step = if self.held { FRAME } else { period };
         // A paced run always takes its grid point (native: the deadline is already behind `now`).
         if paced {
             self.deadline += step;
@@ -204,11 +202,21 @@ impl Pacer {
                 Tick::Held
             };
         }
-        self.stats.1 += u64::from(self.turbo.max(1) * (self.rate.0 + extra));
+        self.stats.1 += u64::from(self.turbo.max(1) * (draws + extra));
         self.stats.2 += 1;
         Tick::Run {
             per_draw: self.turbo.max(1),
-            draws: self.rate.0 + extra,
+            draws: draws + extra,
+        }
+    }
+
+    // Below 1× one logic frame per `den / num` frame periods; else `num` per `den` periods.
+    fn period_draws(&self) -> (f64, u32) {
+        let (num, den) = self.rate;
+        if num < den {
+            (FRAME * f64::from(den) / f64::from(num), 1)
+        } else {
+            (FRAME * f64::from(den), num)
         }
     }
 
@@ -254,7 +262,7 @@ impl Pacer {
         self.rate == (1, 1) && !self.held
     }
 
-    // `num` logic frames per `den` frame periods (one of them is 1); the deadline restarts at `now`.
+    // `num` logic frames per `den` frame periods; the deadline restarts at `now`.
     pub fn set_rate(&mut self, rate: (u32, u32), now: Instant) {
         self.rate = rate;
         self.deadline = self.secs(now);
@@ -394,7 +402,12 @@ mod tests {
             .map(|i| runs(p.poll(at(&p, 0.002 + f64::from(i) * 0.001))))
             .sum();
         assert_eq!(total, 9);
-        p.set_rate((1, 1), at(&p, 1.0));
+        p.set_rate((3, 4), at(&p, 1.0));
+        let total: u32 = (1..1000)
+            .map(|i| runs(p.poll(at(&p, 1.0 + f64::from(i) * 0.001))))
+            .sum();
+        assert_eq!(total, 45);
+        p.set_rate((1, 1), at(&p, 3.0));
         assert!(p.is_original());
     }
 

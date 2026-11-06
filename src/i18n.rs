@@ -276,6 +276,12 @@ pub const UI: &[(&str, &str)] = &[
     ("screenshot", "Screenshot"),
     ("screenshot_saved", "Screenshot saved: {path}"),
     ("screenshot_failed", "Screenshot failed: {err}"),
+    ("slow_motion", "Speed"),
+    (
+        "slow_nosave",
+        "Slow motion was used: score.dat and replays are not saved until the game is restarted.",
+    ),
+    ("now_playing", "Now playing: {title}"),
 ];
 
 type Table = HashMap<String, String>;

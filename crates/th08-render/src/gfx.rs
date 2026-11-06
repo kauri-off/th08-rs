@@ -2353,6 +2353,10 @@ impl Gfx {
         }
     }
 
+    pub fn pack(&self) -> &crate::textdb::PackText {
+        &self.pack
+    }
+
     // A mounted presentation pack's text side (I18N G2): texts, FileFont, overflow modes.
     pub fn set_pack(&mut self, pack: crate::textdb::PackText) {
         self.pack = pack;

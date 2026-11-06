@@ -40,6 +40,12 @@ struct Running {
     wake: Option<Instant>,
     // While held: the last picture must be presented again (hold, resize, transport input, port menu closed).
     held_dirty: bool,
+    // Practice slow motion: index into `transport::SLOW`; 0 = 1×.
+    slow: usize,
+    // BGM starts seen by the sound device (`now_playing` on), titles by file stem, the toast and when it goes.
+    started: Option<crate::nowplaying::Started>,
+    titles: Vec<(String, String)>,
+    now_playing: Option<(String, Instant)>,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -183,7 +189,14 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
     let mut renderer: Box<dyn th08_core::drawlist::Renderer> = Box::new(gfx);
     let overlay = s.mount_pack(renderer.as_mut());
     th08_core::assets::yield_now().await;
-    let audio = Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio()));
+    let mut audio: Box<dyn th08_core::game::AudioOut> =
+        Box::new(th08_audio::audio::Audio::new(source.clone(), s.audio()));
+    let mut started = None;
+    if s.now_playing {
+        let (w, st) = crate::nowplaying::Watch::new(audio);
+        audio = Box::new(w);
+        started = Some(st);
+    }
     th08_core::assets::yield_now().await;
     let io = th08_core::game::Io {
         renderer,
@@ -200,6 +213,16 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         }
         let _ = font.join();
     }
+    let titles = if started.is_some() {
+        let cmt = ctx
+            .archive
+            .present()
+            .read("musiccmt.txt")
+            .unwrap_or_default();
+        crate::nowplaying::titles(&cmt, &self::gfx(&mut ctx).pack().db)
+    } else {
+        Vec::new()
+    };
     let cheats = s.active_cheats();
     if !cheats.is_empty() {
         log::warn!(
@@ -219,6 +242,10 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         snapshot: None,
         wake: None,
         held_dirty: false,
+        slow: 0,
+        started,
+        titles,
+        now_playing: None,
     }))
 }
 
@@ -296,6 +323,7 @@ impl ApplicationHandler<UserEvent> for App {
                     Some(Box::new(crate::platform::overlay::TransportOverlay::new(
                         crate::i18n::resolve(r.settings.language),
                         r.settings.font.clone(),
+                        r.settings.now_playing,
                     )));
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
@@ -838,6 +866,15 @@ impl App {
                     window.request_redraw();
                 }
             }
+            Action::Speed(rate) => {
+                let window = self.window().clone();
+                if let Shell::PortMenu(r, menu) = &mut self.shell {
+                    set_speed(r, *rate, Instant::now());
+                    menu.speed = menu_speed(r);
+                    menu.no_saves = no_score_saves(r);
+                    window.request_redraw();
+                }
+            }
         }
     }
 
@@ -997,6 +1034,8 @@ impl App {
             touch,
         );
         menu.cheats = r.settings.active_cheats();
+        menu.speed = menu_speed(&r);
+        menu.no_saves = no_score_saves(&mut r);
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
         self.window().request_redraw();
@@ -1383,6 +1422,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
         r.held_dirty = true;
     }
     follow_replay(r, now);
+    follow_practice(r, now);
     let shot = r.settings.shot;
     let (per_draw, draws) = match r.pacer.poll(now) {
         Tick::Run { per_draw, draws } => (per_draw, draws),
@@ -1598,8 +1638,13 @@ fn follow_replay(r: &mut Running, now: Instant) {
 
 fn apply_transport(r: &mut Running, now: Instant) {
     let t = r.replay.t;
-    if r.pacer.rate() != t.ratio() {
-        r.pacer.set_rate(t.ratio(), now);
+    let rate = if r.replay.playing || replay_active(&r.ctx) {
+        t.ratio()
+    } else {
+        crate::transport::SLOW[r.slow]
+    };
+    if r.pacer.rate() != rate {
+        r.pacer.set_rate(rate, now);
     }
     if r.pacer.is_held() != t.paused {
         r.pacer.hold(t.paused, now);
@@ -1609,6 +1654,87 @@ fn apply_transport(r: &mut Running, now: Instant) {
     if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
         h.clock.set_virtual(virt);
     }
+}
+
+// Live practice (stage or spell practice): slow motion may be set in a stage and stays through retry,
+// reload and the next stage.
+fn practice_live(g: &th08_core::gamemgr::Game, set: bool) -> bool {
+    use th08_core::types::SceneId;
+    let scene_ok = if set {
+        g.scene == SceneId::Game
+    } else {
+        matches!(
+            g.scene,
+            SceneId::Game | SceneId::Retry | SceneId::Reload | SceneId::NextStage
+        )
+    };
+    (g.practice() || g.spell_practice()) && !g.replay() && scene_ok
+}
+
+fn slow_allowed(r: &Running) -> bool {
+    practice_live(&r.ctx.w.game, true)
+}
+
+// Slow motion ends with the practice run.
+fn follow_practice(r: &mut Running, now: Instant) {
+    if r.slow != 0 && !practice_live(&r.ctx.w.game, false) {
+        log::info!("practice slow motion: off (practice left)");
+        r.slow = 0;
+        apply_transport(r, now);
+    }
+}
+
+// The port menu's speed row: the rate now, None when it is hidden (no live practice stage, no replay playing).
+fn menu_speed(r: &Running) -> Option<(u32, u32)> {
+    if r.replay.playing {
+        Some(r.replay.t.ratio())
+    } else if slow_allowed(r) {
+        Some(crate::transport::SLOW[r.slow])
+    } else {
+        None
+    }
+}
+
+fn no_score_saves(r: &mut Running) -> bool {
+    r.ctx
+        .host_as::<crate::platform::AppHost>()
+        .is_some_and(|h| h.no_score_saves)
+}
+
+// Port menu speed: the replay transport rate during playback, else practice slow motion. A slowed live run keeps
+// no score.dat or replay for the rest of the session.
+fn set_speed(r: &mut Running, rate: (u32, u32), now: Instant) {
+    if r.replay.playing {
+        if let Some(i) = crate::transport::RATES.iter().position(|&x| x == rate) {
+            r.replay.t.rate = i;
+        }
+    } else if slow_allowed(r) {
+        let Some(i) = crate::transport::SLOW.iter().position(|&x| x == rate) else {
+            return;
+        };
+        r.slow = i;
+        if i != 0 && !no_score_saves(r) {
+            if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+                h.no_score_saves = true;
+            }
+            log::warn!(
+                "practice slow motion: score.dat and replays are not saved for the rest of the session"
+            );
+            let lang = crate::i18n::resolve(r.settings.language);
+            r.toast = Some((
+                crate::i18n::ui(lang, "slow_nosave").to_string(),
+                now + TOAST,
+            ));
+        }
+    } else {
+        return;
+    }
+    log::info!(
+        "speed: {}",
+        crate::transport::rate_label(crate::i18n::Lang::En, rate)
+    );
+    apply_transport(r, now);
+    r.replay.label_until = Some(now + LABEL);
 }
 
 fn transport_act(r: &mut Running, a: Transp, now: Instant) {
@@ -1711,10 +1837,37 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) -> bool {
         crate::transport::strip(safe, window.scale_factor() as f32)
     });
     let t = r.replay.t;
-    let shown = r.replay.playing && (t.paused || r.replay.label_until.is_some_and(|u| now < u));
-    let label = shown.then(|| t.label(crate::i18n::resolve(r.settings.language)));
-    let strip = r.replay.strip;
     let lang = crate::i18n::resolve(r.settings.language);
+    let fresh = r.replay.label_until.is_some_and(|u| now < u);
+    let label = if r.replay.playing {
+        (t.paused || fresh).then(|| t.label(lang))
+    } else {
+        (r.slow != 0 && fresh)
+            .then(|| crate::transport::rate_label(lang, crate::transport::SLOW[r.slow]))
+    };
+    let strip = r.replay.strip;
+    if let Some(stem) = r
+        .started
+        .as_ref()
+        .and_then(crate::nowplaying::Started::take)
+        && let Some(title) = crate::nowplaying::title(&r.titles, &stem)
+    {
+        let text = crate::i18n::ui_fmt(lang, "now_playing", &[("title", title)]);
+        r.now_playing = Some((text, now + NOW_PLAYING));
+    }
+    if r.now_playing.as_ref().is_some_and(|t| now >= t.1) {
+        r.now_playing = None;
+    }
+    let now_playing = r.now_playing.as_ref().map(|t| t.0.clone());
+    let inputs = r.settings.input_display.map(|corner| {
+        let i = &r.ctx.w.input;
+        crate::platform::overlay::InputView {
+            word: if in_stage(r) { i.game[0] } else { i.held },
+            corner,
+            opacity: r.settings.input_opacity,
+        }
+    });
+    let safe = gfx(&mut r.ctx).safe.rect(size.width, size.height);
     if r.toast.as_ref().is_none_or(|t| now >= t.1)
         && let Some((name, err)) = crate::crashlog::take_save_error()
     {
@@ -1734,7 +1887,10 @@ fn update_hud(r: &mut Running, window: &Window, now: Instant) -> bool {
             strip,
             paused: t.paused,
             toast,
+            now_playing,
+            inputs,
         };
+        o.safe = safe;
         if o.view != view {
             o.view = view;
             return true;
@@ -1750,6 +1906,7 @@ const SPIN: std::time::Duration = std::time::Duration::from_micros(1500);
 // A paused replay re-checks its HUD (label, save toast) this often.
 const HELD_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 const TOAST: std::time::Duration = std::time::Duration::from_secs(5);
+const NOW_PLAYING: std::time::Duration = std::time::Duration::from_secs(4);
 
 // Hands the touch state to the overlay the renderer draws after the blit.
 fn update_overlay(ctx: &mut Ctx) {
@@ -1984,6 +2141,10 @@ mod tests {
             snapshot: None,
             wake: None,
             held_dirty: false,
+            slow: 0,
+            started: None,
+            titles: Vec::new(),
+            now_playing: None,
         })
     }
 
@@ -2018,6 +2179,10 @@ mod tests {
             snapshot: None,
             wake: None,
             held_dirty: false,
+            slow: 0,
+            started: None,
+            titles: Vec::new(),
+            now_playing: None,
         };
         for _ in 0..300 {
             r.ctx.calc();
@@ -2145,6 +2310,28 @@ mod tests {
     }
 
     // Paused: no logic frames; a step runs exactly one; resuming runs again.
+    // Slow motion is offered in a live practice stage, kept through retry and reload, dropped at the result screen
+    // and never offered for a normal run or a replay.
+    #[test]
+    fn practice_slow_scope() {
+        use th08_core::gamemgr::{Game, GameFlags};
+        use th08_core::types::SceneId;
+        let mut g = Game::default();
+        g.scene = SceneId::Game;
+        assert!(!practice_live(&g, true));
+        g.set_game_flags(GameFlags::PRACTICE);
+        assert!(practice_live(&g, true));
+        g.scene = SceneId::Retry;
+        assert!(!practice_live(&g, true) && practice_live(&g, false));
+        g.scene = SceneId::Result;
+        assert!(!practice_live(&g, false));
+        g.scene = SceneId::Game;
+        g.set_game_flags(GameFlags::SPELL_PRACTICE);
+        assert!(practice_live(&g, true));
+        g.set_game_flags(GameFlags::PRACTICE | GameFlags::REPLAY);
+        assert!(!practice_live(&g, true));
+    }
+
     #[test]
     fn pause_and_step() {
         let Some(mut r) = running("pause") else {

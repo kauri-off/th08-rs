@@ -374,6 +374,14 @@ pub struct AppHost {
     pub joystick: crate::joystick::Joystick,
     pub storage: Storage,
     pub clock: Clock,
+    // Practice slow motion was used: score.dat, score.txt and replays are dropped for the rest of the session (the
+    // score data in memory keeps the slowed run's records).
+    pub no_score_saves: bool,
+}
+
+// Files a slowed practice run must not reach.
+fn is_score_file(name: &str) -> bool {
+    name == "score.dat" || name == "score.txt" || name.starts_with("replay/")
 }
 
 impl AppHost {
@@ -412,6 +420,10 @@ impl Host for AppHost {
         self.storage.read(name)
     }
     fn write(&mut self, name: &str, data: &[u8]) {
+        if self.no_score_saves && is_score_file(name) {
+            log::info!("{name}: not written (slow motion was used)");
+            return;
+        }
         self.storage.write(name, data);
     }
     fn mkdir(&mut self, name: &str) {
@@ -612,6 +624,24 @@ mod tests {
         let st = Storage::new(Some(dir.clone()));
         std::fs::write(dir.join("score.dat.tmp"), b"x").unwrap();
         assert_eq!(st.list("score"), ["score.dat"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slowed_session_keeps_no_scores() {
+        let dir = std::env::temp_dir().join(format!("th08-noscore-{}", std::process::id()));
+        let mut h = AppHost {
+            storage: Storage::new(Some(dir.clone())),
+            no_score_saves: true,
+            ..Default::default()
+        };
+        h.mkdir("replay");
+        for f in ["score.dat", "score.txt", "replay/th8_01.rpy", "th08.cfg"] {
+            h.write(f, b"x");
+        }
+        assert!(h.read("score.dat").is_none() && h.read("score.txt").is_none());
+        assert!(h.read("replay/th8_01.rpy").is_none());
+        assert_eq!(h.read("th08.cfg").as_deref(), Some(&b"x"[..]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

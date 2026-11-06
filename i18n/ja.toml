@@ -120,6 +120,9 @@ keys_hint = "キーをクリックすると解除します。二つの行にあ�
 screenshot = "スクリーンショット"
 screenshot_saved = "スクリーンショットを保存しました: {path}"
 screenshot_failed = "スクリーンショットに失敗しました: {err}"
+slow_motion = "速度"
+slow_nosave = "スローモーションを使用しました: ゲームを再起動するまで score.dat とリプレイは保存されません。"
+now_playing = "再生中: {title}"
 [group]
 language = "言語"
 game_data = "ゲームデータ"
@@ -239,6 +242,11 @@ help = "ポートの効果音音量（パーセント）"
 label = "非アクティブ時にミュート"
 summary = "別のウィンドウがアクティブな間は音を消す"
 help = "ウィンドウやブラウザのタブにフォーカスがない間は音を消す"
+
+[entry.now_playing]
+label = "再生中の曲"
+summary = "曲が変わると曲名を表示"
+help = "BGM が始まったとき、音楽室の曲名（有効なパックで翻訳）を数秒間表示する"
 
 [entry.audio_buffer]
 label = "オーディオバッファ"
@@ -383,6 +391,23 @@ help = "スクリーンショットの大きさ: game（640x480 の画面）ま�
 [entry.screenshot_size.words]
 game = "640×480"
 window = "ウィンドウの大きさ"
+
+[entry.input_display]
+label = "入力表示"
+summary = "各フレームのゲーム入力を隅に表示（リプレイでも）"
+help = "入力表示: off、または各フレームの方向・ショット・ボム・低速・ポーズを表示するウィンドウの隅"
+
+[entry.input_display.words]
+off = "オフ"
+top-left = "左上"
+top-right = "右上"
+bottom-left = "左下"
+bottom-right = "右下"
+
+[entry.input_display_opacity]
+label = "入力表示の不透明度"
+summary = "入力表示の見えやすさ"
+help = "入力表示の不透明度（パーセント）"
 
 [entry.touch]
 label = "タッチオーバーレイ"
@@ -584,6 +609,7 @@ help = "ポートのリプレイ再生倍率の初期値（再生中は F7 / F8 
 [entry.replay_rate.words]
 "1/4" = "¼×"
 "1/2" = "½×"
+"3/4" = "¾×"
 "1" = "1×"
 "2" = "2×"
 "4" = "4×"

@@ -1,4 +1,4 @@
-//! Touch overlay and replay transport HUD: egui painter-only passes onto the window target after the blit, not the frame.
+//! Touch overlay and the port HUD (replay transport, toasts, input display): egui painter-only passes onto the window target after the blit, not the frame.
 
 use super::touch::{Ctl, Screen, TouchView};
 use crate::i18n::{self, Lang};
@@ -12,6 +12,8 @@ pub(crate) struct Pass {
     lang: Lang,
     // The `font` setting, tried first for the CJK face of Japanese labels.
     font: Option<String>,
+    // The CJK face is installed (Japanese UI, or game titles shown as they are).
+    cjk: bool,
     ctx: egui::Context,
     renderer: Option<(wgpu::TextureFormat, egui_wgpu::Renderer)>,
     // Texture frees owed from the last paint.
@@ -86,6 +88,7 @@ impl Pass {
         let mut p = Self {
             lang,
             font,
+            cjk: lang == Lang::Ja,
             ctx: egui::Context::default(),
             renderer: None,
             free: Vec::new(),
@@ -101,7 +104,7 @@ impl Pass {
 
     fn fresh_context(&mut self) {
         self.ctx = egui::Context::default();
-        if self.lang == Lang::Ja {
+        if self.cjk {
             i18n::install_fonts(&self.ctx, self.font.as_deref());
         }
     }
@@ -228,27 +231,170 @@ impl Overlay for TouchOverlay {
     }
 }
 
-// What the replay transport HUD shows: the speed label, and the touch strip (window px) while a replay plays.
+// Window corner of the input display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    pub const IDS: [&'static str; 5] = [
+        "off",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    ];
+
+    pub fn parse(v: &str) -> Option<Self> {
+        Some(match v {
+            "top-left" => Self::TopLeft,
+            "top-right" => Self::TopRight,
+            "bottom-left" => Self::BottomLeft,
+            "bottom-right" => Self::BottomRight,
+            _ => return None,
+        })
+    }
+}
+
+// The input display: the game word of the last logic frame, where and how visible.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InputView {
+    pub word: u16,
+    pub corner: Corner,
+    pub opacity: f32,
+}
+
+// What the port HUD shows: the transport speed label, the touch strip (window px) while a replay plays, toasts and
+// the input display.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TransportView {
     pub label: Option<String>,
     pub strip: Option<[(Action, [f32; 4]); 4]>,
     pub paused: bool,
-    // A save write failure, shown at the bottom for a few seconds.
+    // A save write failure or screenshot result, shown at the bottom for a few seconds.
     pub toast: Option<String>,
+    // The BGM title that just started, shown top left for a few seconds.
+    pub now_playing: Option<String>,
+    pub inputs: Option<InputView>,
+}
+
+impl TransportView {
+    fn is_empty(&self) -> bool {
+        self.label.is_none()
+            && self.strip.is_none()
+            && self.toast.is_none()
+            && self.now_playing.is_none()
+            && self.inputs.is_none()
+    }
 }
 
 pub struct TransportOverlay {
     pub view: TransportView,
+    // The safe rect `[x, y, w, h]` (window px) the corners are taken from.
+    pub safe: [f32; 4],
     pass: Pass,
 }
 
 impl TransportOverlay {
-    pub fn new(lang: Lang, font: Option<String>) -> Self {
+    // `cjk`: install the CJK face whatever the UI language (music titles are Japanese without a pack).
+    pub fn new(lang: Lang, font: Option<String>, cjk: bool) -> Self {
+        let mut pass = Pass::new(lang, font);
+        if cjk && !pass.cjk {
+            pass.cjk = true;
+            pass.fresh_context();
+        }
         Self {
             view: TransportView::default(),
-            pass: Pass::new(lang, font),
+            safe: [0.0; 4],
+            pass,
         }
+    }
+}
+
+// The input display: a d-pad of four arrows and the shot / bomb / focus / pause keys, lit while held.
+fn input_shapes(p: &egui::Painter, v: &InputView, safe: [f32; 4], lang: Lang) {
+    use th08_core::input::{BOMB, DOWN, FOCUS, LEFT, PAUSE, RIGHT, SHOT, UP};
+    let a = v.opacity;
+    let u = (safe[3] / 32.0).clamp(10.0, 36.0);
+    let (w, h) = (u * 9.6, u * 3.4);
+    let m = u * 0.5;
+    let x = match v.corner {
+        Corner::TopLeft | Corner::BottomLeft => safe[0] + m,
+        Corner::TopRight | Corner::BottomRight => safe[0] + safe[2] - w - m,
+    };
+    let y = match v.corner {
+        Corner::TopLeft | Corner::TopRight => safe[1] + m,
+        Corner::BottomLeft | Corner::BottomRight => safe[1] + safe[3] - h - m,
+    };
+    p.rect_filled(
+        Rect::from_min_size(pos2(x, y), vec2(w, h)),
+        u * 0.4,
+        Color32::from_black_alpha(white(a * 0.55).a()),
+    );
+    let on = |bit: u16| v.word & bit != 0;
+    let fill = |lit: bool| {
+        if lit {
+            accent(a * 0.9)
+        } else {
+            white(a * 0.18)
+        }
+    };
+    let stroke = Stroke::new(1.5, white(a * 0.8));
+    let c = pos2(x + u * 1.7, y + h / 2.0);
+    let s = u * 0.55;
+    for (bit, dx, dy) in [
+        (UP, 0.0, -1.0),
+        (DOWN, 0.0, 1.0),
+        (LEFT, -1.0, 0.0),
+        (RIGHT, 1.0, 0.0),
+    ] {
+        let tip = c + vec2(dx, dy) * (s * 2.6);
+        let base = c + vec2(dx, dy) * (s * 0.9);
+        let side = vec2(-dy, dx) * s;
+        p.add(egui::Shape::convex_polygon(
+            vec![tip, base + side, base - side],
+            fill(on(bit)),
+            stroke,
+        ));
+    }
+    let keys = [
+        (SHOT, "touch_shot"),
+        (BOMB, "touch_bomb"),
+        (FOCUS, "touch_focus"),
+        (PAUSE, "touch_pause"),
+    ];
+    let (kw, kh) = (u * 2.6, u * 1.3);
+    for (i, (bit, id)) in keys.into_iter().enumerate() {
+        let col = (i % 2) as f32;
+        let row = (i / 2) as f32;
+        let r = Rect::from_min_size(
+            pos2(
+                x + u * 3.8 + col * (kw + u * 0.3),
+                y + u * 0.3 + row * (kh + u * 0.2),
+            ),
+            vec2(kw, kh),
+        );
+        p.rect(r, u * 0.3, fill(on(bit)), stroke, egui::StrokeKind::Inside);
+        let text = i18n::ui(lang, id);
+        let mut size = u * 0.7;
+        let tw = p
+            .layout_no_wrap(text.to_owned(), FontId::proportional(size), white(1.0))
+            .size()
+            .x;
+        if tw > kw * 0.9 {
+            size *= kw * 0.9 / tw;
+        }
+        p.text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(size),
+            white(a.max(0.4)),
+        );
     }
 }
 
@@ -307,7 +453,33 @@ fn strip_button(p: &egui::Painter, a: Action, r: [f32; 4], paused: bool) {
     }
 }
 
-fn transport_shapes(p: &egui::Painter, v: &TransportView, (w, h): (u32, u32)) {
+fn transport_shapes(
+    p: &egui::Painter,
+    v: &TransportView,
+    (w, h): (u32, u32),
+    safe: [f32; 4],
+    lang: Lang,
+) {
+    if let Some(i) = &v.inputs {
+        input_shapes(p, i, safe, lang);
+    }
+    if let Some(text) = &v.now_playing {
+        let size = (h as f32 / 30.0).clamp(12.0, 26.0);
+        let g = p.layout(
+            text.clone(),
+            FontId::proportional(size),
+            white(1.0),
+            w as f32 * 0.6,
+        );
+        let top = v
+            .inputs
+            .filter(|i| i.corner == Corner::TopLeft)
+            .map_or(0.0, |_| (safe[3] / 32.0).clamp(10.0, 36.0) * 4.2);
+        let at = pos2(safe[0] + size, safe[1] + size * 0.8 + top);
+        let bg = Rect::from_min_size(at, g.size()).expand2(vec2(size * 0.6, size * 0.3));
+        p.rect_filled(bg, size * 0.3, Color32::from_black_alpha(170));
+        p.galley(at, g, white(1.0));
+    }
     if let Some(strip) = &v.strip {
         for (a, r) in strip {
             strip_button(p, *a, *r, v.paused);
@@ -353,12 +525,13 @@ fn transport_shapes(p: &egui::Painter, v: &TransportView, (w, h): (u32, u32)) {
 
 impl Overlay for TransportOverlay {
     fn paint(&mut self, t: OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder) {
-        if self.view.label.is_none() && self.view.strip.is_none() && self.view.toast.is_none() {
+        if self.view.is_empty() {
             return;
         }
-        let (v, size) = (&self.view, t.size);
-        self.pass
-            .paint(t, enc, "replay transport", |p| transport_shapes(p, v, size));
+        let (v, size, safe, lang) = (&self.view, t.size, self.safe, self.pass.lang);
+        self.pass.paint(t, enc, "port hud", |p| {
+            transport_shapes(p, v, size, safe, lang);
+        });
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

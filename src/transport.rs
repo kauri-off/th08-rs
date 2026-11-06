@@ -4,8 +4,10 @@ use crate::i18n::{self, Lang};
 use winit::keyboard::KeyCode;
 
 // (logic frames, frame periods): ¼× … 8×.
-pub const RATES: [(u32, u32); 6] = [(1, 4), (1, 2), (1, 1), (2, 1), (4, 1), (8, 1)];
-pub const NORMAL: usize = 2;
+pub const RATES: [(u32, u32); 7] = [(1, 4), (1, 2), (3, 4), (1, 1), (2, 1), (4, 1), (8, 1)];
+pub const NORMAL: usize = 3;
+// Practice slow motion (port menu): 1×, ¾×, ½×.
+pub const SLOW: [(u32, u32); 3] = [(1, 1), (3, 4), (1, 2)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -65,13 +67,19 @@ impl Transport {
         if self.paused {
             return i18n::ui(lang, "replay_paused").to_string();
         }
-        let r = match self.ratio() {
-            (1, 4) => "¼".to_string(),
-            (1, 2) => "½".to_string(),
-            (n, _) => n.to_string(),
-        };
-        i18n::ui_fmt(lang, "replay_rate", &[("rate", &r)])
+        rate_label(lang, self.ratio())
     }
+}
+
+// "½×" for (1, 2).
+pub fn rate_label(lang: Lang, rate: (u32, u32)) -> String {
+    let r = match rate {
+        (1, 4) => "¼".to_string(),
+        (1, 2) => "½".to_string(),
+        (3, 4) => "¾".to_string(),
+        (n, _) => n.to_string(),
+    };
+    i18n::ui_fmt(lang, "replay_rate", &[("rate", &r)])
 }
 
 // The touch strip: four square buttons, top centre of the safe rect `[x, y, w, h]`; `px` = physical px per dp.

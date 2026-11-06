@@ -7,6 +7,7 @@ pub mod gameimport;
 pub mod i18n;
 pub mod joystick;
 pub mod launcher;
+pub mod nowplaying;
 pub mod pacer;
 pub mod packs;
 pub mod platform;

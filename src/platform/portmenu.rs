@@ -27,6 +27,10 @@ pub struct PortMenu {
     pub cheats: Vec<&'static str>,
     // The last screenshot's outcome (set by the app).
     pub status: Option<String>,
+    // The speed row's rate (practice slow motion or replay transport); None hides it.
+    pub speed: Option<(u32, u32)>,
+    // Slow motion was used: score.dat and replays are not saved.
+    pub no_saves: bool,
     // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
@@ -72,6 +76,8 @@ impl PortMenu {
             controller: None,
             cheats: Vec::new(),
             status: None,
+            speed: None,
+            no_saves: false,
             touch,
             edit: None,
             saved: None,
@@ -120,6 +126,7 @@ impl PortMenu {
         let pad = self.controller.as_deref();
         let cheats = &self.cheats;
         let status = self.status.as_deref();
+        let (speed, no_saves) = (self.speed, self.no_saves);
         let (edit, touch) = (&mut self.edit, self.touch.is_some());
         let mut open_edit = false;
         let mut done = None;
@@ -129,7 +136,16 @@ impl PortMenu {
             if let Some(e) = edit {
                 done = e.ui(ctx, lang, ppp);
             } else {
-                (act, open_edit, cycle) = menu_ui(ctx, lang, pad, touch, cheats, hitboxes, status);
+                let m = MenuState {
+                    pad,
+                    touch,
+                    cheats,
+                    hitboxes,
+                    status,
+                    speed,
+                    no_saves,
+                };
+                (act, open_edit, cycle) = menu_ui(ctx, lang, &m);
             }
         });
         if cycle {
@@ -181,17 +197,28 @@ impl PortMenu {
     }
 }
 
-// The menu box; also whether the layout editor was asked for (`touch`: the overlay is on) and whether the hitbox
-// mode is to be cycled.
-fn menu_ui(
-    ctx: &egui::Context,
-    lang: Lang,
-    pad: Option<&str>,
+// What the menu box shows; `touch`: the overlay is on.
+struct MenuState<'a> {
+    pad: Option<&'a str>,
     touch: bool,
-    cheats: &[&str],
+    cheats: &'a [&'static str],
     hitboxes: super::hitbox::Hitboxes,
-    status: Option<&str>,
-) -> (Option<Action>, bool, bool) {
+    status: Option<&'a str>,
+    speed: Option<(u32, u32)>,
+    no_saves: bool,
+}
+
+// The menu box; also whether the layout editor was asked for and whether the hitbox mode is to be cycled.
+fn menu_ui(ctx: &egui::Context, lang: Lang, m: &MenuState<'_>) -> (Option<Action>, bool, bool) {
+    let MenuState {
+        pad,
+        touch,
+        cheats,
+        hitboxes,
+        status,
+        speed,
+        no_saves,
+    } = *m;
     let mut act = None;
     let mut edit = false;
     let mut cycle = false;
@@ -212,6 +239,13 @@ fn menu_ui(
                             ui.add_space(4.0);
                             ui.colored_label(ui.visuals().error_fg_color, note);
                         }
+                        if no_saves {
+                            ui.add_space(4.0);
+                            ui.colored_label(
+                                ui.visuals().error_fg_color,
+                                i18n::ui(lang, "slow_nosave"),
+                            );
+                        }
                         ui.add_space(12.0);
                         let resume = format!("  {}  ", i18n::ui(lang, "resume"));
                         if ui.button(RichText::new(resume).strong()).clicked() {
@@ -220,6 +254,20 @@ fn menu_ui(
                         if touch {
                             ui.add_space(4.0);
                             edit = ui.button(i18n::ui(lang, "touch_edit")).clicked();
+                        }
+                        if let Some(now) = speed {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(i18n::ui(lang, "slow_motion"));
+                                for rate in crate::transport::SLOW {
+                                    let text = crate::transport::rate_label(lang, rate);
+                                    if ui.selectable_label(now == rate, text).clicked()
+                                        && now != rate
+                                    {
+                                        act = Some(Action::Speed(rate));
+                                    }
+                                }
+                            });
                         }
                         ui.add_space(4.0);
                         cycle = ui.button(hitboxes_label(lang, hitboxes)).clicked();

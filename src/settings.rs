@@ -300,6 +300,11 @@ pub struct Settings {
     pub keys: crate::platform::keymap::KeyMap,
     // F12 / port-menu screenshots at the window size (else 640×480).
     pub screenshot_window: bool,
+    // Input display corner (None = off) and opacity 0–1.
+    pub input_display: Option<crate::platform::overlay::Corner>,
+    pub input_opacity: f32,
+    // "Now playing" toast when a BGM track starts.
+    pub now_playing: bool,
     pub volume: th08_audio::audio::PortVolume,
     pub mute_unfocused: bool,
     pub audio_buffer: Option<u32>,
@@ -387,6 +392,9 @@ impl Settings {
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
             keys: crate::platform::keymap::KeyMap::default(),
             screenshot_window: false,
+            input_display: None,
+            input_opacity: 0.8,
+            now_playing: false,
             volume: th08_audio::audio::PortVolume::default(),
             mute_unfocused: true,
             audio_buffer: None,
@@ -857,6 +865,25 @@ pub const ENTRIES: &[Entry] = &[
         },
     },
     Entry {
+        key: "now_playing",
+        env: "TH08_NOW_PLAYING",
+        kind: Kind::Bool,
+        default: "off",
+        group: Group::Sound,
+        label: "Now playing",
+        summary: "Show the track title when the music changes",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "show the music room title of a BGM track (translated by the active pack) for a few seconds when it starts",
+        set: |s, v| {
+            s.now_playing = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
         key: "audio_buffer",
         env: "TH08_AUDIO_BUFFER",
         kind: Kind::Int { min: 0, max: 8192 },
@@ -1053,6 +1080,57 @@ pub const ENTRIES: &[Entry] = &[
                 "window" => true,
                 _ => return Err("expected game or window".into()),
             };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "input_display",
+        env: "TH08_INPUT_DISPLAY",
+        kind: Kind::Enum(&crate::platform::overlay::Corner::IDS),
+        default: "off",
+        group: Group::Display,
+        label: "Input display",
+        summary: "Show each frame's game inputs in a corner, replays too",
+        unit: "",
+        words: &[
+            ("off", "Off"),
+            ("top-left", "Top left"),
+            ("top-right", "Top right"),
+            ("bottom-left", "Bottom left"),
+            ("bottom-right", "Bottom right"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "input display: off, or the window corner where the arrows, shot, bomb, focus and pause of each frame are shown",
+        set: |s, v| {
+            s.input_display = match v.trim() {
+                "off" => None,
+                c => Some(
+                    crate::platform::overlay::Corner::parse(c)
+                        .ok_or("expected off, top-left, top-right, bottom-left or bottom-right")?,
+                ),
+            };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "input_display_opacity",
+        env: "TH08_INPUT_DISPLAY_OPACITY",
+        kind: Kind::Int { min: 10, max: 100 },
+        default: "80",
+        group: Group::Display,
+        label: "Input display opacity",
+        summary: "How visible the input display is",
+        unit: "%",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        help: "input display opacity in percent",
+        set: |s, v| {
+            let n: u32 = num(v)?;
+            s.input_opacity = n.clamp(10, 100) as f32 / 100.0;
             Ok(())
         },
     },
@@ -1521,7 +1599,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         key: "replay_rate",
         env: "TH08_REPLAY_RATE",
-        kind: Kind::Enum(&["1/4", "1/2", "1", "2", "4", "8"]),
+        kind: Kind::Enum(&["1/4", "1/2", "3/4", "1", "2", "4", "8"]),
         default: "1",
         group: Group::StartGame,
         label: "Replay rate",
@@ -1530,6 +1608,7 @@ pub const ENTRIES: &[Entry] = &[
         words: &[
             ("1/4", "¼×"),
             ("1/2", "½×"),
+            ("3/4", "¾×"),
             ("1", "1×"),
             ("2", "2×"),
             ("4", "4×"),
@@ -1547,7 +1626,7 @@ pub const ENTRIES: &[Entry] = &[
                         Some((a, b)) => a == n.to_string() && b == d.to_string(),
                         None => d == 1 && v.trim() == n.to_string(),
                     });
-            s.replay_rate = r.ok_or("expected 1/4, 1/2, 1, 2, 4 or 8")?;
+            s.replay_rate = r.ok_or("expected 1/4, 1/2, 3/4, 1, 2, 4 or 8")?;
             Ok(())
         },
     },

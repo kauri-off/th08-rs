@@ -219,6 +219,8 @@ pub enum Action {
     Resume,
     // Port menu: a PNG screenshot of the paused game's frame.
     Screenshot,
+    // Port menu: practice slow motion / replay transport rate (logic frames, frame periods).
+    Speed((u32, u32)),
     // The Fullscreen box was changed on screen; the app applies it to the window.
     Fullscreen(bool),
 }
