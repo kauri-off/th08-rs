@@ -130,6 +130,12 @@ interface LauncherActions {
     fun packRemove(code: String) {}
     fun saveExport() {}
     fun saveImport(portCfg: Boolean) {}
+    fun replaySort(byScore: Boolean) {}
+    fun replayImport() {}
+    fun replayWatch(r: ReplayItem) {}
+    fun replayExport(r: ReplayItem) {}
+    fun replayShare(r: ReplayItem) {}
+    fun replayDelete(r: ReplayItem) {}
     fun importGame() {}
     fun cancelImport() {}
     fun removeGame() {}
@@ -311,6 +317,10 @@ private fun SettingsList(
     ) {
         if (status != null) item(key = "status") { Block { status() } }
         groupBlocks(groups, player, act, showInfo)
+        item(key = "replays") {
+            Header(str(R.string.replays_title))
+            Block { ReplaysBlock(rows, act) }
+        }
         item(key = "saves") {
             Header(str(R.string.saves_title))
             SavesBlock(act)

@@ -110,4 +110,25 @@
   <string name="update_fail_install">インストールに失敗しました: %1$s</string>
   <string name="update_cancelled">更新はキャンセルされました。</string>
   <string name="update_done">バージョン %1$s に更新しました。</string>
+  <string name="replays_title">リプレイ</string>
+  <string name="replays_browse">リプレイを見る</string>
+  <string name="replays_count">%d 個のリプレイ: 再生・書き出し・共有・削除</string>
+  <string name="replays_none">リプレイはまだありません</string>
+  <string name="replays_import">リプレイを読み込む</string>
+  <string name="replays_import_summary">ファイルマネージャーで選んだ .rpy ファイルをリプレイフォルダにコピーします</string>
+  <string name="replays_sort_date">新しい順</string>
+  <string name="replays_sort_score">スコア順</string>
+  <string name="replays_watch">再生</string>
+  <string name="replays_export">書き出す</string>
+  <string name="replays_share">共有</string>
+  <string name="replays_delete">削除</string>
+  <string name="replays_delete_confirm">%s を削除しますか？元に戻せません。</string>
+  <string name="replays_damaged">破損: %s</string>
+  <string name="replays_practice">練習</string>
+  <string name="replays_detail">%1$s · %2$s · 処理落ち %3$s%%</string>
+  <string name="replays_imported">%d 個のリプレイを読み込みました</string>
+  <string name="replays_import_failed">%1$s は読み込めませんでした: %2$s</string>
+  <string name="replays_exported">リプレイを書き出しました</string>
+  <string name="replays_export_failed">書き出しに失敗しました: %s</string>
+  <string name="replays_deleted">%s を削除しました</string>
 </resources>

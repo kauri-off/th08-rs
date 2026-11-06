@@ -10,7 +10,7 @@ pub const FORMAT: u64 = 1;
 pub const MAX_ZIP: u64 = 256 << 20;
 const MAX_TOTAL: u64 = 256 << 20;
 const MAX_REPLAYS: usize = 2000;
-const MAX_REPLAY: u64 = 16 << 20;
+pub const MAX_REPLAY: u64 = 16 << 20;
 const FILES: [(&str, u64); 4] = [
     ("score.dat", 1 << 20),
     ("th08.cfg", 4 << 10),
@@ -247,7 +247,7 @@ pub fn validate(data: &[u8]) -> Result<Archive, String> {
 }
 
 // Why a replay cannot be read; a well-formed slow-mode replay is kept (the game itself refuses to play it).
-fn replay_error(r: &[u8]) -> Option<th08_core::replay::ReplayError> {
+pub fn replay_error(r: &[u8]) -> Option<th08_core::replay::ReplayError> {
     match th08_core::replay::parse(r, None) {
         Ok(_) | Err(th08_core::replay::ReplayError::SlowMode) => None,
         Err(e) => Some(e),

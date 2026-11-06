@@ -52,6 +52,10 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private var exportDoc: (String) -> Unit = {}
     private var importDoc: () -> Unit = {}
     private var importCfg = false
+    private var replays by mutableStateOf(ReplayState())
+    private var exportReplayDoc: (String) -> Unit = {}
+    private var importReplayDocs: () -> Unit = {}
+    private var exporting: ReplayItem? = null
     private val lastErrorFile get() = File(filesDir, "last_error.txt")
     private var lastError by mutableStateOf<String?>(null)
     private var update by mutableStateOf<UpdateInfo?>(null)
@@ -84,6 +88,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                     data = checkData()
                     saves = saves.copy(gameRunning = gameRunning())
                     lastError = runCatching { lastErrorFile.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
+                    loadReplays()
                     onPauseOrDispose { }
                 }
                 val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -93,6 +98,16 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                     uri?.let(::importFrom)
                 }
                 exportDoc = { name -> exp.launch(name) }
+                val rpyExp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+                    val r = exporting
+                    exporting = null
+                    if (uri != null && r != null) exportReplayTo(r, uri)
+                }
+                val rpyImp = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                    if (uris.isNotEmpty()) importReplays(uris)
+                }
+                exportReplayDoc = { name -> rpyExp.launch(name) }
+                importReplayDocs = { rpyImp.launch(arrayOf("application/octet-stream", "*/*")) }
                 importDoc = { imp.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
                 // Poll the Rust job while one runs.
                 LaunchedEffect(packs.busy) {
@@ -133,7 +148,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 val lang = currentLang()
                 val res = remember(lang) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
-                    LocalSaves provides saves, LocalImport provides importer.state, LocalLastError provides lastError,
+                    LocalSaves provides saves, LocalReplays provides replays, LocalImport provides importer.state, LocalLastError provides lastError,
                     LocalUpdate provides UpdateUi(update, AppUpdate.step, inAppUpdate)) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
@@ -414,14 +429,131 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
 
     private fun currentLang() = resolveLang(rows.firstOrNull { it.e.key == "language" }?.value ?: "auto")
 
-    override fun play() {
+    override fun play() = start(emptyList())
+
+    // `extra` replaces the rows of the same key for this start only.
+    private fun start(extra: List<Pair<String, String>>) {
         dismissError()
         if (AppUpdate.busy || AppUpdate.step == UpdateStep.NeedPermission) AppUpdate.cancel(this)
+        val keys = extra.map { it.first }.toSet()
         val once = rows
-            .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() }
-            .map { it.e.key to it.value }
+            .filter { !it.e.persist && it.value != it.initial && it.value.isNotEmpty() && it.ok() && it.e.key !in keys }
+            .map { it.e.key to it.value } + extra
         PortCfg.writeLaunch(File(filesDir, "launch.cfg"), once)
         startActivity(Intent(this, GameActivity::class.java))
+    }
+
+    // The game's save dir on Android is filesDir (lib.rs `android_main`).
+    private val replayDir get() = File(filesDir, "replay")
+
+    private fun replayRequest(op: String, extra: (JSONObject) -> Unit = {}): String = JSONObject().apply {
+        put("op", op)
+        put("dir", replayDir.path)
+        put("sort", if (replays.byScore) "score" else "date")
+        extra(this)
+    }.toString()
+
+    private fun replayJob(job: () -> Pair<String?, Boolean>) {
+        replays = replays.copy(busy = true, message = null)
+        Thread {
+            val (msg, failed) = runCatching(job).getOrElse { (it.message ?: it.toString()) to true }
+            val list = runCatching { parseReplayList(Replays.call(replayRequest("list"))) }
+            runOnUiThread {
+                replays = replays.copy(items = list.getOrNull() ?: replays.items, busy = false,
+                    message = msg ?: list.exceptionOrNull()?.message, failed = failed || list.isFailure)
+            }
+        }.start()
+    }
+
+    private fun loadReplays() {
+        if (!replays.busy) replayJob { null to false }
+    }
+
+    private fun replayStrings() = localized(this, currentLang())
+
+    override fun replaySort(byScore: Boolean) {
+        replays = replays.copy(byScore = byScore)
+        loadReplays()
+    }
+
+    override fun replayImport() = importReplayDocs()
+
+    override fun replayWatch(r: ReplayItem) = start(listOf("replay" to r.path))
+
+    override fun replayExport(r: ReplayItem) {
+        exporting = r
+        exportReplayDoc(r.file)
+    }
+
+    private fun exportReplayTo(r: ReplayItem, uri: Uri) = replayJob {
+        val res = replayStrings()
+        runCatching {
+            contentResolver.openOutputStream(uri, "wt")!!.use { o -> File(r.path).inputStream().use { it.copyTo(o) } }
+        }.fold({ res.getString(R.string.replays_exported) to false },
+            { res.getString(R.string.replays_export_failed, it.message ?: it.toString()) to true })
+    }
+
+    // Through a copy in cache/share, which the FileProvider serves read-only to the picked app.
+    override fun replayShare(r: ReplayItem) {
+        runCatching {
+            val dir = File(cacheDir, "share").also { it.mkdirs() }
+            dir.listFiles()?.forEach { it.delete() }
+            val out = File(dir, r.file)
+            File(r.path).copyTo(out, overwrite = true)
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", out)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/octet-stream"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, null))
+        }.onFailure {
+            replays = replays.copy(message = replayStrings().getString(R.string.replays_export_failed, it.message ?: it.toString()),
+                failed = true)
+        }
+    }
+
+    override fun replayDelete(r: ReplayItem) = replayJob {
+        val res = replayStrings()
+        val o = JSONObject(Replays.call(replayRequest("delete") { it.put("file", r.file) }))
+        if (o.has("error")) o.getString("error") to true else res.getString(R.string.replays_deleted, r.file) to false
+    }
+
+    // Each document goes through a cache copy (at most `Replays.MAX_RPY` bytes), then is validated and copied in.
+    private fun importReplays(uris: List<Uri>) = replayJob {
+        val res = replayStrings()
+        var ok = 0
+        val errs = mutableListOf<String>()
+        val tmp = File(cacheDir, "replay-import.rpy")
+        for (uri in uris) {
+            val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            } ?: "replay.rpy"
+            val err = try {
+                contentResolver.openInputStream(uri)!!.use { i ->
+                    tmp.outputStream().use { o ->
+                        val buf = ByteArray(1 shl 16)
+                        var total = 0L
+                        while (true) {
+                            val n = i.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > Replays.MAX_RPY) throw java.io.IOException("larger than 16 MiB")
+                            o.write(buf, 0, n)
+                        }
+                    }
+                }
+                val o = JSONObject(Replays.call(replayRequest("import") { it.put("src", tmp.path); it.put("name", name) }))
+                if (o.has("error")) o.getString("error") else null
+            } catch (e: Exception) {
+                e.message ?: e.toString()
+            } finally {
+                tmp.delete()
+            }
+            if (err == null) ok++ else errs.add(res.getString(R.string.replays_import_failed, name, err))
+        }
+        val done = res.getString(R.string.replays_imported, ok)
+        (listOf(done) + errs).joinToString("\n") to errs.isNotEmpty()
     }
 }
 

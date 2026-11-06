@@ -111,4 +111,25 @@
   <string name="update_fail_install">Install failed: %1$s</string>
   <string name="update_cancelled">The update was cancelled.</string>
   <string name="update_done">Updated to version %1$s.</string>
+  <string name="replays_title">Replays</string>
+  <string name="replays_browse">Browse replays</string>
+  <string name="replays_count">%d replays: watch, export, share or delete</string>
+  <string name="replays_none">No replays yet</string>
+  <string name="replays_import">Import replays</string>
+  <string name="replays_import_summary">Copies .rpy files picked in the file manager into the replay folder</string>
+  <string name="replays_sort_date">Newest</string>
+  <string name="replays_sort_score">Best score</string>
+  <string name="replays_watch">Watch</string>
+  <string name="replays_export">Export</string>
+  <string name="replays_share">Share</string>
+  <string name="replays_delete">Delete</string>
+  <string name="replays_delete_confirm">Delete %s? This cannot be undone.</string>
+  <string name="replays_damaged">Damaged: %s</string>
+  <string name="replays_practice">practice</string>
+  <string name="replays_detail">%1$s · %2$s · slowdown %3$s%%</string>
+  <string name="replays_imported">%d replays imported</string>
+  <string name="replays_import_failed">%1$s not imported: %2$s</string>
+  <string name="replays_exported">Replay exported</string>
+  <string name="replays_export_failed">Export failed: %s</string>
+  <string name="replays_deleted">%s deleted</string>
 </resources>

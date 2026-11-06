@@ -10,6 +10,9 @@ use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::window::Window;
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+mod replay_tab;
+
 // "version (channel)"; the channel is set only for Android builds.
 pub fn version_line() -> String {
     match env!("TH08_CHANNEL") {
@@ -360,6 +363,18 @@ pub struct Model {
     capture: Option<&'static str>,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     update: Update,
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    tab: Tab,
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    rp: replay_tab::ReplayTab,
+}
+
+// The settings screen's tabs.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tab {
+    Settings,
+    Replays,
 }
 
 // The update check: started on the first settings screen frame, so never when the launcher is skipped.
@@ -434,6 +449,10 @@ impl Model {
             } else {
                 Update::Off
             },
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            tab: Tab::Settings,
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            rp: replay_tab::ReplayTab::default(),
         };
         m.refresh_installed();
         m
@@ -765,6 +784,8 @@ impl Model {
                 ui.label(egui::RichText::new(version_line()).small().weak());
             });
             self.folder_ui(ui);
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            self.tabs_ui(ui, lang);
             ui.add_space(4.0);
         });
         egui::Panel::bottom("buttons").show(ui, |ui| {
@@ -799,6 +820,19 @@ impl Model {
             });
             ui.add_space(4.0);
         });
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        self.dropped_ui(ui, lang);
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        if self.tab == Tab::Replays {
+            egui::CentralPanel::default_margins().show(ui, |ui| {
+                egui::ScrollArea::both().show(ui, |ui| {
+                    if let Some(a) = self.replays_ui(ui, lang) {
+                        act = Some(a);
+                    }
+                });
+            });
+            return act;
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -833,6 +867,57 @@ impl Model {
             });
         });
         act
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn tabs_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        ui.horizontal(|ui| {
+            let before = self.tab;
+            ui.selectable_value(&mut self.tab, Tab::Settings, i18n::ui(lang, "tab_settings"));
+            ui.selectable_value(&mut self.tab, Tab::Replays, i18n::ui(lang, "tab_replays"));
+            if self.tab != before {
+                self.forget_replays();
+            }
+        });
+    }
+
+    // .rpy files dropped on the window are imported from either tab, which then shows the Replays tab.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn dropped_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        let (dropped, hovering) = ui.ctx().input(|i| {
+            let d: Vec<PathBuf> = i
+                .raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect();
+            (d, !i.raw.hovered_files.is_empty())
+        });
+        if hovering {
+            egui::Area::new(egui::Id::unique("rp_drop"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.heading(i18n::ui(lang, "rp_drop"));
+                    });
+                });
+        }
+        if !dropped.is_empty() {
+            self.tab = Tab::Replays;
+            self.import_replays(&dropped, lang);
+        }
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    pub fn tab(&self) -> Tab {
+        self.tab
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    pub fn set_tab(&mut self, t: Tab) {
+        self.tab = t;
+        self.forget_replays();
     }
 
     fn folder_ui(&mut self, ui: &mut egui::Ui) {

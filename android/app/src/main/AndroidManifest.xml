@@ -17,6 +17,11 @@
       </intent-filter>
     </activity>
     <receiver android:name=".UpdateReceiver" android:exported="false"/>
+    <!-- Replay share (Replays.kt): read-only copies in cache/share. -->
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files"
+        android:exported="false" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
+    </provider>
     <!-- The Rust game (lib th08, GameActivity.kt); own process, ended by the game on Quit so the next Play starts
          fresh. Back goes to the game only, through its OnBackInvokedCallback (API 33+) or KEYCODE_BACK. -->
     <activity android:name=".GameActivity" android:exported="false" android:process=":game"

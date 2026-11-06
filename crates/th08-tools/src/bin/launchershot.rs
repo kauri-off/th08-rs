@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading|portmenu] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--tab=replays] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -70,8 +70,10 @@ fn main() {
         .iter()
         .find_map(|a| a.strip_prefix("--bundled="))
         .map(String::from);
+    let replays_tab = args.iter().any(|a| a == "--tab=replays");
     args.retain(|a| {
         a != "--developer"
+            && a != "--tab=replays"
             && a != "--tr-list"
             && !a.starts_with("--error=")
             && !a.starts_with("--view=")
@@ -120,6 +122,9 @@ fn main() {
             std::process::exit(2);
         };
         model.start_capture(e.key);
+    }
+    if replays_tab {
+        model.set_tab(th08::launcher::Tab::Replays);
     }
     model.view = match error {
         Some(e) => th08::launcher::View::Error(e),

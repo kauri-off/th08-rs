@@ -110,4 +110,25 @@
   <string name="update_fail_install">Ошибка установки: %1$s</string>
   <string name="update_cancelled">Обновление отменено.</string>
   <string name="update_done">Обновлено до версии %1$s.</string>
+  <string name="replays_title">Реплеи</string>
+  <string name="replays_browse">Открыть реплеи</string>
+  <string name="replays_count">Реплеев: %d — смотреть, экспортировать, отправить или удалить</string>
+  <string name="replays_none">Реплеев пока нет</string>
+  <string name="replays_import">Импорт реплеев</string>
+  <string name="replays_import_summary">Копирует выбранные в файловом менеджере файлы .rpy в папку реплеев</string>
+  <string name="replays_sort_date">Сначала новые</string>
+  <string name="replays_sort_score">По очкам</string>
+  <string name="replays_watch">Смотреть</string>
+  <string name="replays_export">Экспорт</string>
+  <string name="replays_share">Отправить</string>
+  <string name="replays_delete">Удалить</string>
+  <string name="replays_delete_confirm">Удалить %s? Это нельзя отменить.</string>
+  <string name="replays_damaged">Повреждён: %s</string>
+  <string name="replays_practice">практика</string>
+  <string name="replays_detail">%1$s · %2$s · замедление %3$s%%</string>
+  <string name="replays_imported">Импортировано реплеев: %d</string>
+  <string name="replays_import_failed">%1$s не импортирован: %2$s</string>
+  <string name="replays_exported">Реплей экспортирован</string>
+  <string name="replays_export_failed">Экспорт не удался: %s</string>
+  <string name="replays_deleted">%s удалён</string>
 </resources>
