@@ -81,18 +81,22 @@ became a question for the dirty room, never a patch that just made the numbers m
 
 ## Where it is now
 
-The port is complete. I am now rewriting it into idiomatic Rust:
+The port is complete, and the rewrite into idiomatic Rust is done up to and including the module pass:
 
-- the global state becomes one cloneable `World`;
-- drawing becomes a command list;
-- the core is cut off from the window, sound and file system.
+- the global state is one cloneable `World`;
+- drawing is a command list;
+- the core crate has no access to the window, sound or file system.
 
-Behaviour is frozen during the rewrite. After every step the port is checked against itself and against the replay
-set. The Android build, with a touch overlay you can rearrange, is out; the mobile web build comes next.
+Behaviour was frozen during the rewrite: after every step the port was checked against itself and against the replay
+sets. It runs on Windows, Linux, Android (with a touch overlay you can rearrange) and in the browser. Next: layout
+tuning of translated text, mobile web polish and an optional renderer rewrite ([docs/STATUS.md](docs/STATUS.md)).
+How the code is laid out: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Building it
 
-Prebuilt packages: see [Play it](#play-it). To build it yourself, you need stable Rust:
+Prebuilt packages: see [Play it](#play-it). To build it yourself, you need Rust (the version pinned in
+`rust-toolchain.toml`, installed by rustup) and, on Linux, the ALSA and udev headers; the full list per target is in
+[CONTRIBUTING.md](CONTRIBUTING.md#prerequisites-per-target):
 
 ```sh
 cargo run --release -- "/path/to/TH08 - Imperishable Night"
@@ -111,8 +115,8 @@ the options; channels, versions and CI signing are in [CONTRIBUTING.md](CONTRIBU
 | `src/` | the app: game window, launcher, settings, platform (package `th08`, binary `th08`) |
 | `crates/` | `th08-formats` (file formats), `th08-core` (game logic), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (trace / draw-log tools, bins in `src/bin/`) |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder ([index](re/README.md)) |
-| `docs/` | status, decisions, the architecture of the rewrite ([index](docs/README.md)) |
-
+| `docs/` | status, decisions, the architecture as built ([index](docs/README.md)) |
+| `android/` | the Android launcher (Kotlin, Compose) and its Gradle wrapper |
 | `web/`, `packaging/`, `xtask/` | the browser front end, packaging files and `cargo xtask dist` |
 
 How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).

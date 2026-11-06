@@ -37,8 +37,9 @@ agents alike. Parity rules for logic and drawing: [docs/PARITY_POLICY.md](docs/P
 - `tools/arch_check run DIR`: the full regression check. It builds, runs clippy, the wasm and Android checks and the
   tests, then replays every recorded session, demo and pilot replay and compares traces and draw hashes with a
   reference made by `tools/arch_check freeze DIR` on the commit before your change. Any difference fails it.
-- Heavy runs (arch_check, tests with game data, the Android emulator, replay batches) go through the job queue
-  `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` until it ends.
+- Heavy runs (arch_check, tests with game data, the emulator, replay batches) can be run directly. The job queue
+  `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…` (then `tools/q wait ID`) is optional:
+  it shares one machine between parallel runs and needs a systemd user session. Plain cargo works everywhere.
 - Windowed binaries in automated runs go through `tools/offscreen <cmd>`.
 - Replay batch (port vs the original on third-party replays): `tools/batch_job NAME` queues a `batch` job that builds
   `session` (release) once and runs `tools/batch_run` on the replay sets `ref500` and `ref_b2` under
@@ -59,10 +60,39 @@ regression checks, needs your own copy of Touhou 8 (`th08.dat`, `thbgm.dat`; poi
 Reference sessions are recorded in the original game (see [sessions/README.md](sessions/README.md)); third-party
 replays come from public Touhou replay sites. Neither is committed.
 
+## Prerequisites per target
+
+The Rust toolchain is pinned in `rust-toolchain.toml` (1.98.0, with clippy, rustfmt and the wasm, Android and
+windows-gnu targets); rustup installs it on the first `cargo` call. Package names are Debian / Ubuntu (`apt`) and
+Arch (`pacman`).
+
+| Target / tool | Needs |
+|---|---|
+| Linux desktop (`cargo run`, tests, clippy) | apt `pkg-config libasound2-dev libudev-dev`; pacman `pkgconf alsa-lib systemd-libs` |
+| `windows-exe` / `windows-nsis` from Linux | apt `gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64`, pacman `mingw-w64-gcc`; NSIS also `makensis` (apt `nsis`, AUR `nsis`) or docker |
+| `windows-exe` on Windows | the MSVC build tools (`x86_64-pc-windows-msvc`, as in the release workflow) |
+| `linux-appimage` | `curl` (xtask downloads appimagetool 1.9.1, sha256-pinned) |
+| `web` | `cargo install wasm-bindgen-cli --version 0.2.129` (must equal `wasm-bindgen` in `Cargo.lock`) |
+| `android-apk`, `tools/android_check` | JDK 17 (apt `openjdk-17-jdk`, pacman `jdk17-openjdk`); Android SDK with `platforms;android-36`, `build-tools;36.0.0`, `ndk;27.1.12297006` (`ANDROID_SDK`, else `ANDROID_HOME`, else `~/.local/share/android-sdk/Sdk`). Gradle comes from `android/gradlew` |
+| Android emulator checks | the SDK `emulator` and an x86_64 system image (`--abi x86_64`), `adb` |
+| `tools/xplat_replays` | `rustup target add wasm32-wasip1`, `wasmtime`, apt `qemu-user` / pacman `qemu-user`, the NDK above, wine for the Windows run |
+| `tools/fmath_xplat/run.sh` | `node` (apt / pacman `nodejs`), `qemu-user`, the NDK |
+| Windowed binaries in scripts (`tools/offscreen`) | apt `xvfb` / pacman `xorg-server-xvfb` (`xvfb-run`) |
+| Wine runs (`tools/wine_headless`) | `wine` and xvfb; always a throwaway `WINEPREFIX` |
+
+Gradle is pinned by the wrapper in `android/` (Gradle 9.8.2, distribution sha256 in
+`android/gradle/wrapper/gradle-wrapper.properties`; `gradle-wrapper.jar` sha256
+`3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98`, Gradle's published value, also checked by the
+release workflow's `setup-gradle`). No system Gradle is needed; xtask calls `android/gradlew`.
+
+An Android build for contributors needs no key: without `--keystore` and `TH08_KEYSTORE_PROPS`,
+`cargo xtask dist --target android-apk` builds the `debug` channel, signed with a throwaway key.
+
 ## Packaging and versions
 
 `cargo xtask dist --target <linux-appimage|windows-exe|windows-nsis|android-apk|web>` builds a package into
-`target/dist/`; `cargo xtask dist --help` lists the options. `windows-nsis` needs `makensis` on PATH or docker.
+`target/dist/`; `cargo xtask dist --help` lists the options; what each target needs is in
+[Prerequisites per target](#prerequisites-per-target).
 With `TH08_RELEASE_TAG` set (the release workflow) and no game data, the AppImage embeds the update information
 `gh-releases-zsync|kauri-off|th08-rs|latest|th08-*-linux-appimage.AppImage.zsync` and gets a `.zsync` beside it,
 so AppImageUpdate and AppImage managers can update it from the latest release; local builds carry none.
@@ -81,8 +111,8 @@ Android has three channels, installable side by side:
 | `--channel` | applicationId | label | signing | use |
 |---|---|---|---|---|
 | `release` | `org.th08.port` | th08 | `--keystore PROPS` only | GitHub Releases; `--assets none` only, no `--packs` |
-| `dev` (default) | `org.th08.port.dev` | th08 dev | `--keystore PROPS` or `TH08_KEYSTORE_PROPS` | personal builds, may bundle game data and packs |
-| `debug` | `org.th08.port.debug` | th08 debug | `--debug-key` (throwaway `target/android/debug.keystore`) | agents and emulators |
+| `dev` | `org.th08.port.dev` | th08 dev | `--keystore PROPS` or `TH08_KEYSTORE_PROPS` | personal builds, may bundle game data and packs; the default when a key is configured |
+| `debug` | `org.th08.port.debug` | th08 debug | throwaway `target/android/debug.keystore` | contributors, emulators; the default without a key |
 
 `PROPS` is a `keystore.properties` file with `storeFile` (absolute or relative to the file), `storePassword`,
 `keyAlias` and `keyPassword`. Only its path is passed on; Gradle reads the passwords. Never commit a keystore.

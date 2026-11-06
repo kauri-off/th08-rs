@@ -2,7 +2,7 @@
 
 use crate::settings::{ENTRIES, Entry, Group};
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Lang {
@@ -41,20 +41,6 @@ impl Lang {
             _ => Lang::En,
         }
     }
-}
-
-// Locale handed over by a platform launcher; wins over the OS lookup.
-static GIVEN_LOCALE: RwLock<Option<String>> = RwLock::new(None);
-
-pub fn set_system_locale(tag: &str) {
-    *GIVEN_LOCALE.write().unwrap() = Some(tag.to_string());
-}
-
-pub fn system_locale() -> Option<String> {
-    if let Some(t) = GIVEN_LOCALE.read().unwrap().clone() {
-        return Some(t);
-    }
-    os_locale()
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -110,7 +96,7 @@ fn os_locale() -> Option<String> {
 
 // The `language` setting resolved: None (auto) = the system locale.
 pub fn resolve(pref: Option<Lang>) -> Lang {
-    pref.unwrap_or_else(|| system_locale().map_or(Lang::En, |t| Lang::from_locale(&t)))
+    pref.unwrap_or_else(|| os_locale().map_or(Lang::En, |t| Lang::from_locale(&t)))
 }
 
 // Launcher / port-menu strings: id → English. `{name}` placeholders are filled by `ui_fmt`.
@@ -135,7 +121,6 @@ pub const UI: &[(&str, &str)] = &[
     ("game_folder", "Game folder:"),
     ("browse", "Browse…"),
     ("folder_hint", "folder with th08.dat or th08.pak"),
-    ("bundled_apk", "bundled in the APK"),
     ("bundled", "bundled"),
     (
         "bundled_note",
@@ -146,15 +131,6 @@ pub const UI: &[(&str, &str)] = &[
     (
         "dat_missing",
         "game files missing: the folder needs th08.dat or th08.pak, and thbgm.dat or thbgm.pak for the music",
-    ),
-    (
-        "android_copy",
-        "Copy th08.dat and thbgm.dat (or th08.pak and thbgm.pak) from your Touhou 8 folder into {dir}\n\
-         e.g. adb push th08.dat thbgm.dat {dir}/ — then this screen picks them up.",
-    ),
-    (
-        "waiting_touch",
-        "Starting the game…  touch the screen to open the settings screen",
     ),
     (
         "waiting_shift",

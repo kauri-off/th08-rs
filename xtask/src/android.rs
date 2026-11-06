@@ -54,7 +54,14 @@ pub fn apk(
     } else {
         a.abi.iter().map(|x| abi_name(*x)).collect()
     };
-    let channel = a.channel.unwrap_or(Channel::Dev);
+    // Without a personal key the contributor default is the debug channel; with one, dev.
+    let channel = a.channel.unwrap_or(
+        if !a.debug_key && (a.keystore.is_some() || local.get("TH08_KEYSTORE_PROPS").is_some()) {
+            Channel::Dev
+        } else {
+            Channel::Debug
+        },
+    );
     let props = match channel {
         Channel::Debug if a.keystore.is_some() => {
             bail!("--channel debug signs with the throwaway key, not --keystore")
@@ -109,18 +116,22 @@ pub fn apk(
     };
     let task = format!("assemble{}{}", variant[..1].to_uppercase(), &variant[1..]);
     util::run(
-        Command::new("gradle")
-            .current_dir(&root)
-            .env("ANDROID_HOME", &sdk)
-            .args([
-                "--no-daemon",
-                "--console=plain",
-                "-q",
-                "-p",
-                "android",
-                &task,
-            ])
-            .args(&args),
+        Command::new(root.join("android").join(if cfg!(windows) {
+            "gradlew.bat"
+        } else {
+            "gradlew"
+        }))
+        .current_dir(&root)
+        .env("ANDROID_HOME", &sdk)
+        .args([
+            "--no-daemon",
+            "--console=plain",
+            "-q",
+            "-p",
+            "android",
+            &task,
+        ])
+        .args(&args),
     )?;
     let built = root.join(format!(
         "android/app/build/outputs/apk/{variant}/app-{variant}.apk"

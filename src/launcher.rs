@@ -115,7 +115,7 @@ fn choose_game_dir(s: &Settings, bundled: impl FnOnce() -> Option<PathBuf>) -> C
 }
 
 // The game folder to run; Ok(None) = dialog cancelled, Err = the folder given on the command line / TH08_DIR is invalid.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub fn resolve_game_dir(s: &Settings) -> Result<Option<PathBuf>, String> {
     match choose_game_dir(s, bundled_game_dir) {
         Choice::Configured(d) => Ok(Some(d)),
@@ -162,7 +162,7 @@ pub fn cheats_note(lang: Lang, keys: &[&str]) -> Option<String> {
 }
 
 // Folder dialog until a valid folder is picked (saved as port.cfg `game_dir`) or the dialog is cancelled.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn pick_game_dir(dirs: &settings::PlatformDirs) -> Option<PathBuf> {
     loop {
         let Some(dir) = folder_dialog() else {
@@ -196,17 +196,6 @@ fn folder_dialog() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .set_title("Select the Touhou 8 (Imperishable Night) game folder")
         .pick_folder()
-}
-
-// Android: no rfd backend; the folder comes from `game_dir` (launcher text field, port.cfg) or the bundled lookup.
-#[cfg(target_os = "android")]
-fn not_game_dir_dialog(dir: &std::path::Path) {
-    log::error!("{} has no th08.dat or th08.pak", dir.display());
-}
-
-#[cfg(target_os = "android")]
-fn folder_dialog() -> Option<PathBuf> {
-    None
 }
 
 // Where the game files come from: the `game_dir` row (native), the files picked in the web page, or the APK's
@@ -683,14 +672,7 @@ impl Model {
                 act
             }
             View::Waiting => {
-                let wait = i18n::ui(
-                    lang,
-                    if cfg!(target_os = "android") {
-                        "waiting_touch"
-                    } else {
-                        "waiting_shift"
-                    },
-                );
+                let wait = i18n::ui(lang, "waiting_shift");
                 match cheats_note(lang, &self.active_cheats()) {
                     Some(note) => message_ui(ui, &format!("{wait}\n\n{note}")),
                     None => message_ui(ui, wait),
@@ -792,7 +774,6 @@ impl Model {
             match &self.folder {
                 Folder::Native => {
                     let r = self.row_mut("game_dir");
-                    #[cfg_attr(target_os = "android", allow(unused_mut))]
                     let mut v = r.value.text();
                     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
                     if ui.button(i18n::ui(lang, "browse")).clicked()
@@ -800,23 +781,16 @@ impl Model {
                     {
                         v = d.to_string_lossy().into_owned();
                     }
-                    #[cfg(not(target_os = "android"))]
                     ui.add(
                         egui::TextEdit::singleline(&mut v)
                             .hint_text(i18n::ui(lang, "folder_hint"))
                             .desired_width(f32::INFINITY),
                     );
-                    // Android: no soft keyboard under NativeActivity, so the fixed folder set by `android_main` is shown, not edited.
-                    #[cfg(target_os = "android")]
-                    ui.label(v.as_str());
                     if v != r.value.text() {
                         r.set(Value::Path(v));
                     }
                 }
-                Folder::Bundled(_) => {
-                    ui.label(i18n::ui(lang, "bundled_apk"));
-                }
-                Folder::Web(names) => {
+                Folder::Web(names) | Folder::Bundled(names) => {
                     ui.label(if names.is_empty() {
                         i18n::ui(lang, "no_files").to_string()
                     } else {
@@ -844,15 +818,6 @@ impl Model {
                     .small()
                     .weak(),
             );
-        }
-        #[cfg(target_os = "android")]
-        if !ok {
-            let dir = self.game_dir();
-            ui.label(i18n::ui_fmt(lang, "android_copy", &[("dir", &dir)]));
-            // Re-check the folder every second so an `adb push` shows up without a touch (the folder check runs
-            // on every redraw; a `Resumed` redraws too).
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs(1));
         }
     }
 
@@ -1458,16 +1423,6 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
                     }
                 });
         }
-        // Android: text rows are read-only (no soft keyboard); they are set through port.cfg.
-        #[cfg(target_os = "android")]
-        (Value::Text(s) | Value::Path(s), _) => {
-            ui.label(if s.is_empty() {
-                i18n::ui(lang, "not_set")
-            } else {
-                s.as_str()
-            });
-        }
-        #[cfg(not(target_os = "android"))]
         (Value::Text(s), kind) => {
             let hint = if let Kind::Text(h) = kind { h } else { "" };
             ui.add(
@@ -1476,7 +1431,6 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
                     .desired_width(220.0),
             );
         }
-        #[cfg(not(target_os = "android"))]
         (Value::Path(s), _) => {
             ui.add(
                 egui::TextEdit::singleline(s)

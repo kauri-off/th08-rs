@@ -1486,10 +1486,6 @@ impl Gfx {
         self.log.get_or_insert_with(Vec::new);
     }
 
-    pub fn logging(&self) -> bool {
-        self.log.is_some()
-    }
-
     pub fn take_log(&mut self, rec: &mut Recorder) -> Vec<LogRec> {
         self.submit(rec);
         self.log.as_mut().map(std::mem::take).unwrap_or_default()
@@ -2291,11 +2287,6 @@ impl Gfx {
             ResCmd::SetLabel { id, label, w, h } => self.do_set_label(*id, label, *w, *h),
             ResCmd::Text(t) => self.do_text(t),
         }
-    }
-
-    // Translated text table used by every later `TextCmd` (I18N §2.3).
-    pub fn set_text_db(&mut self, db: crate::textdb::TextDb) {
-        self.pack.db = db;
     }
 
     // A mounted presentation pack's text side (I18N G2): texts, FileFont, overflow modes.

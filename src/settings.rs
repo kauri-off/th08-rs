@@ -1,7 +1,7 @@
 //! Port settings: one typed struct from command-line flags > env vars / URL params > `port.cfg` (web: localStorage) > defaults.
 
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::OnceLock;
 
 pub use th08_core::coreconfig::Ending;
 
@@ -2452,22 +2452,12 @@ pub fn command(dirs: &PlatformDirs) -> clap::Command {
     cmd
 }
 
-static SETTINGS: RwLock<Option<&'static Settings>> = RwLock::new(None);
+static SETTINGS: OnceLock<Settings> = OnceLock::new();
 
-// Entry points: install the settings built from the command line before anything reads them. The launcher installs
-// again after a failed start-up (Back, then Play); the replaced settings are leaked, as `&'static` readers may hold them.
-pub fn init(s: Settings) {
-    *SETTINGS.write().unwrap() = Some(Box::leak(Box::new(s)));
-}
-
-// The settings (defaults + env / URL, never port.cfg, if the entry point did not call `init`). Tools and tests
-// without an `init` get the tool dirs: no config dir, saves only in an explicit `save_dir`.
+// Defaults + env / URL, never port.cfg, with the tool dirs: no config dir, saves only in an explicit `save_dir`.
+// Used by tools and tests only; the entry points pass their `Settings` down.
 pub fn get() -> &'static Settings {
-    if let Some(s) = *SETTINGS.read().unwrap() {
-        return s;
-    }
-    let mut w = SETTINGS.write().unwrap();
-    w.get_or_insert_with(|| Box::leak(Box::new(Settings::from_environment(default_dirs().tool()))))
+    SETTINGS.get_or_init(|| Settings::from_environment(default_dirs().tool()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

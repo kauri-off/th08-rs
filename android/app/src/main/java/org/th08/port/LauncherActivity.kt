@@ -67,8 +67,12 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             Setting(e, saved ?: e.default)
         }
         Thread {
-            runCatching { copyBundledPacks() }.onFailure { Log.e("th08", "bundled packs: $it") }
-            runOnUiThread { packCall("status") }
+            val failed = runCatching { copyBundledPacks() }.onFailure { Log.e("th08", "bundled packs: $it") }
+                .getOrDefault(emptyList())
+            runOnUiThread {
+                packCall("status")
+                failed.firstOrNull()?.let { (id, e) -> packs = packs.copy(outcome = PackOutcome.Failed(id, copyError(e))) }
+            }
         }.start()
         AppUpdate.onStart(this)
         checkUpdate()
@@ -309,8 +313,10 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     // assets/packs/lang_xx of a personal build into filesDir/packs: once per pack id, then again only when the APK's
     // copy is newer than the installed one (`packNewer`). The `.bundled` marker lists the ids copied once, so a pack the
     // user removed stays removed until they install it again.
-    private fun copyBundledPacks() {
-        val ids = assets.list("packs") ?: return
+    // Returns the packs whose copy failed; their partial copy is deleted.
+    private fun copyBundledPacks(): List<Pair<String, Throwable>> {
+        val failed = mutableListOf<Pair<String, Throwable>>()
+        val ids = assets.list("packs") ?: return failed
         val dst = File(filesDir, "packs").also { it.mkdirs() }
         val marker = File(dst, ".bundled")
         val seen = runCatching { marker.readLines() }.getOrDefault(emptyList())
@@ -326,9 +332,15 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             }
             if (copy) {
                 // A failed copy (full disk) leaves the id unseen, so the next start repairs it.
-                val ok = runCatching { out.deleteRecursively(); copyAssetDir("packs/$id", out) }
-                    .onFailure { Log.e("th08", "bundled pack $id not copied: $it") }.isSuccess
-                if (!ok) continue
+                val r = runCatching { out.deleteRecursively(); copyAssetDir("packs/$id", out) }
+                val e = r.exceptionOrNull()
+                if (e != null) {
+                    Log.e("th08", "bundled pack $id not copied: $e")
+                    // A half-copied pack would pass as installed (its pack.toml may be there): remove it.
+                    out.deleteRecursively()
+                    failed.add(id to e)
+                    continue
+                }
             }
             seen.add(id)
         }
@@ -336,6 +348,12 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             runCatching { PortCfg.writeAtomic(marker, seen.sorted().joinToString("\n", postfix = "\n")) }
                 .onFailure { Log.e("th08", "pack marker not saved: $it") }
         }
+        return failed
+    }
+
+    private fun copyError(e: Throwable): String {
+        val m = e.message ?: e.toString()
+        return if ("ENOSPC" in m || "No space" in m) getString(R.string.import_no_space) else m
     }
 
     private fun File.readLinesOrNull(): List<String>? = runCatching { readLines().filter(String::isNotBlank) }.getOrNull()

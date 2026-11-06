@@ -79,18 +79,20 @@ Android 版には 3 つのチャンネルがあります。`release`（`org.th08
 
 ## 現在
 
-移植は完成しています。今は、慣用的な Rust への書き直しをしています。
+移植は完成しており、慣用的な Rust への書き直しもモジュール整理の段階まで終わっています。
 
-- グローバルな状態を、複製できる一つの `World` にまとめる
-- 描画をコマンドのリストにする
-- コアをウィンドウ、サウンド、ファイルシステムから切り離す
+- グローバルな状態は、複製できる一つの `World` にまとめた
+- 描画はコマンドのリストになった
+- コアのクレートはウィンドウ、サウンド、ファイルシステムに触れない
 
-書き直しの間、挙動は固定しています。一歩進むごとに、移植版を書き直し前の自分自身とリプレイ集の両方と照合します。
-配置を自由に変えられるタッチ操作ボタン付きの Android 版は公開済みで、次はスマートフォン向けのブラウザ版です。
+書き直しの間、挙動は固定していました。一歩進むごとに、移植版を書き直し前の自分自身とリプレイ集の両方と照合しました。
+Windows、Linux、Android（配置を自由に変えられるタッチ操作ボタン付き）、ブラウザで動きます。次は翻訳テキストの
+レイアウト調整、スマートフォン向けブラウザ版の仕上げ、そして任意のレンダラーの書き直しです
+（[docs/STATUS.md](docs/STATUS.md)）。コードの構成は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) にあります。
 
 ## ビルド
 
-ビルド済みのファイルは[遊び方](#遊び方)を参照してください。自分でビルドするには、安定版の Rust が必要です。
+ビルド済みのファイルは[遊び方](#遊び方)を参照してください。自分でビルドするには、`rust-toolchain.toml` で固定された版の Rust（rustup が自動で入れます）と、Linux では ALSA と udev のヘッダーが必要です。ターゲットごとの一覧は [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites-per-target) にあります。
 
 ```sh
 cargo run --release -- "/path/to/TH08 - Imperishable Night"
@@ -109,8 +111,8 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 | `src/` | アプリ本体：ゲームウィンドウ、ランチャー、設定、プラットフォーム（パッケージ `th08`、実行ファイル `th08`） |
 | `crates/` | `th08-formats`（ファイル形式）、`th08-core`（ゲームロジック）、`th08-render`（wgpu）、`th08-audio`（cpal、MIDI）、`th08-tools`（トレース・描画ログのツール、`src/bin/` に実行ファイル） |
 | `re/` | リバースエンジニアリング用ツール：フォーマットのダンプ、Ghidra スクリプト、実行時プローブ、プレイの録画 |
-| `docs/` | 進捗、設計判断、書き直しのアーキテクチャ（[目次](docs/README.md)） |
-
+| `docs/` | 進捗、設計判断、現在のアーキテクチャ（[目次](docs/README.md)） |
+| `android/` | Android 用ランチャー（Kotlin、Compose）と Gradle wrapper |
 | `web/`, `packaging/`, `xtask/` | ブラウザ用フロントエンド、パッケージング用ファイル、`cargo xtask dist` |
 
 貢献の方法：[CONTRIBUTING.md](CONTRIBUTING.md)（英語）。

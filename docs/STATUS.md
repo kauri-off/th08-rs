@@ -23,7 +23,7 @@
 - Optional repacked game data (`.pak`, Vorbis BGM) for smaller local packages
   ([arch/ASSETS_FORMAT.md](arch/ASSETS_FORMAT.md)).
 - The idiomatic rewrite is done up to and including the module pass: one cloneable `World`, drawing as a command
-  list, a core crate with no window, audio or file system access ([arch/ARCH_SUMMARY.md](arch/ARCH_SUMMARY.md)).
+  list, a core crate with no window, audio or file system access ([ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ## Known differences from the original
 

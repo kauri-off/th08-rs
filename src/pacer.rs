@@ -292,10 +292,6 @@ impl Pacer {
         self.catch.last_run = None;
     }
 
-    pub fn is_suspended(&self) -> bool {
-        self.suspended
-    }
-
     // For `ControlFlow::WaitUntil`: when the next frame is due; None while suspended. Turbo is always due.
     pub fn next_deadline(&self) -> Option<Instant> {
         if self.suspended {

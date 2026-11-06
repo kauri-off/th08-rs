@@ -162,9 +162,8 @@ jobs:
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" > /dev/null
           echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+      # Gradle itself comes from android/gradlew (pinned version and checksum); this action validates the wrapper jar.
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
-        with:
-          gradle-version: '9.8.2'
       # Signed with a key made for this run only; android-sign re-signs it with the release key, so neither Gradle nor
       # any action in this job sees the release secrets.
       - name: Ephemeral signing key

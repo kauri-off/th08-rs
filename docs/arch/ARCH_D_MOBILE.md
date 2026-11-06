@@ -1,5 +1,8 @@
 # Architecture proposal D — mobile version
 
+> **Historical plan** (2026-11-01). Measurements, blockers and the bundled-data plan are from then; releases now ship
+> no game data and the launcher imports the player's files. What was built: [../ARCHITECTURE.md](../ARCHITECTURE.md).
+
 Fits into the rewrite order and the day-0 table of [ARCH_SUMMARY.md](ARCH_SUMMARY.md). Measured on the working tree
 of 2026-11-01, while the `Host` step of the rewrite was in progress.
 

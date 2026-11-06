@@ -1,5 +1,8 @@
 # Architecture proposals — comparison and recommendation
 
+> **Historical plan.** This is the design record written before the rewrite; counts, "today" and step lists are
+> from then. What was built: [../ARCHITECTURE.md](../ARCHITECTURE.md).
+
 Summary of three proposals for the idiomatic rewrite: A (idiomatic core), B (content / mod platform), C (netplay-ready
 deterministic core). The full proposals are planning documents and are not kept in the repository; this summary holds
 the decisions taken from them.
