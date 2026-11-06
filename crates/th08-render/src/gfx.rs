@@ -944,13 +944,13 @@ impl Gfx {
         vsync: bool,
     ) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        #[allow(unused_mut)]
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
-        // Windows: DX12 only; Vulkan ICDs of older Intel drivers crash in device creation.
+        let desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display));
+        // Windows: DX12 by default for stability; `WGPU_BACKEND` picks another backend.
         #[cfg(windows)]
-        {
-            desc.backends = wgpu::Backends::DX12;
-        }
+        let desc = wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            ..desc
+        };
         let instance = wgpu::util::new_instance_with_webgpu_detection(desc.with_env()).await;
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
