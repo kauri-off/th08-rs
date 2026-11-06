@@ -1,4 +1,4 @@
-// Android launcher app (MATERIAL1): Compose settings screen + the Rust NativeActivity game (lib th08).
+// Android launcher app: Compose settings screen + the Rust NativeActivity game (lib th08).
 pluginManagement {
     repositories {
         google()
