@@ -835,7 +835,7 @@ impl Effects {
             0.0,
         ];
         vm.pos_offset = [0.0; 3];
-        anm.emit_mode_z(rec, &vm, 2, z);
+        crate::emit::anm::emit_mode_z(anm, rec, &vm, 2, z);
     }
 
     // EffectMgr_Draw (prio 12): list A, then C, then E; A/E at z 0.07.
@@ -860,7 +860,7 @@ impl Effects {
         let mut vm = e.vm.clone();
         vm.pos = e.pos;
         vm.flags &= !anmvm::F_STAGE_CAM;
-        anm.emit_mode_z(rec, &vm, 4, 0.0);
+        crate::emit::anm::emit_mode_z(anm, rec, &vm, 4, 0.0);
     }
 
     // List D, drawn at the end of BulletMgr_Draw (prio 13), z 0.04.
@@ -891,7 +891,7 @@ impl Effects {
                 0.0,
             ];
             vm.pos_offset = [0.0; 3];
-            anm.emit_mode_z(rec, &vm, 2, 0.04);
+            crate::emit::anm::emit_mode_z(anm, rec, &vm, 2, 0.04);
         }
     }
 
@@ -960,9 +960,11 @@ impl Effects {
                 let e = &self[i];
                 let mut vm = e.vm.clone();
                 vm.pos = e.pos;
-                anm.emit_mode_z(rec, &vm, 2, 0.0);
+                crate::emit::anm::emit_mode_z(anm, rec, &vm, 2, 0.0);
             }
-            BgDraw::Billboard { i, s, len } => anm.draw_billboard(rec, &self[i].vm, s, len),
+            BgDraw::Billboard { i, s, len } => {
+                crate::emit::anm::draw_billboard(anm, rec, &self[i].vm, s, len);
+            }
         }
     }
 }
@@ -1027,7 +1029,7 @@ fn draw_ring(anm: &AnmManager, rec: &mut Recorder, e: &Effect) {
             [cx + cos_f(th) * rr, cy + sin_f(th) * rr]
         }
     };
-    let blend = AnmManager::blend_for(rec, vm);
+    let blend = crate::emit::anm::blend_for(rec, vm);
     let (u0, v0, u1, v1) = (
         spr.uv[0] + vm.uv_off[0],
         spr.uv[1],

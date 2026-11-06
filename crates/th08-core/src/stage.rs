@@ -1,10 +1,11 @@
 //! Stage background g_Stage 0x4E4030: .std script VM, 3D camera, fog, layers, spell background (06, 13 §5).
 
-use crate::anmmgr::{AnmManager, Fog};
+use crate::anmmgr::AnmManager;
 use crate::anmvm::{self, AnmVm, Timer};
 use crate::camera::{Camera, Mat4};
 use crate::drawlist::Recorder;
 use crate::drawlist::{PLAYFIELD, Rect, Vertex};
+use crate::emit::anm::Fog;
 use crate::game::{Ctx, Sys};
 use crate::task::{self, Chain, Ret, Task};
 use crate::types::lo8;
@@ -1297,10 +1298,12 @@ impl Stage {
                 Item::ClearViewport(c) => rec.clear_viewport(*c),
                 Item::ClearZ(arg) => rec.clear_z(*arg),
                 Item::Fade(c) => rec.rect(32.0, 16.0, 384.0, 448.0, *c),
-                Item::Vm { vm, mode, z } => anm.emit_mode_z(rec, vm, *mode, *z),
-                Item::World { vm, cam, fog } => anm.emit_3d_world(rec, vm, cam, Some(*fog)),
+                Item::Vm { vm, mode, z } => crate::emit::anm::emit_mode_z(anm, rec, vm, *mode, *z),
+                Item::World { vm, cam, fog } => {
+                    crate::emit::anm::emit_3d_world(anm, rec, vm, cam, Some(*fog));
+                }
                 Item::Ribbon { vm, tex, v } => {
-                    let blend = AnmManager::blend_for(rec, vm);
+                    let blend = crate::emit::anm::blend_for(rec, vm);
                     rec.anm.bound_tex = Some(*tex);
                     rec.strip(*tex, blend, vm.flags & anmvm::F_ZWRITE_OFF == 0, *v);
                 }

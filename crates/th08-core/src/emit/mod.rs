@@ -4,6 +4,8 @@ use crate::chain::Node;
 use crate::drawlist::{FULLSCREEN, Recorder};
 use crate::game::View;
 
+pub mod anm;
+
 pub struct Emit;
 
 impl Emit {

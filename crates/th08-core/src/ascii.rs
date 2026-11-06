@@ -522,7 +522,9 @@ fn popups_emit(
     rec.set_viewport(crate::drawlist::PLAYFIELD);
     let mut small = popup_vm(anm, 0, 0.1);
     let mut large = popup_vm(anm, 0x88, 0.0);
-    let draw = |rec: &mut Recorder, vm: &AnmVm| anm.emit_mode_z_at(rec, vm, 0, vm.pos[2], off);
+    let draw = |rec: &mut Recorder, vm: &AnmVm| {
+        crate::emit::anm::emit_mode_z_at(anm, rec, vm, 0, vm.pos[2], off);
+    };
     let p = &ov.popups;
     for q in p.slots.iter().flatten() {
         set_rgb(&mut small, q.colour);
@@ -639,7 +641,7 @@ fn darkness_emit(
     for [x0, y0, x1, y1] in darkness_rects([player[0], player[1]], d.radius, off) {
         rec.rect(x0, y0, x1 - x0, y1 - y0, [0, 0, 0, a]);
     }
-    anm.emit_mode_z_at(rec, &d.vm, 0, d.vm.pos[2], off);
+    crate::emit::anm::emit_mode_z_at(anm, rec, &d.vm, 0, d.vm.pos[2], off);
 }
 
 // Human/youkai gauge readout VMs (12 §5.9): bar, 人, 妖, marker, glyph stamp.
@@ -820,7 +822,7 @@ fn marker_shown(m: &AnmVm) -> bool {
 fn markers_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder) {
     rec.set_viewport(FULLSCREEN);
     for m in g.markers.iter().filter(|m| marker_shown(m)) {
-        anm.emit_mode(rec, m, 0);
+        crate::emit::anm::emit_mode(anm, rec, m, 0);
     }
 }
 
@@ -899,7 +901,7 @@ fn gauge_glyphs(
 ) {
     percent_glyphs(anm, vm, d.gv, [d.at[0], d.at[1], 0.0], d.colour, |vm| {
         if let Some(rec) = rec.as_deref_mut() {
-            anm.emit_mode(rec, vm, 0);
+            crate::emit::anm::emit_mode(anm, rec, vm, 0);
         }
     });
     vm.color = d.colour;
@@ -908,7 +910,7 @@ fn gauge_glyphs(
         vm.pos = [x, y, 0.0];
         vm.scale = [1.0, 1.0];
         if let Some(rec) = rec.as_deref_mut() {
-            anm.emit_mode(rec, vm, 0);
+            crate::emit::anm::emit_mode(anm, rec, vm, 0);
         }
     }
     vm.scale = [1.0, 1.0];
@@ -916,9 +918,9 @@ fn gauge_glyphs(
 
 // Marker G3 (Draw2DRotNoSnap, 12 §5.9 step 1), G0–G2, then the G4 glyphs.
 fn gauge_emit(g: &Gauge, anm: &crate::anmmgr::AnmManager, rec: &mut Recorder, d: &GaugeDraw) {
-    anm.emit_mode(rec, &g.vms[G_MARKER], 3);
+    crate::emit::anm::emit_mode(anm, rec, &g.vms[G_MARKER], 3);
     for k in [G_BAR, G_HUMAN, G_YOUKAI] {
-        anm.emit_mode(rec, &g.vms[k], 0);
+        crate::emit::anm::emit_mode(anm, rec, &g.vms[k], 0);
     }
     // Every glyph rewrites sprite, pos and scale, and the colour is fixed: replaying on a copy draws the same quads.
     let mut vm = g.vms[G_GLYPH].clone();
@@ -934,7 +936,9 @@ pub fn draw_percent(
     at: [f32; 3],
     colour: [u8; 4],
 ) {
-    percent_glyphs(anm, vm, value, at, colour, |vm| anm.emit_mode(rec, vm, 0));
+    percent_glyphs(anm, vm, value, at, colour, |vm| {
+        crate::emit::anm::emit_mode(anm, rec, vm, 0);
+    });
 }
 
 // Ascii_DrawGaugePercent 0x405E10 (12 §5.9): "%d.%02d%%" of value/100 with glyph VM sprites 136 + (0–9, 10 '%',
@@ -1731,11 +1735,11 @@ impl AsciiManager {
             if self.pause.state != 0 && self.pause.cap_vm.script.is_some() {
                 let mut v = self.pause.cap_vm.clone();
                 v.flags |= anmvm::F_ZWRITE_OFF;
-                ctx.w.anm.emit_mode(rec, &v, 0);
+                crate::emit::anm::emit_mode(&ctx.w.anm, rec, &v, 0);
             }
             // The selected item's (−4, −4) goes to the undrawn pos_offset: no visible shift (12 §3).
             for vm in &self.pause.vms {
-                ctx.w.anm.emit_mode(rec, vm, 0);
+                crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
             }
         }
         // ContinueMenu_Draw 0x4052B0 (12 §4): playfield viewport, capture VM, then VMs 0..3 (clock VM 3 only in a
@@ -1750,7 +1754,7 @@ impl AsciiManager {
                 .chain(c.vms.iter())
                 .chain(clock.then_some(&c.clock_vm))
             {
-                ctx.w.anm.emit_mode(rec, vm, 0);
+                crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
             }
         }
         if !high {

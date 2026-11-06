@@ -320,7 +320,7 @@ fn place(vm: &mut AnmVm, x: f32, y: f32) {
 }
 
 fn emit0(ctx: &View, rec: &mut Recorder, vm: &AnmVm) {
-    ctx.w.anm.emit_mode(rec, vm, 0);
+    crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
 }
 
 fn set_alpha(vm: &mut AnmVm, a: u8) {

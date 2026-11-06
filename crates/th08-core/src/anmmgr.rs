@@ -1,4 +1,4 @@
-//! ANM manager: file slots, script start, DrawByMode, EmitQuad, tint, Draw3DWorld (03 §2.4; 05 §8–§9, §12; 06 §11.2).
+//! ANM manager: file slots, script start, tint, DrawByMode / Draw3DWorld world-matrix prepare (03 §2.4; 05 §8–§9, §12; 06 §11.2).
 
 use crate::anmvm::{self, AnmVm, VmFlags};
 use crate::content::LogicView;
@@ -6,7 +6,7 @@ use crate::types::D3dColor;
 use th08_formats::anm::{self, Script};
 // Draws and texture uploads go to the core `Recorder`.
 use crate::camera::{Camera, Mat4};
-use crate::drawlist::{self, Blend, Recorder, TexId, Vertex};
+use crate::drawlist::{Recorder, TexId};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 
@@ -103,14 +103,6 @@ impl Tint {
         v.insert(VmFlags::COLOR2);
         v
     }
-}
-
-// Linear vertex fog (06 §10.1): f = clamp((far − z) / (far − near), 0, 1) on eye-space z (no range fog); RGB bytes.
-#[derive(Clone, Copy, Debug)]
-pub struct Fog {
-    pub near: f32,
-    pub far: f32,
-    pub color: [u8; 3],
 }
 
 impl Default for AnmManager {
@@ -315,14 +307,6 @@ impl AnmManager {
         vm.run(self, rng);
     }
 
-    pub fn emit(&self, rec: &mut Recorder, vm: &AnmVm) {
-        self.emit_mode_z(rec, vm, vm.draw_mode, vm.pos[2]);
-    }
-
-    pub fn emit_mode(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32) {
-        self.emit_mode_z(rec, vm, mode, vm.pos[2]);
-    }
-
     // The VM write of a draw (draw-phase step): DrawByMode mode 5 and Draw3DWorld rebuild the cached world matrix
     // behind the same visibility / sprite guards; every other mode writes nothing.
     pub fn prepare(&self, vm: &mut AnmVm, mode: i32) {
@@ -332,7 +316,7 @@ impl AnmManager {
     }
 
     // Visible, enabled, primary alpha ≠ 0, has a sprite, and the sprite exists.
-    fn drawable(&self, vm: &AnmVm) -> Option<SlotSprite> {
+    pub(crate) fn drawable(&self, vm: &AnmVm) -> Option<SlotSprite> {
         use anmvm::*;
         if !vm.vm_flags().contains(VmFlags::VISIBLE | VmFlags::ENABLED)
             || vm.color[A] == 0
@@ -371,17 +355,6 @@ impl AnmManager {
         }
     }
 
-    // Colour or colour2 (bit 17), then the global tint; returns RGBA.
-    fn vm_color(&self, vm: &AnmVm) -> [u8; 4] {
-        use anmvm::*;
-        let c = if vm.has(VmFlags::COLOR2) {
-            vm.color2
-        } else {
-            vm.color
-        };
-        self.tinted([c[R], c[G], c[B], c[A]])
-    }
-
     // AnmMgr_TintOff 0x40BAB0 (06 §10.2): +4 := 0, colour 0x80808080.
     pub fn tint_off(&mut self) {
         (self.tint, self.tint_on) = (0x8080_8080, false);
@@ -412,307 +385,6 @@ impl AnmManager {
     pub fn tint_state(&self) -> Option<Tint> {
         self.tint_on.then_some(Tint(self.tint))
     }
-
-    // Emit of `vm` under the tint a draw-phase step saw before it turned the global tint off (None: as is).
-    pub fn emit_tinted(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32, t: Option<Tint>) {
-        match t {
-            Some(t) => {
-                debug_assert!(!self.tint_on, "a saved tint applied under the global tint");
-                self.emit_mode_z(rec, &t.vm(vm), mode, z);
-            }
-            None => self.emit_mode_z(rec, vm, mode, z),
-        }
-    }
-
-    // Blend bits 4–5: 0 alpha, 1 additive, 2/3 set nothing.
-    pub fn blend_for(rec: &mut Recorder, vm: &AnmVm) -> Blend {
-        let blend = match vm.blend() {
-            0 => Blend::Alpha,
-            1 => Blend::Add,
-            _ => rec.anm.last_blend,
-        };
-        rec.anm.last_blend = blend;
-        blend
-    }
-
-    // Emit half of AnmManager_Draw3DWorld 0x464470 (after `prepare` mode 5): unit quad ±128 through `cam` with vertex
-    // fog; the screen-shake offset is added to the translation.
-    pub fn emit_3d_world(&self, rec: &mut Recorder, vm: &AnmVm, cam: &Camera, fog: Option<Fog>) {
-        use anmvm::*;
-        let Some(spr) = self.drawable(vm) else {
-            return;
-        };
-        let (hw, hh) = (
-            (vm.sprite_w * vm.scale[0] / 2.0).abs(),
-            (vm.sprite_h * vm.scale[1] / 2.0).abs(),
-        );
-        let ax = if vm.has(VmFlags::ANCHOR_X) { hw } else { 0.0 };
-        let ay = if vm.has(VmFlags::ANCHOR_Y) { hh } else { 0.0 };
-        let mut w = vm.world_matrix;
-        w.0[3] = [
-            vm.pos[0] + ax + self.screen_offset[0],
-            vm.pos[1] + ay + self.screen_offset[1],
-            vm.pos[2],
-            1.0,
-        ];
-        // Texture matrix offset is re-uploaded only for a new sprite or a non-zero u offset (v-only scroll quirk).
-        let key = (vm.anm_slot, vm.sprite_index);
-        // The texture is re-bound only on the same cache miss, so a 2D draw in between can leave another bound.
-        let (off, tex) = match (rec.anm.last_tex_matrix, rec.anm.bound_tex) {
-            (Some((k, o)), Some(t)) if k == key && vm.uv_off[0] == 0.0 => (o, t),
-            _ => (
-                [spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]],
-                spr.tex,
-            ),
-        };
-        rec.anm.bound_tex = Some(tex);
-        rec.anm.last_tex_matrix = Some((key, off));
-        let (su, sv) = (spr.uv[2] - spr.uv[0], spr.uv[3] - spr.uv[1]);
-        let color = self.vm_color(vm);
-        let vp = rec.viewport();
-        let vproj = cam.view_proj();
-        let v = [
-            [-128.0, -128.0, 0.0, 0.0],
-            [128.0, -128.0, 1.0, 0.0],
-            [-128.0, 128.0, 0.0, 1.0],
-            [128.0, 128.0, 1.0, 1.0],
-        ]
-        .map(|[x, y, u, t]| {
-            let p = w.transform([x, y, 0.0]);
-            let p = [p[0], p[1], p[2]];
-            let (fog_color, f) = match fog {
-                Some(fg) => {
-                    let z = cam.view.transform(p)[2];
-                    let [r, g, b] = fg.color;
-                    (
-                        [r, g, b, 255],
-                        ((fg.far - z) / (fg.far - fg.near)).clamp(0.0, 1.0),
-                    )
-                }
-                None => ([0; 4], 1.0),
-            };
-            Vertex {
-                pos: drawlist::clip_in_viewport(vproj.transform(p), vp),
-                uv: [off[0] + u * su, off[1] + t * sv],
-                color,
-                fog_color,
-                fog: f,
-            }
-        });
-        let blend = Self::blend_for(rec, vm);
-        rec.set_log_fog(fog.map(|f| drawlist::LogFog {
-            color: f.color,
-            start: f.near,
-            end: f.far,
-        }));
-        rec.strip(tex, blend, !vm.has(VmFlags::ZWRITE_OFF), v);
-        rec.set_log_fog(None);
-    }
-
-    // Anm_DrawRingStrip (07 §10.6 trail, flag 8): one triangle strip of (pos, uv, alpha) vertices with the VM's
-    // texture, blend and colour, emitted as consecutive 4-vertex strips.
-    pub fn draw_ring_strip(&self, rec: &mut Recorder, vm: &AnmVm, v: &[([f32; 2], [f32; 2], u8)]) {
-        use anmvm::*;
-        let Some(&spr) = self.sprite(
-            table_index(i32::from(vm.anm_slot)),
-            table_index(i32::from(vm.sprite_index)),
-        ) else {
-            return;
-        };
-        let c = if vm.has(VmFlags::COLOR2) {
-            vm.color2
-        } else {
-            vm.color
-        };
-        let blend = Self::blend_for(rec, vm);
-        let off = self.screen_offset;
-        let vert = |&([x, y], uv, a): &([f32; 2], [f32; 2], u8)| {
-            let rgba = self.tinted([c[R], c[G], c[B], a]);
-            Vertex::screen(x + off[0] + 0.5, y + off[1] + 0.5, 0.0, uv, rgba)
-        };
-        let v: Vec<Vertex> = v.iter().map(vert).collect();
-        for q in (0..v.len().saturating_sub(2)).step_by(2) {
-            if q + 3 < v.len() {
-                rec.strip(
-                    spr.tex,
-                    blend,
-                    !vm.has(VmFlags::ZWRITE_OFF),
-                    [v[q], v[q + 1], v[q + 2], v[q + 3]],
-                );
-            }
-        }
-        rec.anm.bound_tex = Some(spr.tex);
-    }
-
-    // Emit half of AnmManager_DrawByMode 0x45E960: skip unless visible, enabled and primary alpha ≠ 0; `z` is the
-    // vertex depth (projected depth for stage billboards, 0 otherwise); mode 5 uses the world matrix `prepare` left.
-    pub fn emit_mode_z(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32) {
-        self.emit_mode_z_at(rec, vm, mode, z, self.screen_offset);
-    }
-
-    // As `emit_mode_z` with the EmitQuad global offset `off` the draw saw (a step zeroed `screen_offset` since).
-    pub fn emit_mode_z_at(&self, rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32, off: [f32; 2]) {
-        use anmvm::*;
-        let Some(spr) = self.drawable(vm) else {
-            return;
-        };
-        let (hw, hh) = (
-            vm.sprite_w * vm.scale[0] / 2.0,
-            vm.sprite_h * vm.scale[1] / 2.0,
-        );
-        let [px, py, pz] = vm.pos;
-        let ax = if vm.has(VmFlags::ANCHOR_X) { hw } else { 0.0 };
-        let ay = if vm.has(VmFlags::ANCHOR_Y) { hh } else { 0.0 };
-        let axis_aligned = || {
-            let (x0, y0) = (px - hw + ax, py - hh + ay);
-            let (x1, y1) = (px + hw + ax, py + hh + ay);
-            [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]
-        };
-        // Modes 2/3 with rotation z ≠ 0: corners rotated, the anchor shift added afterwards unrotated.
-        let rotated = || {
-            let (s, c) = crate::fmath::sin_cos_f(vm.rotation[2]);
-            [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
-                .map(|(dx, dy)| [dx * c - dy * s + px + ax, dx * s + dy * c + py + ay])
-        };
-        // Mode 4 sizes the quad from the projection; both 3D modes carry the projected z as vertex depth.
-        let mut depth = [z; 4];
-        let stage_cam = vm.has(VmFlags::STAGE_CAM);
-        let cam = |anm: &Self, vp| match (stage_cam, anm.stage_camera) {
-            (true, Some(c)) => c,
-            _ => Camera::set_2d(vp),
-        };
-        let (corners, snap) = match mode {
-            // 0 Draw2DSnap 0x462FF0, 1 Draw2D 0x463800, 2 Draw2DRot 0x463210 (snaps only when unrotated),
-            // 3 Draw2DRotNoSnap 0x463470.
-            0 => (axis_aligned(), true),
-            1 => (axis_aligned(), false),
-            2 | 3 if vm.rotation[2] == 0.0 => (axis_aligned(), mode == 2),
-            2 | 3 => (rotated(), false),
-            // 4 DrawBillboard 0x463CF0: never reached through the dispatch (05 §9 reachability), kept for completeness.
-            4 => {
-                let vp = rec.viewport();
-                let cam = cam(self, vp);
-                let s = cam.project([px, py, pz], vp);
-                if !(0.0..=1.0).contains(&s[2]) {
-                    return;
-                }
-                let r = self.cam_right;
-                let len = length3(sub3(cam.project([px + r[0], py + r[1], pz + r[2]], vp), s));
-                depth = [s[2]; 4];
-                (billboard_corners(vm, s, len), false)
-            }
-            // 5 Draw3DQuad 0x464070; the anchor shift uses the absolute half size.
-            5 => {
-                let mut w = vm.world_matrix;
-                w.0[3] = [px + ax.abs(), py + ay.abs(), pz, 1.0];
-                let vp = rec.viewport();
-                let cam = cam(self, vp);
-                let projected = [
-                    [-128.0, -128.0],
-                    [128.0, -128.0],
-                    [-128.0, 128.0],
-                    [128.0, 128.0],
-                ]
-                .map(|[x, y]| {
-                    let p = w.transform([x, y, 0.0]);
-                    cam.project([p[0], p[1], p[2]], vp)
-                });
-                // EmitQuad never rewrites z: the projected z is the vertex depth (≈ 0.9994 for z = 0, 2D camera).
-                depth = projected.map(|s| s[2]);
-                (projected.map(|s| [s[0], s[1]]), false)
-            }
-            _ => return,
-        };
-        self.emit_quad_at(rec, vm, spr, corners, depth, snap, off);
-    }
-
-    // DrawBillboard 0x463CF0 (13 §2.6c) from an already projected point `s` and the 3D length `len` of
-    // project(pos + right) − s; list B moves `s` in screen space (callback 0x428310) between the two.
-    pub fn draw_billboard(&self, rec: &mut Recorder, vm: &AnmVm, s: [f32; 3], len: f32) {
-        let Some(spr) = self.drawable(vm) else {
-            return;
-        };
-        self.emit_quad(
-            rec,
-            vm,
-            spr,
-            billboard_corners(vm, s, len),
-            [s[2]; 4],
-            false,
-        );
-    }
-
-    fn emit_quad(
-        &self,
-        rec: &mut Recorder,
-        vm: &AnmVm,
-        spr: SlotSprite,
-        corners: [[f32; 2]; 4],
-        depth: [f32; 4],
-        snap: bool,
-    ) {
-        self.emit_quad_at(rec, vm, spr, corners, depth, snap, self.screen_offset);
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn emit_quad_at(
-        &self,
-        rec: &mut Recorder,
-        vm: &AnmVm,
-        spr: SlotSprite,
-        corners: [[f32; 2]; 4],
-        depth: [f32; 4],
-        snap: bool,
-        off: [f32; 2],
-    ) {
-        use anmvm::*;
-        // AnmManager_EmitQuad 0x4628B0: global offset, optional snapping, then the D3D pixel centre (+0.5) for wgpu.
-        let corners = corners.map(|[x, y]| {
-            let (mut x, mut y) = (x + off[0], y + off[1]);
-            // Snap: x87 round-to-nearest-even, minus 0.5.
-            if snap {
-                x = x.round_ties_even() - 0.5;
-                y = y.round_ties_even() - 0.5;
-            }
-            [x + 0.5, y + 0.5]
-        });
-        let vp = rec.viewport();
-        let (minx, maxx) = corners
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[0]), b.max(c[0])));
-        let (miny, maxy) = corners
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c[1]), b.max(c[1])));
-        // Cull unless the bounding box meets the viewport, in D3D coordinates (undo the +0.5).
-        let (minx, maxx, miny, maxy) = (minx - 0.5, maxx - 0.5, miny - 0.5, maxy - 0.5);
-        if maxx < vp.x || minx > vp.x + vp.w || maxy < vp.y || miny > vp.y + vp.h {
-            return;
-        }
-        // EmitQuad step 2: v0 (u0,v0), v1 (u1,v0), v2 (u0,v1), v3 (u1,v1).
-        let (u0, v0) = (spr.uv[0] + vm.uv_off[0], spr.uv[1] + vm.uv_off[1]);
-        let (u1, v1) = (spr.uv[2] + vm.uv_off[0], spr.uv[3] + vm.uv_off[1]);
-        let rgba = self.vm_color(vm);
-        let blend = Self::blend_for(rec, vm);
-        let uv = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
-        let v = std::array::from_fn(|i| {
-            Vertex::screen(corners[i][0], corners[i][1], depth[i], uv[i], rgba)
-        });
-        rec.anm.bound_tex = Some(spr.tex);
-        rec.strip(spr.tex, blend, !vm.has(VmFlags::ZWRITE_OFF), v);
-    }
-}
-
-// Billboard corners (13 §2.6c): half size ((len·0.5)·sprite_w)·scale.x, rotated by rotation.z about s.
-fn billboard_corners(vm: &AnmVm, s: [f32; 3], len: f32) -> [[f32; 2]; 4] {
-    let hw = ((len * 0.5) * vm.sprite_w) * vm.scale[0];
-    let hh = ((len * 0.5) * vm.sprite_h) * vm.scale[1];
-    let (sn, cs) = crate::fmath::sin_cos_f(vm.rotation[2]);
-    [(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh)]
-        .map(|(dx, dy)| [dx * cs - dy * sn + s[0], dx * sn + dy * cs + s[1]])
-}
-
-fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 // Vec3_Length: the projected difference includes the depth (13 §2.6c).
@@ -723,51 +395,6 @@ pub fn length3(a: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // A saved tint applied by the emit (global tint off) records what the draw under the global tint records, also
-    // with colour2 and a tint alpha that zeroes a small primary alpha (the skip tests the untinted colour).
-    #[test]
-    fn saved_tint_equals_global_tint() {
-        let mut anm = AnmManager::default();
-        let chunk = th08_formats::anm::Chunk {
-            name: "t".into(),
-            width: 256,
-            height: 256,
-            sprites: vec![th08_formats::anm::Sprite {
-                id: 0,
-                x: 0.0,
-                y: 0.0,
-                w: 32.0,
-                h: 16.0,
-            }],
-            scripts: Vec::new(),
-            has_texture: false,
-        };
-        anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
-        let mut vm = AnmVm::default();
-        vm.init();
-        vm.set_sprite(&anm, 0);
-        vm.pos = [100.0, 100.0, 0.0];
-        for (tint, color, color2) in [
-            (0xFFAB_ABAB, [255, 255, 255, 255], None),
-            (0x20F0_1010, [10, 200, 30, 3], None),
-            (0x8060_6060, [1, 2, 3, 4], Some([200, 100, 50, 255])),
-        ] {
-            vm.color = color;
-            vm.flags &= !anmvm::F_COLOR2;
-            if let Some(c) = color2 {
-                (vm.color2, vm.flags) = (c, vm.flags | anmvm::F_COLOR2);
-            }
-            let mut global = Recorder::new();
-            (anm.tint, anm.tint_on) = (tint, true);
-            anm.emit_mode_z(&mut global, &vm, 0, 0.0);
-            anm.tint_off();
-            let mut saved = Recorder::new();
-            anm.emit_tinted(&mut saved, &vm, 0, 0.0, Some(Tint(tint)));
-            assert_eq!(global.draws.len(), 1);
-            assert_eq!(format!("{:?}", global.draws), format!("{:?}", saved.draws));
-        }
-    }
 
     // AnmManager::clone mid-animation: both copies step to the same VM state, RNG and draws; a
     // literal-destination write (05 §3) copies the clone's script instead of writing into the shared one.
@@ -794,7 +421,7 @@ mod tests {
                 for vm in vms.iter_mut() {
                     vm.run(anm, rng);
                     anm.prepare(vm, vm.draw_mode);
-                    anm.emit(&mut rec, vm);
+                    crate::emit::anm::emit(anm, &mut rec, vm);
                 }
             }
             format!("{:?}\n{vms:?}\n{rng:?}", rec.draws)
@@ -854,16 +481,5 @@ mod tests {
         let (s1, s2) = (anm.get(0).unwrap(), anm2.get(0).unwrap());
         assert!(!Arc::ptr_eq(&s1.scripts[0], &s2.scripts[0]));
         assert_eq!(s1.scripts[0].data, s2.scripts[0].data);
-    }
-
-    // 13 §2.6c: half size ((len·0.5)·sprite_w)·scale.x around the projected point, unrotated.
-    #[test]
-    fn billboard_half_size() {
-        let mut vm = AnmVm::default();
-        (vm.sprite_w, vm.sprite_h, vm.scale) = (32.0, 16.0, [2.0, 0.5]);
-        let c = billboard_corners(&vm, [100.0, 50.0, 0.5], 1.5);
-        assert_eq!(c[0], [100.0 - 48.0, 50.0 - 6.0]);
-        assert_eq!(c[3], [100.0 + 48.0, 50.0 + 6.0]);
-        assert_eq!(length3([3.0, 0.0, 4.0]), 5.0);
     }
 }

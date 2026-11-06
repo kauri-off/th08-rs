@@ -1422,10 +1422,10 @@ impl MainMenu {
             return;
         }
         for vm in &self.vms {
-            ctx.w.anm.emit(rec, vm);
+            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
         }
         if let Some(i) = self.desc_cur {
-            ctx.w.anm.emit(rec, &self.desc[i]);
+            crate::emit::anm::emit(&ctx.w.anm, rec, &self.desc[i]);
         }
         match self.screen {
             REPLAY => self.replay_emit(ctx, rec),
@@ -1434,7 +1434,7 @@ impl MainMenu {
             _ => {}
         }
         if self.notice_sprite(ctx.w).is_some() {
-            ctx.w.anm.emit_mode(rec, &self.notice, 0);
+            crate::emit::anm::emit_mode(&ctx.w.anm, rec, &self.notice, 0);
         }
     }
 }

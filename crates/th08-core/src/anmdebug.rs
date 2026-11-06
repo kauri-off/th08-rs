@@ -118,9 +118,7 @@ impl AnmDebug {
         });
         rec.clear_viewport([32, 32, 64, 255]);
         for vm in &self.vms {
-            ctx.w
-                .anm
-                .emit_mode(rec, vm, self.mode.unwrap_or(vm.draw_mode));
+            crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, self.mode.unwrap_or(vm.draw_mode));
         }
         rec.set_viewport(FULLSCREEN);
     }

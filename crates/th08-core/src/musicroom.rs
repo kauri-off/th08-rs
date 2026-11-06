@@ -431,14 +431,14 @@ impl MusicRoom {
         if let Some(t) = self.surface {
             rec.image(t, 0.0, 0.0);
         }
-        ctx.w.anm.emit(rec, &self.bg);
+        crate::emit::anm::emit(&ctx.w.anm, rec, &self.bg);
         for i in self.top..self.row_end() {
-            ctx.w.anm.emit(rec, &self.rows[anmvm::table_index(i)]);
+            crate::emit::anm::emit(&ctx.w.anm, rec, &self.rows[anmvm::table_index(i)]);
         }
         for vm in &self.comments {
-            ctx.w.anm.emit(rec, vm);
+            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
         }
-        ctx.w.anm.emit(rec, &self.shown_title());
+        crate::emit::anm::emit(&ctx.w.anm, rec, &self.shown_title());
     }
 }
 

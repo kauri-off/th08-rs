@@ -589,7 +589,7 @@ impl ItemManager {
         for &i in &self.order {
             let it = &self.items[i.idx()];
             if it.alive {
-                anm.emit_tinted(rec, &it.vm, 2, 0.15, tint);
+                crate::emit::anm::emit_tinted(anm, rec, &it.vm, 2, 0.15, tint);
             }
         }
     }

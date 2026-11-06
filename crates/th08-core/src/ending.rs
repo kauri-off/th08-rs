@@ -531,7 +531,7 @@ impl Ending {
             rec.image_rect(t, sx, sy, 640, 480, 0.0, 0.0);
         }
         for vm in &self.vms {
-            ctx.w.anm.emit(rec, vm);
+            crate::emit::anm::emit(&ctx.w.anm, rec, vm);
         }
         let c = self.fade_shown;
         if c >> 24 != 0 {

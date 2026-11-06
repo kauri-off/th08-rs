@@ -196,7 +196,7 @@ fn text_vm(w: &World, slot: usize, sprite: i32, centred: bool) -> AnmVm {
 fn emit_at(ctx: &View, rec: &mut Recorder, vm: &AnmVm, x: f32, y: f32) {
     let mut vm = vm.clone();
     vm.pos = [x, y, 0.0];
-    ctx.w.anm.emit_mode(rec, &vm, 0);
+    crate::emit::anm::emit_mode(&ctx.w.anm, rec, &vm, 0);
 }
 
 fn vm_argb(vm: &AnmVm) -> u32 {
@@ -1517,19 +1517,19 @@ impl ResultScreen {
             for k in 0..3 {
                 vm.pos[k] += vm.pos_offset[k];
             }
-            ctx.w.anm.emit(rec, &vm);
+            crate::emit::anm::emit(&ctx.w.anm, rec, &vm);
         }
         if self.state == State::Cards {
             self.emit_cards(ctx, rec);
         }
         if self.state.is_play() {
             for vm in &self.text_vms[..20] {
-                ctx.w.anm.emit_mode(rec, vm, 0);
+                crate::emit::anm::emit_mode(&ctx.w.anm, rec, vm, 0);
             }
         }
         if self.state.is_save() {
             for vm in &self.vms[49..55] {
-                ctx.w.anm.emit(rec, vm);
+                crate::emit::anm::emit(&ctx.w.anm, rec, vm);
             }
         }
     }

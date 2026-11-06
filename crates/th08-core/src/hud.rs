@@ -824,7 +824,7 @@ impl Hud {
             };
             for k in order {
                 if d.faces[k].script.is_some() {
-                    anm.emit_mode(rec, &d.faces[k], 0);
+                    crate::emit::anm::emit_mode(anm, rec, &d.faces[k], 0);
                 }
             }
         }
@@ -841,7 +841,7 @@ impl Hud {
         }
         for vm in d.lines.iter().chain(std::iter::once(&d.boss_card)) {
             if vm.script.is_some() {
-                anm.emit_mode(rec, vm, 0);
+                crate::emit::anm::emit_mode(anm, rec, vm, 0);
             }
         }
     }
@@ -901,29 +901,29 @@ impl Hud {
             .chain(std::iter::once(&self.start_clock_vm))
         {
             if vm.script.is_some() {
-                anm.emit_mode(rec, vm, 0);
+                crate::emit::anm::emit_mode(anm, rec, vm, 0);
             }
         }
         if self.night_vm.script.is_some() {
-            anm.emit_mode(rec, &self.night_vm, 2);
+            crate::emit::anm::emit_mode(anm, rec, &self.night_vm, 2);
         }
         // Op 9 VMs: loading picture Draw2DSnap, capture and ghosts Draw3DQuad; impl+0x3A1C is never started (10 §9).
         if self.load_vm.script_index >= 0 {
-            anm.emit_mode(rec, &self.load_vm, 0);
+            crate::emit::anm::emit_mode(anm, rec, &self.load_vm, 0);
             for vm in std::iter::once(&self.cap_vm).chain(self.ghosts.iter()) {
-                anm.emit_mode(rec, vm, 5);
+                crate::emit::anm::emit_mode(anm, rec, vm, 5);
             }
         }
         if self.tiles_live != 0 {
             for vm in &self.tiles {
-                anm.emit_mode(rec, vm, 5);
+                crate::emit::anm::emit_mode(anm, rec, vm, 5);
             }
         }
         if !dialogue_active(ctx.w) {
             self.emit_bar(ctx, rec);
         }
         if self.clear_vm.script.is_some() {
-            anm.emit_mode(rec, &self.clear_vm, 0);
+            crate::emit::anm::emit_mode(anm, rec, &self.clear_vm, 0);
         }
     }
 
@@ -1017,7 +1017,7 @@ impl Hud {
             let c = Self::rgb(BAR_TOP - (i.cast_unsigned() * 255 / 9), a);
             Self::bar_quad(rec, x0, x1, BAR_Y0, BAR_Y1, c, Self::rgb(GAUGE_BOT, a));
         }
-        ctx.w.anm.emit_mode(rec, &self.front[12], 0);
+        crate::emit::anm::emit_mode(&ctx.w.anm, rec, &self.front[12], 0);
     }
 
     // Hud_DrawPopups 0x438A89 (12 §5.5): every string with the clip flag (playfield viewport); bonus / message
@@ -1216,18 +1216,18 @@ impl Hud {
             spr(rec, 14, x as f32, 464.0, TILE_Z_TOP);
         }
         for vm in self.front.iter().take(10) {
-            anm.emit_mode(rec, vm, if vm.script_index == 1 { 2 } else { 0 });
+            crate::emit::anm::emit_mode(anm, rec, vm, if vm.script_index == 1 { 2 } else { 0 });
         }
-        anm.emit_mode(rec, &self.diff_vm, 0);
+        crate::emit::anm::emit_mode(anm, rec, &self.diff_vm, 0);
         for (row, vm, n) in Self::stock_rows(st) {
             for i in 0..n {
                 let mut v = self.front[vm].clone();
                 v.pos = Self::stock_pos(row, i);
-                anm.emit_mode(rec, &v, 0);
+                crate::emit::anm::emit_mode(anm, rec, &v, 0);
             }
         }
         if self.label_latch {
-            anm.emit_mode(rec, &self.label_vm, 0);
+            crate::emit::anm::emit_mode(anm, rec, &self.label_vm, 0);
         }
         // Strip 14 along y = 464 for x 32..368 every frame (12 §5.3).
         for x in [32.0, 160.0, 288.0] {

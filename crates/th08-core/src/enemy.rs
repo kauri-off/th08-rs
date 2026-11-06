@@ -2867,7 +2867,7 @@ impl EnemyManager {
             let mut vm = e.vm.clone();
             for c in Self::trail_copies(e) {
                 Self::trail_copy(&mut vm, e.a_flags(), f, c, n, e.vm.scale, a);
-                anm.emit_tinted(rec, &vm, 2, 0.3, tint);
+                crate::emit::anm::emit_tinted(anm, rec, &vm, 2, 0.3, tint);
             }
         } else if let Some(&spr) = anm.sprite(
             table_index(i32::from(e.vm.anm_slot)),
@@ -2923,8 +2923,8 @@ impl EnemyManager {
             }
             if v.len() > 2 {
                 match tint {
-                    Some(t) => anm.draw_ring_strip(rec, &t.vm(vm), &v),
-                    None => anm.draw_ring_strip(rec, vm, &v),
+                    Some(t) => crate::emit::anm::draw_ring_strip(anm, rec, &t.vm(vm), &v),
+                    None => crate::emit::anm::draw_ring_strip(anm, rec, vm, &v),
                 }
             }
         }
@@ -3066,7 +3066,7 @@ impl EnemyManager {
                     let drew =
                         trail && e.trail[0] & 8 == 0 && Self::trail_copies(e).next().is_some();
                     let vm = if main { &e.vm } else { &e.sub_vms[k] };
-                    anm.emit_tinted(rec, vm, 2, Self::vm_z(k, drew), tint);
+                    crate::emit::anm::emit_tinted(anm, rec, vm, 2, Self::vm_z(k, drew), tint);
                 }
             }
         }

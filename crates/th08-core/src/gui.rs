@@ -539,8 +539,9 @@ impl Gui {
         let v = &self.vms;
         // VMs 0–6 are drawn before the VM-7 block, under the global tint still on then.
         let pre = self.pre_tint;
-        let draw =
-            |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], pre);
+        let draw = |rec: &mut Recorder, vm: &AnmVm, mode| {
+            crate::emit::anm::emit_tinted(anm, rec, vm, mode, vm.pos[2], pre);
+        };
         // Boss strips (VM 2/4) are drawn only while the player cut-in VM 0 is visible: original quirk (step 1).
         if Self::shown(&v[0]) {
             draw(rec, &v[0], 0);
@@ -561,8 +562,9 @@ impl Gui {
         if Self::shown(&v[7]) {
             // Tint +0x2620 (step 4), turned off by the step; the alpha-0 skip tests the untinted colour.
             let t = Some(Tint(self.tint));
-            let draw =
-                |rec: &mut Recorder, vm: &AnmVm, mode| anm.emit_tinted(rec, vm, mode, vm.pos[2], t);
+            let draw = |rec: &mut Recorder, vm: &AnmVm, mode| {
+                crate::emit::anm::emit_tinted(anm, rec, vm, mode, vm.pos[2], t);
+            };
             draw(rec, &v[11], 0);
             for k in [7, 8, 9] {
                 if v[k].script.is_some() {

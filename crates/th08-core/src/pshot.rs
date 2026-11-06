@@ -528,7 +528,7 @@ impl Player {
             .iter()
             .filter(|o| o.state != 0 && o.vm.script.is_some())
         {
-            anm.emit_mode_z(rec, &o.vm, 2, 0.49);
+            crate::emit::anm::emit_mode_z(anm, rec, &o.vm, 2, 0.49);
         }
     }
 
@@ -1097,7 +1097,7 @@ impl Player {
     ) {
         let youkai_max = self.stats.youkai_max();
         let emit = |rec: &mut Recorder, vm: &AnmVm, mode: i32, z: f32| {
-            anm.emit_tinted(rec, vm, mode, z, tint);
+            crate::emit::anm::emit_tinted(anm, rec, vm, mode, z, tint);
         };
         for b in self
             .bullets

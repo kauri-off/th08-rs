@@ -1731,9 +1731,9 @@ impl BulletManager {
     // Laser draw emit: body z 0.06, emitter z 0.05.
     fn lasers_emit(&self, anm: &AnmManager, rec: &mut Recorder, tint: Option<Tint>) {
         for l in self.lasers.iter().filter(|l| l.alive) {
-            anm.emit_tinted(rec, &l.body, 2, 0.06, tint);
+            crate::emit::anm::emit_tinted(anm, rec, &l.body, 2, 0.06, tint);
             if l.emitter_drawn() {
-                anm.emit_tinted(rec, &l.emitter, 2, 0.05, tint);
+                crate::emit::anm::emit_tinted(anm, rec, &l.emitter, 2, 0.05, tint);
             }
         }
     }
@@ -1801,7 +1801,7 @@ impl BulletManager {
             for &i in self.lists[c].iter().rev() {
                 let b = &self.bullets[i.idx()];
                 if let Some(v) = Self::draw_vm(b) {
-                    anm.emit_tinted(rec, &b.vms[v], 2, 0.05, tint);
+                    crate::emit::anm::emit_tinted(anm, rec, &b.vms[v], 2, 0.05, tint);
                 }
             }
         }

@@ -1448,7 +1448,7 @@ impl Player {
 
     fn emit_sprite(&self, anm: &AnmManager, rec: &mut Recorder, game_over: bool) {
         if self.vm.script.is_some() && !game_over {
-            anm.emit_mode_z(rec, &self.vm, 0, 0.1);
+            crate::emit::anm::emit_mode_z(anm, rec, &self.vm, 0, 0.1);
         }
     }
 }

@@ -1129,7 +1129,7 @@ impl Player {
             .iter()
             .filter(|o| o.state != ObjState::Free)
         {
-            anm.emit_mode_z(rec, &o.vm, mode, 0.0);
+            crate::emit::anm::emit_mode_z(anm, rec, &o.vm, mode, 0.0);
         }
     }
 
@@ -1855,14 +1855,14 @@ impl Player {
             0 => self.emit_objs(anm, rec, if ls { OBJS } else { 16 }, 0),
             1 if ls => {
                 for (vm, z) in self.bomb.vms[..2].iter().zip([0.01, 0.0]) {
-                    anm.emit_mode_z(rec, vm, 2, z);
+                    crate::emit::anm::emit_mode_z(anm, rec, vm, 2, z);
                 }
             }
             2 => self
                 .bomb
                 .vms
                 .iter()
-                .for_each(|vm| anm.emit_mode_z(rec, vm, 2, 0.0)),
+                .for_each(|vm| crate::emit::anm::emit_mode_z(anm, rec, vm, 2, 0.0)),
             3 if ls && (90..=120).contains(&t) => {
                 Self::playfield_rect(rec, RGB_WHITE, (t - 90) * 255 / 30);
             }

@@ -766,7 +766,7 @@ impl Supervisor {
                         p[1] + o[1] + self.load_pos[1],
                         p[2] + o[2],
                     ];
-                    ctx.w.anm.emit_mode(rec, &v, 2);
+                    crate::emit::anm::emit_mode(&ctx.w.anm, rec, &v, 2);
                 }
             }
             _ => {}
