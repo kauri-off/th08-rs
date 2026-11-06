@@ -312,6 +312,8 @@ pub struct Settings {
     pub input_opacity: f32,
     // "Now playing" toast when a BGM track starts.
     pub now_playing: bool,
+    // Play statistics into the save dir's stats.jsonl.
+    pub stats: bool,
     pub volume: th08_audio::audio::PortVolume,
     pub mute_unfocused: bool,
     pub audio_buffer: Option<u32>,
@@ -404,6 +406,7 @@ impl Settings {
             input_display: None,
             input_opacity: 0.8,
             now_playing: false,
+            stats: true,
             volume: th08_audio::audio::PortVolume::default(),
             mute_unfocused: true,
             audio_buffer: None,
@@ -1406,6 +1409,25 @@ pub const ENTRIES: &[Entry] = &[
         help: "where score.dat and replays are saved (default: the port config dir)",
         set: |s, v| {
             s.save_dir = Some(PathBuf::from(v));
+            Ok(())
+        },
+    },
+    Entry {
+        key: "stats",
+        env: "TH08_STATS",
+        kind: Kind::Bool,
+        default: "on",
+        group: Group::GameData,
+        label: "Play statistics",
+        summary: "Record runs, deaths, bombs and spell cards for the Stats tab",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::NATIVE,
+        persist: true,
+        help: "append play events (runs, deaths, bombs, spell cards, continues, play time) to stats.jsonl in the save folder; local only, never for replays, demos or tool runs",
+        set: |s, v| {
+            s.stats = parse_bool(v)?;
             Ok(())
         },
     },

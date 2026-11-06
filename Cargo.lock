@@ -3291,6 +3291,7 @@ dependencies = [
  "sys-locale",
  "th08-audio",
  "th08-core",
+ "th08-formats",
  "th08-render",
  "th08-repack",
  "th08-thcrap",

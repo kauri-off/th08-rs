@@ -13,6 +13,8 @@ use winit::window::Window;
 mod gamepad;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 mod replay_tab;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+mod stats_tab;
 
 // "version (channel)"; the channel is set only for Android builds.
 pub fn version_line() -> String {
@@ -369,6 +371,8 @@ pub struct Model {
     tab: Tab,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     rp: replay_tab::ReplayTab,
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    st: stats_tab::StatsTab,
 }
 
 // The settings screen's tabs.
@@ -377,6 +381,7 @@ pub struct Model {
 pub enum Tab {
     Settings,
     Replays,
+    Stats,
 }
 
 // The update check: started on the first settings screen frame, so never when the launcher is skipped.
@@ -456,6 +461,8 @@ impl Model {
             tab: Tab::Settings,
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             rp: replay_tab::ReplayTab::default(),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            st: stats_tab::StatsTab::default(),
         };
         m.refresh_installed();
         m
@@ -836,6 +843,13 @@ impl Model {
             });
             return act;
         }
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        if self.tab == Tab::Stats {
+            egui::CentralPanel::default_margins().show(ui, |ui| {
+                egui::ScrollArea::both().show(ui, |ui| self.stats_ui(ui, lang));
+            });
+            return act;
+        }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -878,8 +892,10 @@ impl Model {
             let before = self.tab;
             ui.selectable_value(&mut self.tab, Tab::Settings, i18n::ui(lang, "tab_settings"));
             ui.selectable_value(&mut self.tab, Tab::Replays, i18n::ui(lang, "tab_replays"));
+            ui.selectable_value(&mut self.tab, Tab::Stats, i18n::ui(lang, "tab_stats"));
             if self.tab != before {
                 self.forget_replays();
+                self.forget_stats();
             }
         });
     }
@@ -921,6 +937,7 @@ impl Model {
     pub fn set_tab(&mut self, t: Tab) {
         self.tab = t;
         self.forget_replays();
+        self.forget_stats();
     }
 
     fn folder_ui(&mut self, ui: &mut egui::Ui) {

@@ -262,7 +262,7 @@ impl Model {
 }
 
 // 1234567890 → "1,234,567,890".
-fn group_digits(n: u64) -> String {
+pub(super) fn group_digits(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {

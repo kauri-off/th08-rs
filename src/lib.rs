@@ -15,10 +15,13 @@ pub mod platform;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod replays;
 pub mod saves;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod scoreview;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub mod selfupdate;
 pub mod settings;
 pub mod sources;
+pub mod stats;
 pub mod translations;
 pub mod transport;
 #[cfg(not(target_arch = "wasm32"))]

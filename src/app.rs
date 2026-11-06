@@ -47,6 +47,8 @@ struct Running {
     titles: Vec<(String, String)>,
     now_playing: Option<(String, Instant)>,
     discord: crate::discord::Rpc,
+    // Play statistics recorder (`stats` on, live game with a save dir).
+    stats: Option<crate::stats::Log>,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -233,6 +235,13 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         ctx.w.game.persist = false;
     }
     let discord = s.discord && !s.is_tool_run();
+    #[cfg(not(target_arch = "wasm32"))]
+    let stats = s
+        .storage_dir()
+        .filter(|_| s.stats && s.uses_saves() && !s.is_tool_run())
+        .map(|d| crate::stats::Log::new(&d));
+    #[cfg(target_arch = "wasm32")]
+    let stats = None;
     Ok(Box::new(Running {
         ctx,
         pacer: Pacer::new(s.turbo),
@@ -249,6 +258,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         titles,
         now_playing: None,
         discord: crate::discord::Rpc::new(discord),
+        stats,
     }))
 }
 
@@ -1592,6 +1602,9 @@ fn logic_frames(r: &mut Running, n: u32, frozen: bool, touch: bool) -> Option<Fr
             }
         }
         let flow = if frozen { Flow::Continue } else { r.ctx.calc() };
+        if !frozen && let Some(st) = &mut r.stats {
+            st.frame(&r.ctx.w);
+        }
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.clock.frame();
         }
@@ -2153,6 +2166,7 @@ mod tests {
             titles: Vec::new(),
             now_playing: None,
             discord: crate::discord::Rpc::off(),
+            stats: None,
         })
     }
 
@@ -2192,6 +2206,7 @@ mod tests {
             titles: Vec::new(),
             now_playing: None,
             discord: crate::discord::Rpc::off(),
+            stats: None,
         };
         for _ in 0..300 {
             r.ctx.calc();

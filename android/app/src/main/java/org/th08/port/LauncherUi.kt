@@ -321,6 +321,10 @@ private fun SettingsList(
             Header(str(R.string.replays_title))
             Block { ReplaysBlock(rows, act) }
         }
+        item(key = "stats") {
+            Header(str(R.string.stats_title))
+            Block { StatsBlock(rows) }
+        }
         item(key = "saves") {
             Header(str(R.string.saves_title))
             SavesBlock(act)
