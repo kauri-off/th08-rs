@@ -62,7 +62,9 @@ winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [features]
-default = ["gamepad-linux"]
+default = ["gamepad-linux", "discord"]
+# Discord Rich Presence over the local IPC socket / pipe (Windows and Linux only; discord.rs).
+discord = ["dep:discord-rich-presence"]
 # Joystick on Linux (gilrs links libudev); `--no-default-features` builds without it where libudev-dev is missing.
 gamepad-linux = ["dep:gilrs"]
 
@@ -108,6 +110,9 @@ ndk-context = "0.1.1"
 # Import of picked game files into <internal>/game (gameimport.rs).
 th08-repack = { path = "crates/th08-repack", features = ["device"] }
 winit = { version = "0.30", features = ["android-native-activity"] }
+
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+discord-rich-presence = { version = "1.1.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Registry"] }

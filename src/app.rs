@@ -46,6 +46,7 @@ struct Running {
     started: Option<crate::nowplaying::Started>,
     titles: Vec<(String, String)>,
     now_playing: Option<(String, Instant)>,
+    discord: crate::discord::Rpc,
 }
 
 // Replay transport state of a running game (transport.rs); inert while no replay plays.
@@ -231,6 +232,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         );
         ctx.w.game.persist = false;
     }
+    let discord = s.discord && !s.is_tool_run();
     Ok(Box::new(Running {
         ctx,
         pacer: Pacer::new(s.turbo),
@@ -246,6 +248,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         started,
         titles,
         now_playing: None,
+        discord: crate::discord::Rpc::new(discord),
     }))
 }
 
@@ -1426,6 +1429,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     }
     follow_replay(r, now);
     follow_practice(r, now);
+    r.discord.observe(&r.ctx.w.game);
     let shot = r.settings.shot;
     let (per_draw, draws) = match r.pacer.poll(now) {
         Tick::Run { per_draw, draws } => (per_draw, draws),
@@ -2148,6 +2152,7 @@ mod tests {
             started: None,
             titles: Vec::new(),
             now_playing: None,
+            discord: crate::discord::Rpc::off(),
         })
     }
 
@@ -2186,6 +2191,7 @@ mod tests {
             started: None,
             titles: Vec::new(),
             now_playing: None,
+            discord: crate::discord::Rpc::off(),
         };
         for _ in 0..300 {
             r.ctx.calc();

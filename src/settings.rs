@@ -297,6 +297,8 @@ pub struct Settings {
     pub launcher: bool,
     // Ask GitHub once a day whether a newer release exists (launcher only, release builds only; update.rs).
     pub update_check: bool,
+    // Discord Rich Presence through the local Discord app (discord.rs; Windows and Linux).
+    pub discord: bool,
     // Open the port menu when the window / tab loses focus in a stage (desktop, web).
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
@@ -392,6 +394,7 @@ impl Settings {
             screen_margin: 0,
             launcher: true,
             update_check: true,
+            discord: false,
             pause_unfocused: true,
             blit: th08_render::gfx::BlitOptions::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
@@ -743,6 +746,25 @@ pub const ENTRIES: &[Entry] = &[
         help: "ask GitHub at most once a day, from this screen only, whether a newer release exists; nothing is sent but the request itself",
         set: |s, v| {
             s.update_check = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "discord",
+        env: "TH08_DISCORD",
+        kind: Kind::Bool,
+        default: "off",
+        group: Group::Display,
+        label: "Discord status",
+        summary: "Show your game in Discord; talks only to the local app",
+        unit: "",
+        words: &[],
+        audience: Audience::Player,
+        platforms: Platforms::DESKTOP,
+        persist: true,
+        help: "show the character, difficulty and stage (or replay / menu) in your Discord status; only the Discord app running on this computer is contacted, nothing goes to the internet from the game",
+        set: |s, v| {
+            s.discord = parse_bool(v)?;
             Ok(())
         },
     },

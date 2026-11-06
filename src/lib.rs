@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod crashlog;
+pub mod discord;
 #[cfg(target_os = "android")]
 pub mod gameimport;
 pub mod i18n;
