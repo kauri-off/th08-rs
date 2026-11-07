@@ -950,7 +950,6 @@ impl Model {
         }
     }
 
-    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     // The width `tab_bar` takes.
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     fn tabs_width(&self, p: &Painter, lang: Lang) -> f32 {
@@ -974,6 +973,7 @@ impl Model {
         words - 28.0 + keys
     }
 
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     fn tab_bar(&mut self, ui: &Ui, p: &Painter, at: egui::Pos2, lang: Lang) {
         let all = [
             (super::Tab::Settings, "tab_settings"),
