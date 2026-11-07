@@ -1050,6 +1050,7 @@ impl Model {
             gap: ROW * 1.1,
             cell_w: 0.0,
             cell_h: 48.0,
+            one_line: false,
         };
         if let Some(o) = theme::value_ctl(
             ui,
@@ -1215,6 +1216,7 @@ impl Model {
                     gap: ROW * 1.1,
                     cell_w: 0.0,
                     cell_h: 48.0,
+                    one_line: false,
                 };
                 if let Some(theme::CtlOut::Pick(i)) =
                     theme::value_ctl(ui, &p, Id::unique("saves cfg"), cr, &ctl, focused, &st)
@@ -1283,6 +1285,7 @@ impl Model {
                     gap: ROW * 1.1,
                     cell_w: 0.0,
                     cell_h: 48.0,
+                    one_line: false,
                 };
                 if let Some(theme::CtlOut::Pick(i)) =
                     theme::value_ctl(ui, &p, Id::unique("dev ctl"), cr, &ctl, focused, &st)
@@ -1410,6 +1413,7 @@ impl Model {
             gap: ROW * 1.1,
             cell_w: 0.0,
             cell_h: 48.0,
+            one_line: false,
         };
         let n = words.len();
         let ctl = Ctl::Choices {

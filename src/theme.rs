@@ -378,6 +378,31 @@ pub fn shadowed(p: &Painter, pos: Pos2, g: Arc<Galley>, color: Color32) {
     p.galley_with_override_text_color(pos, g, color);
 }
 
+// `text` wrapped at most `w` wide with its lines evened out: the same line count at the narrowest width that
+// keeps it, so a last line never holds a lone word.
+pub fn balanced(p: &Painter, text: &str, font: FontId, color: Color32, w: f32) -> Arc<Galley> {
+    let w = w.max(10.0);
+    let full = p.layout(text.to_string(), font.clone(), color, w);
+    let n = full.rows.len();
+    if n < 2 {
+        return full;
+    }
+    let (mut lo, mut hi) = (w * 0.4, w);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if p.layout(text.to_string(), font.clone(), color, mid)
+            .rows
+            .len()
+            > n
+        {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    p.layout(text.to_string(), font, color, hi.ceil())
+}
+
 pub fn layout(p: &Painter, text: &str, font: FontId, wrap: f32) -> Arc<Galley> {
     p.layout(text.to_string(), font, TEXT, wrap)
 }
@@ -737,6 +762,8 @@ pub struct CtlStyle {
     pub cell_w: f32,
     // Phone choice cells: the least cell height.
     pub cell_h: f32,
+    // Choice words stay on one line: when they do not fit, the row shows a ◀ value ▶ stepper instead.
+    pub one_line: bool,
 }
 
 fn hit(ui: &Ui, id: egui::Id, r: Rect, sense: egui::Sense) -> Response {
@@ -759,7 +786,7 @@ pub fn value_ctl(
     let mut out = None;
     match ctl {
         Ctl::None => {}
-        Ctl::Choices { words, sel } if words.len() > MAX_WORDS => {
+        Ctl::Choices { words, sel } if steps(p, words, st, rect.width()) => {
             let word = sel.and_then(|i| words.get(i)).cloned().unwrap_or_default();
             out = stepper(ui, p, id, rect, st, focused, |p, r| {
                 // A single word wider than the middle is set smaller (to 60 %) rather than overflowing.
@@ -846,7 +873,8 @@ pub fn value_ctl(
             if st.cells {
                 out = stepper(ui, p, id, rect, st, focused, |p, r| {
                     let tr = egui::Rangef::new(r.min.x + 22.0, r.max.x - numw - 12.0);
-                    if tr.span() > 60.0 {
+                    // A track shorter than this reads as a stray line: the stepper then shows the value alone.
+                    if tr.span() >= 120.0 {
                         track(p, tr, cy, *frac, focused);
                         num(p, r.max.x - 8.0);
                     } else {
@@ -863,7 +891,9 @@ pub fn value_ctl(
                     rect.min.x + st.cell_w + 22.0..=rect.max.x - st.cell_w - numw - 12.0,
                     rect.y_range(),
                 );
-                if let Some(f) = drag(ui, id, tr) {
+                if tr.width() >= 120.0
+                    && let Some(f) = drag(ui, id, tr)
+                {
                     out = Some(CtlOut::Frac(f));
                 }
             } else {
@@ -918,6 +948,12 @@ pub fn value_ctl(
 
 // Enums with more values than this get a stepper; fewer show all their words (the menus' one rule).
 pub const MAX_WORDS: usize = 5;
+
+// The choice words of a row `room` points wide show as a stepper: too many of them, or more than one line of them
+// in a one-line style.
+fn steps(p: &Painter, words: &[String], st: &CtlStyle, room: f32) -> bool {
+    words.len() > MAX_WORDS || (st.one_line && choice_layout(p, words, st, room).1 > 1)
+}
 
 // Height of one line of choice words.
 fn line_h(st: &CtlStyle) -> f32 {
@@ -994,7 +1030,7 @@ fn choice_layout(p: &Painter, words: &[String], st: &CtlStyle, room: f32) -> (Ve
 // The widest single choice word of `ctl` (0 for other controls): a column narrower than this cannot hold it.
 pub fn widest_word(p: &Painter, ctl: &Ctl, st: &CtlStyle) -> f32 {
     match ctl {
-        Ctl::Choices { words, .. } if words.len() <= MAX_WORDS => words
+        Ctl::Choices { words, .. } if words.len() <= MAX_WORDS && !st.one_line => words
             .iter()
             .map(|w| {
                 let x = p.layout_no_wrap(w.clone(), serif(st.size), TEXT).size().x;
@@ -1012,7 +1048,7 @@ pub fn widest_word(p: &Painter, ctl: &Ctl, st: &CtlStyle) -> f32 {
 // The height a control needs in a row `w` points wide.
 pub fn ctl_height(p: &Painter, ctl: &Ctl, st: &CtlStyle, w: f32) -> f32 {
     match ctl {
-        Ctl::Choices { words, .. } if words.len() <= MAX_WORDS => {
+        Ctl::Choices { words, .. } if !steps(p, words, st, w) => {
             choice_layout(p, words, st, w).1 as f32 * line_h(st)
         }
         Ctl::None => 0.0,

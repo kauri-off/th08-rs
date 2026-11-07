@@ -314,6 +314,7 @@ impl Model {
             gap: size * 1.1,
             cell_w: 0.0,
             cell_h: 48.0,
+            one_line: false,
         };
         let cr = egui::Rect::from_x_y_ranges(wx..=row.max.x, row.y_range());
         let ctl = theme::Ctl::Choices {
@@ -595,6 +596,7 @@ impl Model {
                     gap: theme::BODY * 1.2,
                     cell_w: 0.0,
                     cell_h: 48.0,
+                    one_line: false,
                 };
                 let cr = egui::Rect::from_x_y_ranges(r.min.x + 170.0..=r.max.x, r.y_range());
                 match theme::value_ctl(

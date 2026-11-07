@@ -1440,6 +1440,7 @@ fn item_ctl_layout(
         gap: size * 0.93,
         cell_w: 0.0,
         cell_h: 48.0,
+        one_line: false,
     };
     // The control starts a word's gap after the label when the label is wider than its column; right-aligned
     // choice words may use the whole width after the label.
@@ -1556,22 +1557,10 @@ fn confirm_height(p: &Painter, w: f32, ask: Ask, cm: &CardMetrics, words: &Words
         Ask::Quit => ("quit_ask", "quit_note"),
     };
     let qs = cm.row * 1.14;
-    let qh = p
-        .layout(
-            words.ui(q).to_string(),
-            theme::serif(qs),
-            theme::QUESTION,
-            w,
-        )
+    let qh = theme::balanced(p, words.ui(q), theme::serif(qs), theme::QUESTION, w)
         .size()
         .y;
-    let nh = p
-        .layout(
-            words.ui(note).to_string(),
-            theme::sans(cm.help),
-            theme::HELP_HI,
-            w.max(10.0),
-        )
+    let nh = theme::balanced(p, words.ui(note), theme::sans(cm.help), theme::HELP_HI, w)
         .size()
         .y;
     qh + qs * 0.3 + nh + cm.help * 0.9 + 2.0 * cm.row_h
@@ -1600,16 +1589,13 @@ fn confirm_block(
     };
     let mut cy = y;
     let qs = cm.row * 1.14;
-    let g = p.layout(
-        words.ui(q).to_string(),
-        theme::serif(qs),
-        theme::QUESTION,
-        w,
-    );
+    let g = theme::balanced(p, words.ui(q), theme::serif(qs), theme::QUESTION, w);
     let gh = g.size().y;
     theme::outlined(p, pos2(x, cy), g, theme::QUESTION, false);
     cy += gh + qs * 0.3;
-    cy += sans_text(p, pos2(x, cy), words.ui(note), cm.help, theme::HELP_HI, w);
+    let g = theme::balanced(p, words.ui(note), theme::sans(cm.help), theme::HELP_HI, w);
+    cy += g.size().y;
+    theme::shadowed(p, pos2(x, cy - g.size().y), g, theme::HELP_HI);
     cy += cm.help * 0.9;
     let rh = cm.row_h;
     for (i, (id, yes)) in [("keep_playing", false), (act, true)]
@@ -1709,10 +1695,7 @@ fn list_card(
         let x = pf.center().x - 14.0 * geo.gs / 2.0 - w / 2.0;
         let soft = Rect::from_min_max(
             pos2(x - 64.0, pf.min.y + 40.0),
-            pos2(
-                x + w + 56.0,
-                pf.min.y + 40.0 + 590.0f32.min(pf.height() - 40.0),
-            ),
+            pos2(x + w + 56.0, geo.game(0.0, 352.0, 0.0, 0.0).min.y),
         );
         theme::soft_rect(p, soft, 60.0, egui::Color32::from_black_alpha(90));
         (x, w, (x - 24.0, x + w + 16.0), geo.frame.min.y + 80.0)
@@ -1804,10 +1787,11 @@ fn list_card(
         theme::HELP_HI,
         w,
     );
-    let rule_y = notes_y
-        - if short { 10.0 } else { 18.0 }
-        - help_g.size().y
-        - if short { 8.0 } else { 14.0 };
+    let rule_y = if pillar {
+        notes_y - if short { 10.0 } else { 18.0 } - help_g.size().y - if short { 8.0 } else { 14.0 }
+    } else {
+        geo.game(0.0, 336.0, 0.0, 0.0).min.y + 12.0
+    };
     let mids = items
         .iter()
         .filter(|i| !matches!(i, Item::Resume) && !i.danger())
@@ -1826,12 +1810,13 @@ fn list_card(
     };
     let mut rh = cm.row_h;
     let min_rh = if short { cm.row * 1.35 } else { 48.0 };
-    // The question's two answers stay at least 48 dp tall on a touch screen.
-    let ask_rh = |rh: f32| {
+    // The question's two answers keep a full row each (their words never meet), at least 48 dp on touch.
+    let ask_row = {
+        let h = cm.row_h.max(cm.row * 1.07 * 1.6);
         if lay.touch {
-            rh.max(lay.font(0.0, 48.0))
+            h.max(lay.font(0.0, 48.0))
         } else {
-            rh
+            h
         }
     };
     // The question's block replaces the two danger rows while asked.
@@ -1841,42 +1826,37 @@ fn list_card(
             w,
             a,
             &CardMetrics {
-                row_h: ask_rh(min_rh),
+                row_h: ask_row,
                 ..*cm
             },
             words,
         ) + 6.0
     });
-    let mut hide_mids = false;
-    if pillar {
-        let room = rule_y - 12.0 - y - tall(Item::Resume, cm.resume_h) - gaps;
-        // Japanese danger rows carry the original's Latin caption and are a third taller.
-        let tall_k = tall(Item::Retry, 1.0);
-        // Rows whose choice words wrap are taller than `rh`.
-        let grow = |rh: f32| -> f32 {
-            items
-                .iter()
-                .filter(|i| !matches!(i, Item::Resume) && !i.danger())
-                .map(|&it| (item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0 - rh).max(0.0))
-                .sum()
-        };
-        let need = |rh: f32| {
-            if focus.ask.is_some() {
-                mids * rh + ask_h + grow(rh)
-            } else {
-                mids * rh + dangers * rh * tall_k + grow(rh)
-            }
-        };
-        if need(rh) > room {
-            let per = if focus.ask.is_some() {
-                mids
-            } else {
-                mids + dangers * tall_k
-            };
-            rh = rh.min(((room - need(0.0)) / per).max(min_rh));
+    // The rows end above `rule_y`: the pillar's pinned bottom block, or on 4:3 the upper two-thirds of the
+    // playfield (the original pause items end there), clear of the player.
+    let room = rule_y - 12.0 - y - tall(Item::Resume, cm.resume_h) - gaps;
+    // Japanese danger rows carry the original's Latin caption and are a third taller.
+    let tall_k = tall(Item::Retry, 1.0);
+    // Rows whose choice words wrap are taller than `rh`.
+    let grow = |rh: f32| -> f32 {
+        items
+            .iter()
+            .filter(|i| !matches!(i, Item::Resume) && !i.danger())
+            .map(|&it| (item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0 - rh).max(0.0))
+            .sum()
+    };
+    let need = |rh: f32| {
+        if focus.ask.is_some() {
+            mids * rh + ask_h + grow(rh)
+        } else {
+            mids * rh + dangers * rh * tall_k + grow(rh)
         }
-        // Still no room for the question: it hides the items above it (as on the phone).
-        hide_mids = focus.ask.is_some() && need(rh) > room;
+    };
+    // While asked, a short card drops the dimmed items above the question before it squeezes anything.
+    let hide_mids = focus.ask.is_some() && need(rh) > room;
+    if !hide_mids && need(rh) > room {
+        let per = mids + dangers * tall_k;
+        rh = rh.min(((room - need(0.0)) / per).max(min_rh));
     }
     let dimmed = focus.ask.is_some();
     let mut op = p.clone();
@@ -1933,16 +1913,19 @@ fn list_card(
         y += r.height();
     }
     if dangers > 0.0 {
-        y += gk * if pillar { 22.0 } else { 14.0 };
-        theme::rule(p, egui::Rangef::new(x, x + w), y);
-        y += gk * if pillar { 10.0 } else { 6.0 };
+        // With the items hidden the rule under Resume already parts it from the question.
+        if !hide_mids {
+            y += gk * if pillar { 22.0 } else { 14.0 };
+            theme::rule(p, egui::Rangef::new(x, x + w), y);
+            y += gk * if pillar { 10.0 } else { 6.0 };
+        }
         if let Some(ask) = focus.ask {
             y += 6.0;
             let cmr = CardMetrics {
-                row_h: ask_rh(rh),
+                row_h: ask_row,
                 ..*cm
             };
-            y += confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
+            confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
         } else {
             for &it in items.iter().filter(|i| i.danger()) {
                 let r = row(y, tall(it, rh));
@@ -2011,32 +1994,43 @@ fn list_card(
             w,
         );
     } else {
-        y += if dangers > 0.0 { 16.0 } else { 14.0 };
-        theme::rule(p, span, y);
-        y += 10.0;
-        for n in &notes {
-            y += sans_text(p, pos2(x, y), n, cm.status, theme::HELP_HI, w) + 6.0;
-        }
-        y += sans_text(
-            p,
-            pos2(x, y),
-            &words.device(m, lay),
-            cm.status,
-            theme::HELP,
-            w,
-        ) + 14.0;
+        // 4:3: the notes, device and key hints sit at the foot of the HUD column (over the logo), never on the
+        // playfield's lower third where the player is.
+        let hud = geo.game(432.0, 16.0, 192.0, 448.0);
+        let (hx, hw) = (hud.min.x + 12.0, hud.width() - 24.0);
         let which = if focus.ask.is_some() {
             Hints::Confirm
         } else {
             Hints::Card
         };
-        draw_hints(
+        let hints = hint_items(words, m, lay, &which);
+        let hl = if hints.is_empty() {
+            0.0
+        } else {
+            hint_lines(p, &hints, cm.hint, hw)
+        };
+        let dev = words.device(m, lay);
+        let text_h = |t: &str, size: f32| {
+            p.layout(t.to_string(), theme::sans(size), theme::HELP, hw)
+                .size()
+                .y
+        };
+        let notes_h: f32 = notes.iter().map(|n| text_h(n, cm.status) + 6.0).sum();
+        let block = notes_h + text_h(&dev, cm.status) + 14.0 + hl * cm.hint * 1.7;
+        let mut fy = hud.max.y - 16.0 - block;
+        theme::soft_rect(
             p,
-            pos2(x, y),
-            &hint_items(words, m, lay, &which),
-            cm.hint,
-            w,
+            Rect::from_min_max(pos2(hud.min.x, fy - 16.0), pos2(hud.max.x, hud.max.y)),
+            20.0,
+            egui::Color32::from_black_alpha(215),
         );
+        for n in &notes {
+            fy += sans_text(p, pos2(hx, fy), n, cm.status, theme::HELP_HI, hw) + 6.0;
+        }
+        fy += sans_text(p, pos2(hx, fy), &dev, cm.status, theme::HELP, hw) + 14.0;
+        if !hints.is_empty() {
+            draw_hints(p, pos2(hx, fy), &hints, cm.hint, hw);
+        }
     }
 }
 
@@ -2295,6 +2289,7 @@ fn split_card(
                 gap: lab,
                 cell_w: 0.0,
                 cell_h: 48.0,
+                one_line: false,
             };
             let res = match &ctl {
                 Ctl::Slider { frac, text, unit } => {
@@ -2549,11 +2544,12 @@ fn wide_head(
     let top = geo.safe.min.y;
     let f = |mock, dp| lay.font(mock, dp);
     let p = p.clone();
+    // 4:3: the panel takes the HUD and the playfield right of the player's lane (game x 300), so the dimmed
+    // playfield stays in view.
     let px = if lay.shape == Shape::Pillar {
         geo.frame.min.x + 421.33 * geo.gs
     } else {
-        let pw = 972.0f32.min(geo.safe.width() - 32.0);
-        geo.safe.center().x - pw / 2.0
+        geo.frame.min.x + 300.0 * geo.gs
     };
     let panel = Rect::from_x_y_ranges(px..=geo.screen.max.x, geo.screen.y_range());
     theme::lacquer(&p, panel, Edge::Left);
@@ -2749,8 +2745,11 @@ fn settings_ui(
     let keys = model.live_rows(g);
     focus.row = focus.row.min(keys.len() + 1);
     // Bottom block: help line (and on desktop the hints and device line).
+    // Touch has no hover: the help line follows the last tapped row (the first one at open).
     let help_row = if focus.input.bar() {
         focus.row
+    } else if lay.touch {
+        focus.row.max(1)
     } else {
         match focus.input.hovered() {
             Some(Hit::Row(r)) => r,
@@ -2779,7 +2778,15 @@ fn settings_ui(
         .iter()
         .map(|k| model.row_text(k, words.lang).0)
         .collect();
-    let label_w = theme::label_width(&p, &labels, &font, pm.label_w.min(w * 0.36), w * 0.5);
+    // A narrow rows panel (phone side bar, 4:3 beside the playfield) keeps every value on one line: choices that
+    // do not fit become a ◀ value ▶ stepper, and the labels get the wider share.
+    let narrow = w < 720.0;
+    let base = if narrow {
+        w * 0.42
+    } else {
+        pm.label_w.min(w * 0.36)
+    };
+    let label_w = theme::label_width(&p, &labels, &font, base, w * 0.5);
     let st = CtlStyle {
         size: pm.row * 0.96,
         num: if split { pm.row } else { pm.row * 0.8 },
@@ -2792,6 +2799,7 @@ fn settings_ui(
         gap: pm.row * 1.2,
         cell_w: if split { 120.0 } else { 0.0 },
         cell_h: 48.0,
+        one_line: narrow,
     };
     let pad = if split { 24.0 } else { 16.0 };
     let mut tops = Vec::with_capacity(n + 1);
@@ -2807,15 +2815,22 @@ fn settings_ui(
             .size()
             .y;
         let col = w - label_w;
-        let stack = theme::widest_word(&p, &ctl, &st) > col;
+        // The phone side bar sets every label above its value, the value on one line across the bar.
+        let stack = split || theme::widest_word(&p, &ctl, &st) > col;
         stacked.push(stack);
-        y += pitch(if stack {
+        y += if split {
             label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y
                 + theme::ctl_height(&p, &ctl, &st, w)
                 + pad
+        } else if stack {
+            pitch(
+                label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y
+                    + theme::ctl_height(&p, &ctl, &st, w)
+                    + pad,
+            )
         } else {
-            (lh + pad).max(theme::ctl_height(&p, &ctl, &st, col) + pad)
-        });
+            pitch((lh + pad).max(theme::ctl_height(&p, &ctl, &st, col) + pad))
+        };
     }
     y += 12.0;
     tops.push(y);
@@ -2959,11 +2974,16 @@ fn settings_ui(
     if shown > 0.5 {
         mark(list.min.y - 2.0, false);
     }
+    // The list ends under its last whole row: the ▾ and the help line follow it rather than a gap.
+    let end = (0..=n)
+        .rev()
+        .find(|&i| i > 0 && visible(i - 1))
+        .map_or(bottom, |i| (top + tops[i]).min(bottom));
     if (0..n).any(|i| tops[i] >= shown - 0.5 && !visible(i)) {
-        mark(bottom + 2.0, true);
+        mark(end + 2.0, true);
     }
     ui.set_clip_rect(ui_clip);
-    let by = bottom + 14.0;
+    let by = end + 14.0;
     theme::rule(&p, egui::Rangef::new(x, x + w), by);
     theme::shadowed(&p, pos2(x, by + 14.0), help_g, theme::HELP_HI);
     if !split {
