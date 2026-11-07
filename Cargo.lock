@@ -3261,7 +3261,7 @@ dependencies = [
 
 [[package]]
 name = "th08"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ab_glyph",
  "android_logger",
