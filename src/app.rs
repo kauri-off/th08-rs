@@ -287,6 +287,8 @@ impl ApplicationHandler<UserEvent> for App {
             el.create_window(window_attrs(self.setup.scale, self.display.fullscreen))
                 .expect("window"),
         );
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        crate::icon::created(&window);
         self.window = Some(window.clone());
         let display = el.owned_display_handle();
         self.display_handle = Some(display.clone());
@@ -2124,6 +2126,8 @@ fn is_fullscreen_key(alt: bool, key: PhysicalKey) -> bool {
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn window_attrs(scale: u32, fullscreen: bool) -> winit::window::WindowAttributes {
     let attrs = Window::default_attributes().with_title("th08");
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    let attrs = crate::icon::attrs(attrs);
     #[cfg(not(target_arch = "wasm32"))]
     let attrs = {
         let k = f64::from(scale);

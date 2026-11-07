@@ -74,6 +74,11 @@ gilrs = "0.11.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gilrs = { version = "0.11.2", optional = true }
+# The window's icon on Wayland (icon/wayland.rs): winit's own Wayland crates, libwayland dlopened as winit does.
+wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
+rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
 th08-testkit = { path = "crates/th08-testkit" }

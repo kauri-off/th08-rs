@@ -6,6 +6,8 @@ pub mod discord;
 #[cfg(target_os = "android")]
 pub mod gameimport;
 pub mod i18n;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+pub mod icon;
 pub mod joystick;
 pub mod launcher;
 pub mod nowplaying;
