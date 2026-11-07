@@ -166,4 +166,9 @@
   <string name="stats_cleared">All clear</string>
   <string name="stats_clears">Clear flags</string>
   <string name="stats_clears_hint">A / B: final stage A or B cleared; * also without continues.</string>
+  <string name="settings_tab">Settings</string>
+  <string name="play_help">Start the game with these settings.</string>
+  <string name="device_touch">Touch</string>
+  <string name="word_off">Off</string>
+  <string name="word_on">On</string>
 </resources>

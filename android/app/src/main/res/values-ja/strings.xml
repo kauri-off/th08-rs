@@ -165,4 +165,9 @@
   <string name="stats_cleared">オールクリア</string>
   <string name="stats_clears">クリア状況</string>
   <string name="stats_clears_hint">A / B: 最終ステージ A または B をクリア。* はノーコンティニューでも。</string>
+  <string name="settings_tab">設定</string>
+  <string name="play_help">この設定でゲームを始めます。</string>
+  <string name="device_touch">タッチ</string>
+  <string name="word_off">オフ</string>
+  <string name="word_on">オン</string>
 </resources>

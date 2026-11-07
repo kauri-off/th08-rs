@@ -62,21 +62,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -86,8 +82,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -193,7 +192,6 @@ private fun Entry.show(v: String) = display(v, LocalLang.current, LocalStrings.c
 @Composable
 private fun Setting.errorText(): String? = (e.kind as? Kind.IntRange)?.let { intError(it, value, LocalStrings.current) }
 
-private val BLOCK = RoundedCornerShape(16.dp)
 private val ROW = RoundedCornerShape(4.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -207,72 +205,85 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
     val canPlay = data.ok() && rows.all { it.ok() }
     var info by remember { mutableStateOf<Pair<String, String>?>(null) }
     val showInfo = { title: String, text: String -> info = title to text }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val content: @Composable (PaddingValues) -> Unit = { pad ->
+        when (tab) {
+            1 -> TabList(pad) { Block { ReplaysBlock(rows, act) } }
+            2 -> TabList(pad) { Block { StatsBlock(rows) } }
+            else -> SettingsList(groups, rows, act, showInfo, pad, status = if (wide) null else ({
+                LocalUpdate.current.takeIf { it.shown }?.let { UpdateRow(it, act) }
+                LocalLastError.current?.let { LastErrorRow(it, act) }
+                StatusRow(data, act, showInfo)
+            }))
+        }
+    }
     if (wide) {
-        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                Column(
-                    Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(str(R.string.title), style = MaterialTheme.typography.headlineMedium)
-                            Text(str(R.string.subtitle), style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            VersionLine()
-                        }
-                        ResetMenu(act)
-                    }
+        // Landscape: heading, game data and Play in the left column (Play low, in thumb reach); tabs over the rows;
+        // the title down a strip at the right edge.
+        Surface(color = Lacquer.Panel, contentColor = Lacquer.Text, modifier = Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.weight(0.31f).fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                    .padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    HeadingToken(str(R.string.title), "${str(R.string.subtitle)} · ${BuildConfig.VERSION_NAME}",
+                        Modifier.weight(1f))
+                    ResetMenu(act)
+                }
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
                     LocalUpdate.current.takeIf { it.shown }?.let { Block { UpdateRow(it, act) } }
                     LocalLastError.current?.let { Block { LastErrorRow(it, act) } }
                     Block { StatusRow(data, act, showInfo) }
-                    PlayButton(canPlay, act)
                 }
-                Box(Modifier.weight(0.6f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                    SettingsList(groups, rows, act, showInfo, PaddingValues(16.dp), status = null)
-                }
+                PlayRow(canPlay, act)
+                Text(str(R.string.play_help), style = MaterialTheme.typography.bodyMedium, color = Lacquer.HelpHi,
+                    modifier = Modifier.padding(top = 6.dp))
+                Text(str(R.string.device_touch), style = MaterialTheme.typography.labelSmall, color = Lacquer.Help,
+                    modifier = Modifier.padding(top = 6.dp))
             }
+            Box(Modifier.padding(vertical = 16.dp).width(1.dp).fillMaxHeight().background(Lacquer.Rule))
+            Column(
+                Modifier.weight(0.51f).fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical))
+                    .padding(start = 20.dp, end = 8.dp),
+            ) {
+                Tabs(tab) { tab = it }
+                content(PaddingValues(top = 4.dp, bottom = 16.dp))
+            }
+            TitleStrip(Modifier.weight(0.18f).fillMaxHeight())
+        }
         }
     } else {
-        val scroll = TopAppBarDefaults.pinnedScrollBehavior()
         Scaffold(
-            modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = Lacquer.Panel,
+            contentColor = Lacquer.Text,
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(str(R.string.title))
-                            VersionLine()
-                        }
-                    },
-                    actions = { ResetMenu(act) },
-                    scrollBehavior = scroll,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
-                )
+                Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))
+                    .padding(start = 16.dp, end = 4.dp, top = 12.dp)) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        HeadingToken(str(R.string.title), "${str(R.string.subtitle)} · ${BuildConfig.VERSION_NAME}",
+                            Modifier.weight(1f))
+                        ResetMenu(act)
+                    }
+                    Tabs(tab) { tab = it }
+                }
             },
             bottomBar = {
-                Surface(color = MaterialTheme.colorScheme.surface) {
+                Surface(color = Lacquer.Panel) {
                     Box(
                         Modifier.fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
                         contentAlignment = Alignment.Center,
-                    ) { PlayButton(canPlay, act, Modifier.widthIn(max = 640.dp)) }
+                    ) { PlayRow(canPlay, act, Modifier.widthIn(max = 640.dp)) }
                 }
             },
         ) { pad ->
             Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.TopCenter) {
-                SettingsList(groups, rows, act, showInfo, PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    status = {
-                        LocalUpdate.current.takeIf { it.shown }?.let { UpdateRow(it, act) }
-                        LocalLastError.current?.let { LastErrorRow(it, act) }
-                        StatusRow(data, act, showInfo)
-                    })
+                content(PaddingValues(horizontal = 16.dp, vertical = 8.dp))
             }
         }
     }
@@ -290,19 +301,74 @@ private fun ResetMenu(act: LauncherActions) {
     }
 }
 
+// The heading token: the serif title, its lavender caption below at the same left edge.
 @Composable
-private fun PlayButton(enabled: Boolean, act: LauncherActions, modifier: Modifier = Modifier) {
-    Button(
-        onClick = act::play, enabled = enabled, modifier = modifier.fillMaxWidth().height(56.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-    ) {
-        Icon(Icons.Default.PlayArrow, null)
-        Spacer(Modifier.width(8.dp))
-        Text(str(R.string.play), style = MaterialTheme.typography.titleMedium)
+private fun HeadingToken(word: String, caption: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(word, style = MaterialTheme.typography.titleLarge, color = Lacquer.TextHi)
+        Text(caption, style = MaterialTheme.typography.titleSmall.copy(shadow = Shadow(Lacquer.Glow, Offset.Zero, 6f)),
+            color = Lacquer.Accent)
     }
+}
+
+// Play as the focused row: the band, the lavender tick, the word in white.
+@Composable
+private fun PlayRow(enabled: Boolean, act: LauncherActions, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().height(64.dp).background(if (enabled) Lacquer.Band else Lacquer.Cell)
+            .clickable(enabled = enabled, onClick = act::play),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(4.dp).height(38.dp).background(if (enabled) Lacquer.Accent else Lacquer.Disabled))
+        Spacer(Modifier.width(16.dp))
+        Text(str(R.string.play), style = MaterialTheme.typography.headlineSmall,
+            color = if (enabled) Lacquer.TextHi else Lacquer.Disabled)
+    }
+}
+
+// Underline tabs: Settings / Replays / Stats, 48 dp tall, the selected word white with a lavender line.
+@Composable
+private fun Tabs(selected: Int, pick: (Int) -> Unit) {
+    val names = listOf(str(R.string.settings_tab), str(R.string.replays_title), str(R.string.stats_title))
+    Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        names.forEachIndexed { i, n ->
+            val sel = i == selected
+            Column(
+                Modifier.heightIn(min = 48.dp).clickable { pick(i) }.padding(end = 28.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(n, style = MaterialTheme.typography.titleMedium, color = if (sel) Lacquer.TextHi else Lacquer.Help)
+                Box(Modifier.padding(top = 4.dp).height(2.dp).width(if (sel) 48.dp else 0.dp).background(Lacquer.Accent))
+            }
+        }
+    }
+    Rule()
+}
+
+@Composable
+private fun Rule(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(1.dp).background(Lacquer.Rule))
+}
+
+// The title down the right edge in the menu face, fading in from the panel.
+@Composable
+private fun TitleStrip(modifier: Modifier) {
+    Box(
+        modifier.background(Brush.horizontalGradient(listOf(Lacquer.Panel, Lacquer.Bg))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            "東方永夜抄".forEach { c ->
+                Text(c.toString(), style = MaterialTheme.typography.displaySmall.copy(fontSize = 52.sp,
+                    shadow = Shadow(Lacquer.Glow, Offset(0f, 0f), 18f)), color = Color(0xFFB8AEC0))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabList(pad: PaddingValues, content: @Composable () -> Unit) {
+    LazyColumn(Modifier.widthIn(max = 720.dp).fillMaxSize(), contentPadding = pad) { item { content() } }
 }
 
 @Composable
@@ -318,20 +384,12 @@ private fun SettingsList(
     val player = rows.filterNot { it.e.developer }
     val dev = rows.filter { it.e.developer }
     LazyColumn(
-        modifier = Modifier.widthIn(max = 640.dp).fillMaxSize(),
+        modifier = Modifier.widthIn(max = 720.dp).fillMaxSize(),
         contentPadding = pad,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         if (status != null) item(key = "status") { Block { status() } }
         groupBlocks(groups, player, act, showInfo)
-        item(key = "replays") {
-            Header(str(R.string.replays_title))
-            Block { ReplaysBlock(rows, act) }
-        }
-        item(key = "stats") {
-            Header(str(R.string.stats_title))
-            Block { StatsBlock(rows) }
-        }
         item(key = "saves") {
             Header(str(R.string.saves_title))
             SavesBlock(act)
@@ -374,16 +432,20 @@ private fun LazyListScope.groupBlocks(
     }
 }
 
+// A group title: a small lavender serif caption over a rule.
 @Composable
 private fun Header(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp))
+    Column(Modifier.padding(top = 18.dp, bottom = 2.dp)) {
+        Text(text, style = MaterialTheme.typography.titleSmall.copy(shadow = Shadow(Lacquer.Glow, Offset.Zero, 6f)),
+            color = Lacquer.Accent, modifier = Modifier.padding(bottom = 6.dp))
+        Rule()
+    }
 }
 
-// Segmented block: rows 2dp apart on surfaceContainer, the block's outer corners rounded.
+// Rows on the panel, one under the other.
 @Composable
 private fun Block(content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(BLOCK), verticalArrangement = Arrangement.spacedBy(2.dp)) { content() }
+    Column(Modifier.fillMaxWidth()) { content() }
 }
 
 @Composable
@@ -396,16 +458,14 @@ internal fun ShellRow(
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Column(
-        modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.surfaceContainer)
-            .heightIn(min = 64.dp).padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+        modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 0.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalArrangement = Arrangement.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(title, style = MaterialTheme.typography.bodyLarge, color = Lacquer.Text)
                 if (!summary.isNullOrEmpty()) {
-                    Text(summary, style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = Lacquer.Help)
                 }
             }
             if (info != null) {
@@ -562,23 +622,25 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
     val opts = e.options()?.let { it + packs.keys.filter { k -> k !in it } }
     val shown: @Composable (String) -> String = { v -> packs[v] ?: e.show(v) }
     when {
-        e.kind == Kind.Bool -> ShellRow(
-            t.label, t.summary, info = info,
-            modifier = Modifier.toggleable(r.value == "on", role = Role.Switch) { act.change(r, if (it) "on" else "off") },
-        ) { Switch(checked = r.value == "on", onCheckedChange = null) }
-        // 2–3 options: segmented buttons in the row.
-        opts != null && opts.size <= 3 && e.key != "game_text" -> ShellRow(t.label, t.summary, info = info, below = {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                opts.forEachIndexed { i, v ->
-                    SegmentedButton(
-                        selected = r.value == v,
-                        onClick = { act.change(r, v) },
-                        shape = SegmentedButtonDefaults.itemShape(i, opts.size),
-                        colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
-                    ) { Text(e.show(v), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        e.kind == Kind.Bool -> ShellRow(t.label, t.summary, info = info) {
+            WordCells(listOf(str(R.string.word_off), str(R.string.word_on)), if (r.value == "on") 1 else 0) {
+                act.change(r, if (it == 1) "on" else "off")
+            }
+        }
+        // 2–4 options: the words in the row, the chosen one white.
+        opts != null && opts.size <= 4 && e.key != "game_text" -> ShellRow(t.label, t.summary, info = info, below = {
+            WordCells(opts.map { e.show(it) }, opts.indexOf(r.value)) { act.change(r, opts[it]) }
+        })
+        e.kind is Kind.IntRange && (e.kind as Kind.IntRange).let { it.max - it.min <= 400 } -> {
+            val k = e.kind as Kind.IntRange
+            ShellRow(t.label, t.summary, info = info) {
+                Stepper(shown(r.value), { editing = true }) { d ->
+                    val n = (r.value.toLongOrNull() ?: k.min) + d * (if (k.max - k.min > 16) 5L else 1L)
+                    act.change(r, n.coerceIn(k.min, k.max).toString())
                 }
             }
-        })
+            if (editing) SliderDialog(r, k, act) { editing = false }
+        }
         else -> {
             ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }) {
                 Text(shown(r.value), style = MaterialTheme.typography.labelLarge,
@@ -594,6 +656,39 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
                     else -> TextDialog(r, act, done)
                 }
             }
+        }
+    }
+}
+
+// Choice words in 48 dp cells: the chosen word white, the others dim.
+@Composable
+private fun WordCells(words: List<String>, selected: Int, pick: (Int) -> Unit) {
+    Row(Modifier.selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
+        words.forEachIndexed { i, w ->
+            Box(
+                Modifier.heightIn(min = 48.dp).widthIn(min = 64.dp)
+                    .selectable(i == selected, role = Role.RadioButton) { pick(i) }.padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(w, style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                    color = if (i == selected) Lacquer.TextHi else Lacquer.Dim)
+            }
+        }
+    }
+}
+
+// ◀ value ▶: 48 dp cells; the value opens the exact editor.
+@Composable
+private fun Stepper(value: String, open: () -> Unit, step: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(48.dp).background(Lacquer.Cell).clickable { step(-1) }, contentAlignment = Alignment.Center) {
+            Text("◀", color = Lacquer.Text, fontSize = 14.sp)
+        }
+        Box(Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp).clickable(onClick = open), contentAlignment = Alignment.Center) {
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = Lacquer.TextHi, maxLines = 1)
+        }
+        Box(Modifier.size(48.dp).background(Lacquer.Cell).clickable { step(1) }, contentAlignment = Alignment.Center) {
+            Text("▶", color = Lacquer.Text, fontSize = 14.sp)
         }
     }
 }
