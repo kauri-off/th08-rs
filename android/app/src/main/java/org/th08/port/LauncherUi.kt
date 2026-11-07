@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -291,7 +292,13 @@ private fun ResetMenu(act: LauncherActions) {
 
 @Composable
 private fun PlayButton(enabled: Boolean, act: LauncherActions, modifier: Modifier = Modifier) {
-    Button(onClick = act::play, enabled = enabled, modifier = modifier.fillMaxWidth().height(56.dp)) {
+    Button(
+        onClick = act::play, enabled = enabled, modifier = modifier.fillMaxWidth().height(56.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+    ) {
         Icon(Icons.Default.PlayArrow, null)
         Spacer(Modifier.width(8.dp))
         Text(str(R.string.play), style = MaterialTheme.typography.titleMedium)
@@ -906,24 +913,20 @@ private fun previewRows(): Pair<List<Group>, List<Setting>> {
 }
 
 @Composable
-private fun PreviewScreen(dark: Boolean) {
+private fun PreviewScreen() {
     val (g, rs) = remember { previewRows() }
     val ctx = LocalContext.current
-    Th08Theme(dark) {
+    Th08Theme {
         CompositionLocalProvider(LocalStrings provides ctx.resources) {
             LauncherScreen(g, rs, GameData.Bundled, PreviewActions)
         }
     }
 }
 
-@Preview(name = "Light", widthDp = 412, heightDp = 915)
+@Preview(name = "Launcher", widthDp = 412, heightDp = 915)
 @Composable
-private fun LightPreview() = PreviewScreen(false)
-
-@Preview(name = "Dark", widthDp = 412, heightDp = 915)
-@Composable
-private fun DarkPreview() = PreviewScreen(true)
+private fun LauncherPreview() = PreviewScreen()
 
 @Preview(name = "Landscape", widthDp = 915, heightDp = 412)
 @Composable
-private fun LandscapePreview() = PreviewScreen(false)
+private fun LandscapePreview() = PreviewScreen()
