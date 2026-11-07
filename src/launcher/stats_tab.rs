@@ -1,10 +1,12 @@
 //! Launcher Stats tab: play statistics from stats.jsonl and the score.dat viewer.
 
 use super::Model;
+use super::screen::{caption, note};
 use crate::i18n::{self, Lang};
 use crate::replays::{rank_label, shot_label, stage_label};
 use crate::scoreview::{self, SHOTS, STAGE_CLEARED};
 use crate::stats::{self, EndReason, Mode, Summary};
+use crate::theme;
 
 pub(super) struct StatsTab {
     // None = not read since the tab opened.
@@ -71,35 +73,52 @@ impl Model {
         }
     }
 
-    pub(super) fn stats_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+    pub(super) fn stats_ui(&mut self, ui: &mut egui::Ui, x: f32, w: f32, lang: Lang) {
         if self.st.data.is_none() {
             self.st.data = Some(self.load_stats());
         }
         let on = self.settings().stats;
         let save = self.settings().storage_dir();
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(i18n::ui(lang, "rp_refresh")).clicked() {
-                self.st.data = None;
-            }
-        });
+        if self.action_row(ui, x, w, "rp_refresh", lang) {
+            self.st.data = None;
+            self.st.data = Some(self.load_stats());
+        }
         if !on {
-            ui.colored_label(ui.visuals().warn_fg_color, i18n::ui(lang, "st_off"));
+            note(
+                ui,
+                x,
+                w,
+                i18n::ui(lang, "st_off"),
+                theme::SMALL,
+                theme::WARN,
+            );
         }
         let Some(d) = self.st.data.take() else {
             return;
         };
         if save.is_none() {
-            ui.label(i18n::ui(lang, "st_no_save"));
+            note(
+                ui,
+                x,
+                w,
+                i18n::ui(lang, "st_no_save"),
+                theme::SMALL,
+                theme::HELP,
+            );
         }
-        play_ui(ui, lang, &d);
-        ui.add_space(8.0);
-        ui.heading(i18n::ui(lang, "st_scoredat"));
+        play_ui(ui, x, w, lang, &d);
+        caption(ui, x, w, i18n::ui(lang, "st_scoredat"));
         match &d.view {
-            Ok(v) => self.scoredat_ui(ui, lang, v, &d.names),
+            Ok(v) => self.scoredat_ui(ui, x, w, lang, v, &d.names),
             Err(e) if e.is_empty() => {}
-            Err(e) => {
-                ui.label(i18n::ui_fmt(lang, "st_sd_error", &[("err", e)]));
-            }
+            Err(e) => note(
+                ui,
+                x,
+                w,
+                &i18n::ui_fmt(lang, "st_sd_error", &[("err", e)]),
+                theme::SMALL,
+                theme::DANGER,
+            ),
         }
         self.st.data = Some(d);
     }
@@ -107,246 +126,343 @@ impl Model {
     fn scoredat_ui(
         &mut self,
         ui: &mut egui::Ui,
+        x: f32,
+        w: f32,
         lang: Lang,
         v: &scoreview::View,
         names: &[String],
     ) {
-        egui::CollapsingHeader::new(i18n::ui(lang, "st_scores"))
-            .default_open(true)
-            .show(ui, |ui| {
-                if v.scores.is_empty() {
-                    ui.label(i18n::ui(lang, "st_empty"));
-                }
-                for ((diff, shot), list) in &v.scores {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} · {}",
-                            rank_label(lang, *diff),
-                            shot_label(lang, *shot)
-                        ))
-                        .strong(),
-                    );
-                    egui::Grid::new(("st_hs", diff, shot))
-                        .striped(true)
-                        .spacing([18.0, 4.0])
-                        .num_columns(5)
-                        .show(ui, |ui| {
-                            for (i, e) in list.iter().enumerate() {
-                                ui.label(format!("{}.", i + 1));
-                                ui.label(if e.name.is_empty() { "-" } else { &e.name });
-                                ui.monospace(group_digits(e.score));
-                                ui.label(if e.stage == STAGE_CLEARED {
-                                    i18n::ui(lang, "st_cleared").to_string()
-                                } else {
-                                    stage_label(lang, Some(usize::from(e.stage)))
-                                });
-                                ui.label(&e.date);
-                                ui.end_row();
-                            }
-                        });
-                    ui.add_space(4.0);
-                }
-            });
-        egui::CollapsingHeader::new(i18n::ui(lang, "st_clears"))
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new(i18n::ui(lang, "st_clears_hint")).weak());
-                egui::Grid::new("st_clears")
-                    .striped(true)
-                    .spacing([18.0, 4.0])
-                    .num_columns(6)
-                    .show(ui, |ui| {
-                        ui.label("");
-                        for d in 0..5 {
-                            ui.label(egui::RichText::new(rank_label(lang, d)).strong());
-                        }
-                        ui.end_row();
-                        for (shot, row) in v.clears.iter().enumerate() {
-                            ui.label(shot_label(lang, u8::try_from(shot).unwrap_or(0)));
-                            for c in row {
-                                ui.monospace(c.label());
-                            }
-                            ui.end_row();
-                        }
-                    });
-            });
-        egui::CollapsingHeader::new(i18n::ui(lang, "st_cards"))
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(i18n::ui(lang, "st_shot"));
-                    let label = |k: usize| {
-                        if k == SHOTS {
-                            i18n::ui(lang, "st_all").to_string()
+        sub(ui, x, w, i18n::ui(lang, "st_scores"));
+        if v.scores.is_empty() {
+            note(
+                ui,
+                x,
+                w,
+                i18n::ui(lang, "st_empty"),
+                theme::SMALL,
+                theme::HELP,
+            );
+        }
+        for ((diff, shot), list) in &v.scores {
+            note(
+                ui,
+                x,
+                w,
+                &format!("{} · {}", rank_label(lang, *diff), shot_label(lang, *shot)),
+                theme::BODY,
+                theme::ACCENT,
+            );
+            let rows: Vec<Vec<String>> = list
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    vec![
+                        format!("{}.", i + 1),
+                        if e.name.is_empty() {
+                            "-".into()
                         } else {
-                            shot_label(lang, u8::try_from(k).unwrap_or(0))
-                        }
-                    };
-                    egui::ComboBox::from_id_salt("st_shot")
-                        .selected_text(label(self.st.shot))
-                        .show_ui(ui, |ui| {
-                            for k in (0..=SHOTS).rev() {
-                                ui.selectable_value(&mut self.st.shot, k, label(k));
-                            }
-                        });
-                    ui.checkbox(&mut self.st.all_cards, i18n::ui(lang, "st_cards_all"));
-                });
-                let k = self.st.shot;
-                egui::Grid::new("st_cards")
-                    .striped(true)
-                    .spacing([18.0, 4.0])
-                    .num_columns(4)
-                    .show(ui, |ui| {
-                        for h in ["st_no", "st_card", "st_story", "st_practice"] {
-                            ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
-                        }
-                        ui.end_row();
-                        for c in &v.cards {
-                            if !self.st.all_cards && !c.attempted() {
-                                continue;
-                            }
-                            ui.label(format!("{:03}", c.id + 1));
-                            ui.label(card_label(lang, c.id, names));
-                            ui.monospace(ratio(c.story[k]));
-                            ui.monospace(ratio(c.practice[k]));
-                            ui.end_row();
-                        }
-                    });
-            });
+                            e.name.clone()
+                        },
+                        group_digits(e.score),
+                        if e.stage == STAGE_CLEARED {
+                            i18n::ui(lang, "st_cleared").to_string()
+                        } else {
+                            stage_label(lang, Some(usize::from(e.stage)))
+                        },
+                        e.date.clone(),
+                    ]
+                })
+                .collect();
+            table(ui, x, w, &[], &rows);
+        }
+        sub(ui, x, w, i18n::ui(lang, "st_clears"));
+        note(
+            ui,
+            x,
+            w,
+            i18n::ui(lang, "st_clears_hint"),
+            theme::SMALL,
+            theme::HELP,
+        );
+        let mut head = vec![String::new()];
+        head.extend((0..5).map(|d| rank_label(lang, d)));
+        let rows: Vec<Vec<String>> = v
+            .clears
+            .iter()
+            .enumerate()
+            .map(|(shot, row)| {
+                let mut r = vec![shot_label(lang, u8::try_from(shot).unwrap_or(0))];
+                r.extend(row.iter().map(|c| c.label().to_string()));
+                r
+            })
+            .collect();
+        table(ui, x, w, &head, &rows);
+        sub(ui, x, w, i18n::ui(lang, "st_cards"));
+        let label = |k: usize| {
+            if k == SHOTS {
+                i18n::ui(lang, "st_all").to_string()
+            } else {
+                shot_label(lang, u8::try_from(k).unwrap_or(0))
+            }
+        };
+        // The list runs All, then the teams.
+        let order: Vec<usize> = std::iter::once(SHOTS).chain(0..SHOTS).collect();
+        let words = order.iter().map(|&k| label(k)).collect();
+        let at = order.iter().position(|&k| k == self.st.shot).unwrap_or(0);
+        if let Some(i) = self.choice_row(ui, x, w, "st_shot", lang, words, at) {
+            self.st.shot = order[i];
+        }
+        let words = vec![
+            i18n::ui(lang, "word_off").to_string(),
+            i18n::ui(lang, "word_on").to_string(),
+        ];
+        if let Some(i) = self.choice_row(
+            ui,
+            x,
+            w,
+            "st_cards_all",
+            lang,
+            words,
+            usize::from(self.st.all_cards),
+        ) {
+            self.st.all_cards = i == 1;
+        }
+        let k = self.st.shot;
+        let head: Vec<String> = ["st_no", "st_card", "st_story", "st_practice"]
+            .iter()
+            .map(|h| i18n::ui(lang, h).to_string())
+            .collect();
+        let rows: Vec<Vec<String>> = v
+            .cards
+            .iter()
+            .filter(|c| self.st.all_cards || c.attempted())
+            .map(|c| {
+                vec![
+                    format!("{:03}", c.id + 1),
+                    card_label(lang, c.id, names),
+                    ratio(c.story[k]),
+                    ratio(c.practice[k]),
+                ]
+            })
+            .collect();
+        table(ui, x, w, &head, &rows);
     }
 }
 
-fn play_ui(ui: &mut egui::Ui, lang: Lang, d: &Data) {
+// A sub-caption inside a section: the serif word in the accent colour.
+fn sub(ui: &mut egui::Ui, x: f32, w: f32, text: &str) {
+    let g = ui.painter().layout(
+        text.to_string(),
+        theme::serif(theme::BODY + 2.0),
+        theme::TEXT_HI,
+        w,
+    );
+    let (r, _) = ui.allocate_exact_size(
+        egui::vec2(ui.max_rect().width(), g.size().y + 18.0),
+        egui::Sense::hover(),
+    );
+    theme::outlined(
+        ui.painter(),
+        egui::pos2(x, r.min.y + 12.0),
+        g,
+        theme::TEXT_HI,
+        false,
+    );
+}
+
+// A table in the text column: columns as wide as their widest cell; when they do not fit `w`, each row as one
+// wrapped line ("a · b · c") instead.
+fn table(ui: &mut egui::Ui, x: f32, w: f32, head: &[String], rows: &[Vec<String>]) {
+    let p = ui.painter().clone();
+    let font = theme::sans(theme::BODY - 1.0);
+    let hfont = theme::sans(theme::SMALL);
+    let gap = 18.0;
+    let cols = rows.first().map_or(head.len(), Vec::len).max(head.len());
+    let mut cw = vec![0.0f32; cols];
+    let lay = |t: &str, f: &egui::FontId, c| p.layout_no_wrap(t.to_string(), f.clone(), c);
+    for (i, h) in head.iter().enumerate() {
+        cw[i] = cw[i].max(lay(h, &hfont, theme::HELP).size().x);
+    }
+    for r in rows {
+        for (i, c) in r.iter().enumerate() {
+            cw[i] = cw[i].max(lay(c, &font, theme::TEXT).size().x);
+        }
+    }
+    let total: f32 = cw.iter().sum::<f32>() + gap * (cols.max(1) - 1) as f32;
+    let line = theme::BODY * 1.6;
+    if total <= w {
+        let mut draw = |cells: &[String], f: &egui::FontId, c: egui::Color32| {
+            let (r, _) = ui.allocate_exact_size(
+                egui::vec2(ui.max_rect().width(), line),
+                egui::Sense::hover(),
+            );
+            let mut cx = x;
+            for (i, t) in cells.iter().enumerate() {
+                let g = lay(t, f, c);
+                theme::shadowed(&p, egui::pos2(cx, r.center().y - g.size().y / 2.0), g, c);
+                cx += cw[i] + gap;
+            }
+        };
+        if head.iter().any(|h| !h.is_empty()) {
+            draw(head, &hfont, theme::HELP);
+        }
+        for r in rows {
+            draw(r, &font, theme::TEXT);
+        }
+    } else {
+        for r in rows {
+            let text = r
+                .iter()
+                .filter(|c| !c.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            note(ui, x, w, &text, theme::BODY - 1.0, theme::TEXT);
+        }
+    }
+    ui.add_space(6.0);
+}
+
+fn play_ui(ui: &mut egui::Ui, x: f32, w: f32, lang: Lang, d: &Data) {
     let s = &d.summary;
-    ui.heading(i18n::ui_fmt(
-        lang,
-        "st_playtime",
-        &[
-            ("time", &stats::format_time(s.frames)),
-            ("runs", &s.runs.to_string()),
-        ],
-    ));
+    let head = |keys: &[&str]| -> Vec<String> {
+        keys.iter().map(|k| i18n::ui(lang, k).to_string()).collect()
+    };
+    sub(
+        ui,
+        x,
+        w,
+        &i18n::ui_fmt(
+            lang,
+            "st_playtime",
+            &[
+                ("time", &stats::format_time(s.frames)),
+                ("runs", &s.runs.to_string()),
+            ],
+        ),
+    );
     if s.runs == 0 {
-        ui.label(i18n::ui(lang, "st_none"));
+        note(
+            ui,
+            x,
+            w,
+            i18n::ui(lang, "st_none"),
+            theme::SMALL,
+            theme::HELP,
+        );
         return;
     }
-    egui::CollapsingHeader::new(i18n::ui(lang, "st_by_pair"))
-        .default_open(true)
-        .show(ui, |ui| {
-            egui::Grid::new("st_pairs")
-                .striped(true)
-                .spacing([18.0, 4.0])
-                .num_columns(4)
-                .show(ui, |ui| {
-                    for h in ["st_shot", "st_diff", "st_runs", "st_best"] {
-                        ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
-                    }
-                    ui.end_row();
-                    for ((shot, diff), (n, best)) in &s.by_pair {
-                        ui.label(shot_label(lang, *shot));
-                        ui.label(rank_label(lang, *diff));
-                        ui.monospace(n.to_string());
-                        ui.monospace(group_digits(*best));
-                        ui.end_row();
-                    }
-                });
-        });
-    egui::CollapsingHeader::new(i18n::ui(lang, "st_per_stage"))
-        .default_open(true)
-        .show(ui, |ui| {
-            egui::Grid::new("st_stages")
-                .striped(true)
-                .spacing([18.0, 4.0])
-                .num_columns(3)
-                .show(ui, |ui| {
-                    for h in ["st_stage", "st_deaths", "st_bombs"] {
-                        ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
-                    }
-                    ui.end_row();
-                    for (i, (deaths, bombs)) in s.per_stage.iter().enumerate() {
-                        ui.label(stage_label(lang, Some(i)));
-                        ui.monospace(deaths.to_string());
-                        ui.monospace(bombs.to_string());
-                        ui.end_row();
-                    }
-                });
-        });
-    egui::CollapsingHeader::new(i18n::ui(lang, "st_failed"))
-        .default_open(true)
-        .show(ui, |ui| {
-            if s.failed.is_empty() {
-                ui.label(i18n::ui(lang, "st_empty"));
-                return;
-            }
-            egui::Grid::new("st_failed")
-                .striped(true)
-                .spacing([18.0, 4.0])
-                .num_columns(4)
-                .show(ui, |ui| {
-                    for h in ["st_no", "st_card", "st_failures", "st_capture_rate"] {
-                        ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
-                    }
-                    ui.end_row();
-                    for c in &s.failed {
-                        let name = d
-                            .names
-                            .get(usize::from(c.card))
-                            .filter(|n| !n.is_empty())
-                            .cloned()
-                            .unwrap_or_else(|| c.name.clone());
-                        let name = if name.is_empty() {
-                            card_no(lang, c.card)
-                        } else {
-                            name
-                        };
-                        ui.label(format!("{:03}", c.card + 1));
-                        ui.label(name);
-                        ui.monospace((c.attempts - c.captures).to_string());
-                        ui.monospace(ratio((c.captures, c.attempts)));
-                        ui.end_row();
-                    }
-                });
-        });
-    egui::CollapsingHeader::new(i18n::ui(lang, "st_last"))
-        .default_open(true)
-        .show(ui, |ui| {
-            egui::Grid::new("st_last")
-                .striped(true)
-                .spacing([18.0, 4.0])
-                .num_columns(7)
-                .show(ui, |ui| {
-                    for h in [
-                        "st_date", "st_mode", "st_shot", "st_stage", "st_score", "st_time",
-                        "st_end",
-                    ] {
-                        ui.label(egui::RichText::new(i18n::ui(lang, h)).strong());
-                    }
-                    ui.end_row();
-                    for r in &s.last {
-                        ui.label(date(r.t));
-                        ui.label(mode_label(lang, r.mode));
-                        ui.label(format!(
-                            "{} · {}",
-                            shot_label(lang, r.shot),
-                            rank_label(lang, r.diff)
-                        ));
-                        ui.label(stage_label(lang, Some(usize::from(r.stage))));
-                        ui.monospace(group_digits(r.score));
-                        ui.monospace(stats::format_time(r.frames));
-                        ui.label(end_label(lang, r.reason))
-                            .on_hover_text(i18n::ui_fmt(
-                                lang,
-                                "st_run_detail",
-                                &[
-                                    ("deaths", &r.deaths.to_string()),
-                                    ("bombs", &r.bombs.to_string()),
-                                    ("continues", &r.continues.to_string()),
-                                ],
-                            ));
-                        ui.end_row();
-                    }
-                });
-        });
+    caption(ui, x, w, i18n::ui(lang, "st_by_pair"));
+    let rows: Vec<Vec<String>> = s
+        .by_pair
+        .iter()
+        .map(|((shot, diff), (n, best))| {
+            vec![
+                shot_label(lang, *shot),
+                rank_label(lang, *diff),
+                n.to_string(),
+                group_digits(*best),
+            ]
+        })
+        .collect();
+    table(
+        ui,
+        x,
+        w,
+        &head(&["st_shot", "st_diff", "st_runs", "st_best"]),
+        &rows,
+    );
+    caption(ui, x, w, i18n::ui(lang, "st_per_stage"));
+    let rows: Vec<Vec<String>> = s
+        .per_stage
+        .iter()
+        .enumerate()
+        .map(|(i, (deaths, bombs))| {
+            vec![
+                stage_label(lang, Some(i)),
+                deaths.to_string(),
+                bombs.to_string(),
+            ]
+        })
+        .collect();
+    table(
+        ui,
+        x,
+        w,
+        &head(&["st_stage", "st_deaths", "st_bombs"]),
+        &rows,
+    );
+    caption(ui, x, w, i18n::ui(lang, "st_failed"));
+    if s.failed.is_empty() {
+        note(
+            ui,
+            x,
+            w,
+            i18n::ui(lang, "st_empty"),
+            theme::SMALL,
+            theme::HELP,
+        );
+    } else {
+        let rows: Vec<Vec<String>> = s
+            .failed
+            .iter()
+            .map(|c| {
+                let name = d
+                    .names
+                    .get(usize::from(c.card))
+                    .filter(|n| !n.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| c.name.clone());
+                let name = if name.is_empty() {
+                    card_no(lang, c.card)
+                } else {
+                    name
+                };
+                vec![
+                    format!("{:03}", c.card + 1),
+                    name,
+                    (c.attempts - c.captures).to_string(),
+                    ratio((c.captures, c.attempts)),
+                ]
+            })
+            .collect();
+        table(
+            ui,
+            x,
+            w,
+            &head(&["st_no", "st_card", "st_failures", "st_capture_rate"]),
+            &rows,
+        );
+    }
+    caption(ui, x, w, i18n::ui(lang, "st_last"));
+    let rows: Vec<Vec<String>> = s
+        .last
+        .iter()
+        .map(|r| {
+            vec![
+                date(r.t),
+                mode_label(lang, r.mode).to_string(),
+                format!(
+                    "{} · {}",
+                    shot_label(lang, r.shot),
+                    rank_label(lang, r.diff)
+                ),
+                stage_label(lang, Some(usize::from(r.stage))),
+                group_digits(r.score),
+                stats::format_time(r.frames),
+                end_label(lang, r.reason).to_string(),
+            ]
+        })
+        .collect();
+    table(
+        ui,
+        x,
+        w,
+        &head(&[
+            "st_date", "st_mode", "st_shot", "st_stage", "st_score", "st_time", "st_end",
+        ]),
+        &rows,
+    );
 }
 
 fn card_no(lang: Lang, card: u16) -> String {

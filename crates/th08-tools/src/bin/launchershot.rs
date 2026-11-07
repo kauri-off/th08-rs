@@ -147,9 +147,15 @@ fn main() {
         Some(e) => th08::launcher::View::Error(e),
         None => view,
     };
-    th08::launcher::render_image(&gfx, model, size.unwrap_or((640, 480)), safe)
-        .save(&out)
-        .expect("save png");
+    th08::launcher::render_image(
+        &gfx,
+        model,
+        size.unwrap_or((640, 480)),
+        safe,
+        &th08::launcher::ShotOpts::default(),
+    )
+    .save(&out)
+    .expect("save png");
 }
 
 // The launchershot switches out of the th08 switches.

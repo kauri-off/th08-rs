@@ -267,6 +267,14 @@ enum Do {
 
 const VOLUME: &str = "volume_master";
 
+// A row the pointer can be over: a card item, a settings row, the question's Keep playing (false) / action (true).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hit {
+    Item(Item),
+    Row(usize),
+    Yes(bool),
+}
+
 // Focus: the card item; on the settings page the tab and the row (0 = the tab bar, keys + 1 = "Reset this page").
 #[derive(Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "independent focus flags")]
@@ -285,6 +293,8 @@ struct Focus {
     // Settings rows scrolled by this many points.
     scroll: f32,
     split: bool,
+    // Hover and the last input kind: the focus bar shows only under key / pad input.
+    input: theme::Input<Hit>,
 }
 
 impl Default for Focus {
@@ -300,6 +310,7 @@ impl Default for Focus {
             moved: false,
             scroll: 0.0,
             split: false,
+            input: theme::Input::new(theme::Modality::Keys),
         }
     }
 }
@@ -319,6 +330,20 @@ impl Focus {
 
     fn nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
         self.moved = true;
+        // The first key / pad press after pointer or touch input shows the bar (on the hovered row) and moves nothing.
+        if let Some(hover) = self.input.key() {
+            match hover {
+                Some(Hit::Item(it)) if self.page == Page::Card && self.ask.is_none() => {
+                    self.item = it;
+                }
+                Some(Hit::Row(r)) if self.page == Page::Settings => self.row = r,
+                Some(Hit::Yes(y)) if self.ask.is_some() => self.yes = y,
+                _ => {}
+            }
+            if matches!(n, Nav::Up | Nav::Down | Nav::Left | Nav::Right) {
+                return Do::Nothing;
+            }
+        }
         match self.page {
             Page::Card => self.card_nav(n, m, model),
             Page::Settings => {
@@ -574,6 +599,11 @@ impl PortMenu {
             None,
             None,
         );
+        let modality = if touch.is_some() {
+            theme::Modality::Touch
+        } else {
+            theme::Modality::Keys
+        };
         Self {
             ctx,
             state,
@@ -594,7 +624,10 @@ impl PortMenu {
             touch,
             edit: None,
             saved: None,
-            focus: Focus::default(),
+            focus: Focus {
+                input: theme::Input::new(modality),
+                ..Focus::default()
+            },
             navs: Vec::new(),
             mods: winit::keyboard::ModifiersState::empty(),
             axes: [0; 2],
@@ -1049,34 +1082,75 @@ fn hint_items(
 }
 
 // A hint line; pad buttons Ⓐ / Ⓑ as filled discs.
-fn draw_hints(p: &Painter, pos: Pos2, items: &[(String, &str)], size: f32) -> f32 {
-    let mut x = pos.x;
+// Key hints from `pos`, wrapped onto further lines within `max_w`; returns the last line's width and its top.
+fn draw_hints(
+    p: &Painter,
+    pos: Pos2,
+    items: &[(String, &str)],
+    size: f32,
+    max_w: f32,
+) -> (f32, f32) {
+    hints_at(p, pos, items, size, max_w, true)
+}
+
+// The number of lines `draw_hints` takes.
+fn hint_lines(p: &Painter, items: &[(String, &str)], size: f32, max_w: f32) -> f32 {
+    let (_, y) = hints_at(p, Pos2::ZERO, items, size, max_w, false);
+    y / (size * 1.7) + 1.0
+}
+
+fn hints_at(
+    p: &Painter,
+    pos: Pos2,
+    items: &[(String, &str)],
+    size: f32,
+    max_w: f32,
+    draw: bool,
+) -> (f32, f32) {
+    let width = |k: &str, word: &str| {
+        let ww = p
+            .layout_no_wrap(word.to_string(), theme::sans(size), theme::HELP)
+            .size()
+            .x;
+        match k {
+            "Ⓐ" | "Ⓑ" => 1.4 * size + size * 0.45 + ww,
+            _ => {
+                p.layout_no_wrap(k.to_string(), theme::sans(size), theme::KEYCAP)
+                    .size()
+                    .x
+                    + size * 0.45
+                    + ww
+            }
+        }
+    };
+    let (mut x, mut y) = (pos.x, pos.y);
     for (i, (k, word)) in items.iter().enumerate() {
+        let iw = width(k, word);
         if i > 0 {
-            x += size * 1.3;
+            if x + size * 1.3 + iw > pos.x + max_w {
+                x = pos.x;
+                y += size * 1.7;
+            } else {
+                x += size * 1.3;
+            }
         }
         let disc = match k.as_str() {
             "Ⓐ" => Some("A"),
             "Ⓑ" => Some("B"),
             _ => None,
         };
-        if let Some(d) = disc {
+        if !draw {
+        } else if let Some(d) = disc {
             let r = size * 0.7;
-            theme::pad_disc(p, pos2(x + r, pos.y + size * 0.62), size, d);
+            theme::pad_disc(p, pos2(x + r, y + size * 0.62), size, d);
             let g = p.layout_no_wrap((*word).to_string(), theme::sans(size), theme::HELP);
-            let gw = g.size().x;
-            theme::shadowed(p, pos2(x + 2.0 * r + size * 0.45, pos.y), g, theme::HELP);
-            x += 2.0 * r + size * 0.45 + gw;
+            theme::shadowed(p, pos2(x + 2.0 * r + size * 0.45, y), g, theme::HELP);
         } else {
-            x += theme::key_hint(p, pos2(x, pos.y), k, word, size);
+            theme::key_hint(p, pos2(x, y), k, word, size);
         }
+        x += iw;
     }
-    x - pos.x
-}
-
-// The pointer moved this pass: a row under it takes the focus (a resting pointer leaves key / pad focus alone).
-fn pointer_moved(ui: &Ui) -> bool {
-    ui.input(|i| i.pointer.is_moving() || i.pointer.any_pressed())
+    (x - pos.x, y)
 }
 
 // Text in `rect`, left, vertically centred: shrunk to 85 % to stay on one line, else wrapped. The serif face's
@@ -1089,16 +1163,7 @@ fn label(
     color: egui::Color32,
     glow: bool,
 ) -> f32 {
-    let text = theme::latin_ellipsis(text);
-    let mut font = font;
-    let one = p
-        .layout_no_wrap(text.to_string(), font.clone(), color)
-        .size()
-        .x;
-    if one > rect.width() && one * 0.85 <= rect.width() {
-        font.size *= rect.width() / one;
-    }
-    let g = p.layout(text.into_owned(), font, color, rect.width().max(10.0));
+    let g = label_galley(p, rect.width(), text, font, color);
     let h = g.size().y;
     theme::outlined(
         p,
@@ -1108,6 +1173,38 @@ fn label(
         glow,
     );
     h
+}
+
+fn label_galley(
+    p: &Painter,
+    w: f32,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+) -> std::sync::Arc<egui::Galley> {
+    let text = theme::latin_ellipsis(text);
+    let mut font = font;
+    let one = p
+        .layout_no_wrap(text.to_string(), font.clone(), color)
+        .size()
+        .x;
+    if one > w && one * 0.85 <= w {
+        font.size *= w / one;
+    } else {
+        // A word wider than the column is set smaller (to 70 %) rather than broken.
+        let widest = text
+            .split_whitespace()
+            .map(|t| {
+                p.layout_no_wrap(t.to_string(), font.clone(), color)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        if widest > w {
+            font.size *= (w / widest).max(0.7);
+        }
+    }
+    p.layout(text.into_owned(), font, color, w.max(10.0))
 }
 
 fn sans_text(
@@ -1134,6 +1231,7 @@ fn menu_ui(
 ) -> Vec<Do> {
     let geo = Geo::new(ctx, lay);
     let mut out = Vec::new();
+    focus.input.begin(ctx, m.touch);
     let wash = ctx.layer_painter(LayerId::new(
         Order::Background,
         Id::unique("port menu wash"),
@@ -1157,6 +1255,9 @@ fn menu_ui(
                 settings_ui(ui, m, model, focus, lay, &geo, &words);
             } else {
                 out = card_ui(ui, m, model, focus, lay, &geo, &words);
+            }
+            if focus.input.end() {
+                ui.ctx().request_repaint();
             }
         });
     out
@@ -1306,21 +1407,24 @@ fn item_row(
             Sense::click()
         },
     );
-    let focused = !dimmed && focus.ask.is_none() && focus.item == it;
-    if !dimmed && resp.contains_pointer() && pointer_moved(ui) && focus.ask.is_none() {
-        focus.item = it;
+    let live = !dimmed && focus.ask.is_none();
+    if live && resp.contains_pointer() {
+        focus.input.over(Hit::Item(it));
     }
-    if focused {
-        if lay.shape == Shape::Column {
-            theme::focus_over_game(p, band, 4.0);
-        } else {
-            theme::focus(
-                p,
-                band,
-                if lay.shape == Shape::Split { 5.0 } else { 4.0 },
-                resp.is_pointer_button_down_on(),
-            );
-        }
+    let bar = live && focus.input.bar() && focus.item == it;
+    let lit = live && focus.input.lit(Hit::Item(it));
+    let focused = bar || lit;
+    if lay.shape == Shape::Column && (bar || lit) {
+        theme::focus_over_game(p, band, if bar { 4.0 } else { 0.0 });
+    } else {
+        theme::mark(
+            p,
+            band,
+            if lay.shape == Shape::Split { 5.0 } else { 4.0 },
+            bar,
+            lit,
+            live && resp.is_pointer_button_down_on(),
+        );
     }
     let color = if focused {
         theme::TEXT_HI
@@ -1335,7 +1439,8 @@ fn item_row(
     } else {
         rect.width() * 0.42
     };
-    let caption = words.latin(it);
+    // The Latin caption only on a row tall enough for it (short pillars drop it).
+    let caption = words.latin(it).filter(|_| rect.height() >= size * 2.8);
     let mut lrect = Rect::from_min_size(rect.min, vec2(label_w, rect.height()));
     if caption.is_some() {
         lrect.max.y -= rect.height() * 0.32;
@@ -1363,8 +1468,16 @@ fn item_row(
         numw: cm.numw,
         gap: size * 0.93,
         cell_w: 0.0,
+        cell_h: 48.0,
     };
-    let crect = Rect::from_min_max(pos2(rect.min.x + label_w, rect.min.y), rect.max);
+    // The control starts a word's gap after the label when the label is wider than its column.
+    let lw = p
+        .layout_no_wrap(words.item(it).to_string(), theme::serif(size), color)
+        .size()
+        .x
+        .min(label_w);
+    let cx = rect.min.x + label_w.max(lw + size);
+    let crect = Rect::from_min_max(pos2(cx.min(rect.max.x - 10.0), rect.min.y), rect.max);
     if !dimmed && let Some(o) = theme::value_ctl(ui, p, id, crect, &ctl, focused, &st) {
         focus.item = it;
         out.push(item_input(it, o, m, model));
@@ -1375,6 +1488,34 @@ fn item_row(
     if focused && focus.moved {
         resp.scroll_to_me(None);
     }
+}
+
+// The height `confirm_block` takes in a column `w` wide.
+fn confirm_height(p: &Painter, w: f32, ask: Ask, cm: &CardMetrics, words: &Words) -> f32 {
+    let (q, note) = match ask {
+        Ask::Retry => ("retry_ask", "retry_note"),
+        Ask::Quit => ("quit_ask", "quit_note"),
+    };
+    let qs = cm.row * 1.14;
+    let qh = p
+        .layout(
+            words.ui(q).to_string(),
+            theme::serif(qs),
+            theme::QUESTION,
+            w,
+        )
+        .size()
+        .y;
+    let nh = p
+        .layout(
+            words.ui(note).to_string(),
+            theme::sans(cm.help),
+            theme::HELP_HI,
+            w.max(10.0),
+        )
+        .size()
+        .y;
+    qh + qs * 0.3 + nh + cm.help * 0.9 + 2.0 * cm.row_h
 }
 
 // The in-place question for Retry / Quit: question, note, "Keep playing" (focused first) and the action row.
@@ -1419,16 +1560,16 @@ fn confirm_block(
         let rect = Rect::from_min_size(pos2(x, cy), vec2(w, rh));
         let b = Rect::from_x_y_ranges(band.0..=band.1, rect.y_range());
         let resp = ui.interact(b, Id::unique(("confirm", i)), Sense::click());
-        if resp.contains_pointer() && pointer_moved(ui) {
-            focus.yes = yes;
+        if resp.contains_pointer() {
+            focus.input.over(Hit::Yes(yes));
         }
-        let f = focus.yes == yes;
-        if f {
-            if lay.shape == Shape::Column {
-                theme::focus_over_game(p, b, 4.0);
-            } else {
-                theme::focus(p, b, 4.0, resp.is_pointer_button_down_on());
-            }
+        let bar = focus.input.bar() && focus.yes == yes;
+        let lit = focus.input.lit(Hit::Yes(yes));
+        let f = bar || lit;
+        if lay.shape == Shape::Column && f {
+            theme::focus_over_game(p, b, if bar { 4.0 } else { 0.0 });
+        } else {
+            theme::mark(p, b, 4.0, bar, lit, resp.is_pointer_button_down_on());
         }
         let color = if f {
             theme::TEXT_HI
@@ -1517,7 +1658,34 @@ fn list_card(
         theme::soft_rect(p, soft, 60.0, egui::Color32::from_black_alpha(90));
         (x, w, (x - 24.0, x + w + 16.0), geo.frame.min.y + 80.0)
     };
-    let mut y = top + if pillar { 44.0 } else { 32.0 };
+    // A short pillar (under 640 pt) moves the heading up, sets the card smaller and lets the rows shrink further.
+    let short = pillar && geo.safe.height() < 640.0;
+    let k = if short {
+        (geo.safe.height() / 640.0).clamp(0.72, 1.0)
+    } else {
+        1.0
+    };
+    let scaled = CardMetrics {
+        head: cm.head * k,
+        cap: cm.cap * k,
+        resume_h: cm.resume_h * k,
+        resume: cm.resume * k,
+        row_h: cm.row_h * k,
+        row: cm.row * k,
+        status: cm.status * k,
+        hint: cm.hint * k,
+        help: cm.help * k,
+        ..*cm
+    };
+    let cm = &scaled;
+    let mut y = top
+        + if short {
+            20.0
+        } else if pillar {
+            44.0
+        } else {
+            32.0
+        };
     theme::heading(
         p,
         pos2(x, y),
@@ -1526,19 +1694,50 @@ fn list_card(
         cm.head,
         cm.cap,
     );
-    y = top + if pillar { 160.0 } else { 116.0 };
+    y = top
+        + if short {
+            20.0 + cm.head * 2.4
+        } else if pillar {
+            160.0
+        } else {
+            116.0
+        };
     // The bottom block of the pillar is pinned; rows shrink when the list would reach it.
-    let hints_y = geo.safe.max.y - 60.0;
+    let which = if focus.ask.is_some() {
+        Hints::Confirm
+    } else {
+        Hints::Card
+    };
+    let extra =
+        (hint_lines(p, &hint_items(words, m, lay, &which), cm.hint, w) - 1.0) * cm.hint * 1.7;
+    let hints_y = geo.safe.max.y - if short { 40.0 } else { 60.0 } - extra;
     let notes = words.notes(m);
-    let dev_y = hints_y - 58.0;
+    let dev_y = hints_y - if short { 34.0 } else { 58.0 };
     let notes_y = dev_y - 26.0 * notes.len() as f32;
-    let help_text = match focus.ask {
-        Some(_) if focus.yes => words.help(match focus.ask {
-            Some(Ask::Retry) => Item::Retry,
-            _ => Item::Quit,
+    let yes = if focus.input.bar() {
+        Some(focus.yes)
+    } else {
+        match focus.input.hovered() {
+            Some(Hit::Yes(y)) => Some(y),
+            _ => None,
+        }
+    };
+    let item = if focus.input.bar() {
+        Some(focus.item)
+    } else {
+        match focus.input.hovered() {
+            Some(Hit::Item(it)) => Some(it),
+            _ => None,
+        }
+    };
+    let help_text = match (focus.ask, yes, item) {
+        (Some(a), Some(true), _) => words.help(match a {
+            Ask::Retry => Item::Retry,
+            Ask::Quit => Item::Quit,
         }),
-        Some(_) => words.ui("help_keep"),
-        None => words.help(focus.item),
+        (Some(_), Some(false), _) => words.ui("help_keep"),
+        (None, _, Some(it)) => words.help(it),
+        _ => "",
     };
     let help_g = p.layout(
         help_text.to_string(),
@@ -1546,19 +1745,63 @@ fn list_card(
         theme::HELP_HI,
         w,
     );
-    let rule_y = notes_y - 18.0 - help_g.size().y - 14.0;
+    let rule_y = notes_y
+        - if short { 10.0 } else { 18.0 }
+        - help_g.size().y
+        - if short { 8.0 } else { 14.0 };
     let mids = items
         .iter()
         .filter(|i| !matches!(i, Item::Resume) && !i.danger())
         .count() as f32;
     let dangers = items.iter().filter(|i| i.danger()).count() as f32;
-    let gaps = if pillar { 24.0 + 32.0 } else { 16.0 + 20.0 };
-    let mut rh = cm.row_h;
-    if pillar {
-        let room = rule_y - 12.0 - y - cm.resume_h - gaps;
-        if (mids + dangers) * rh > room {
-            rh = (room / (mids + dangers)).max(48.0);
+    // Gaps around the rules; halved on a short pillar.
+    let gk = if short { 0.5 } else { 1.0 };
+    let gaps = gk * if pillar { 24.0 + 32.0 } else { 16.0 + 20.0 };
+    // Japanese items with the original's Latin caption take a taller row.
+    let tall = |it: Item, h: f32| {
+        if words.latin(it).is_some() && !short {
+            h * 1.33
+        } else {
+            h
         }
+    };
+    let mut rh = cm.row_h;
+    let min_rh = if short { cm.row * 1.35 } else { 48.0 };
+    // The question's block replaces the two danger rows while asked.
+    let ask_h = focus.ask.map_or(0.0, |a| {
+        confirm_height(
+            p,
+            w,
+            a,
+            &CardMetrics {
+                row_h: min_rh,
+                ..*cm
+            },
+            words,
+        ) + 6.0
+    });
+    let mut hide_mids = false;
+    if pillar {
+        let room = rule_y - 12.0 - y - tall(Item::Resume, cm.resume_h) - gaps;
+        // Japanese danger rows carry the original's Latin caption and are a third taller.
+        let tall_k = tall(Item::Retry, 1.0);
+        let need = |rh: f32| {
+            if focus.ask.is_some() {
+                mids * rh + ask_h
+            } else {
+                mids * rh + dangers * rh * tall_k
+            }
+        };
+        if need(rh) > room {
+            let per = if focus.ask.is_some() {
+                mids
+            } else {
+                mids + dangers * tall_k
+            };
+            rh = rh.min(((room - need(0.0)) / per).max(min_rh));
+        }
+        // Still no room for the question: it hides the items above it (as on the phone).
+        hide_mids = focus.ask.is_some() && need(rh) > room;
     }
     let dimmed = focus.ask.is_some();
     let mut op = p.clone();
@@ -1567,14 +1810,6 @@ fn list_card(
     }
     let row = |y: f32, h: f32| Rect::from_min_size(pos2(x, y), vec2(w, h));
     let bandr = |r: Rect| Rect::from_x_y_ranges(band.0..=band.1, r.y_range());
-    // Japanese items with the original's Latin caption take a taller row.
-    let tall = |it: Item, h: f32| {
-        if words.latin(it).is_some() {
-            h * 1.33
-        } else {
-            h
-        }
-    };
     let r = row(y, tall(Item::Resume, cm.resume_h));
     let resume_h = r.height();
     item_row(
@@ -1593,12 +1828,12 @@ fn list_card(
         dimmed,
         out,
     );
-    y += resume_h + if pillar { 14.0 } else { 10.0 };
+    y += resume_h + gk * if pillar { 14.0 } else { 10.0 };
     theme::rule(&op, egui::Rangef::new(x, x + w), y);
-    y += if pillar { 10.0 } else { 6.0 };
+    y += gk * if pillar { 10.0 } else { 6.0 };
     for &it in items
         .iter()
-        .filter(|i| !matches!(i, Item::Resume) && !i.danger())
+        .filter(|i| !matches!(i, Item::Resume) && !i.danger() && !hide_mids)
     {
         let r = row(y, rh);
         item_row(
@@ -1620,9 +1855,9 @@ fn list_card(
         y += rh;
     }
     if dangers > 0.0 {
-        y += if pillar { 22.0 } else { 14.0 };
+        y += gk * if pillar { 22.0 } else { 14.0 };
         theme::rule(p, egui::Rangef::new(x, x + w), y);
-        y += if pillar { 10.0 } else { 6.0 };
+        y += gk * if pillar { 10.0 } else { 6.0 };
         if let Some(ask) = focus.ask {
             y += 6.0;
             let cmr = CardMetrics { row_h: rh, ..*cm };
@@ -1671,7 +1906,17 @@ fn list_card(
         };
         sans_text(p, pos2(x, dev_y), &dev, cm.status, theme::HELP, w);
         let v = p.layout_no_wrap(version(words.lang), theme::sans(cm.status), theme::HELP);
-        theme::shadowed(p, pos2(x + w - v.size().x, dev_y), v, theme::HELP);
+        let dw = p
+            .layout_no_wrap(dev.clone(), theme::sans(cm.status), theme::HELP)
+            .size()
+            .x;
+        // The version beside the device, or on the line above when they would meet.
+        let vy = if dw + 24.0 + v.size().x > w {
+            dev_y - cm.status * 1.5
+        } else {
+            dev_y
+        };
+        theme::shadowed(p, pos2(x + w - v.size().x, vy), v, theme::HELP);
         let which = if focus.ask.is_some() {
             Hints::Confirm
         } else {
@@ -1682,6 +1927,7 @@ fn list_card(
             pos2(x, hints_y),
             &hint_items(words, m, lay, &which),
             cm.hint,
+            w,
         );
     } else {
         y += if dangers > 0.0 { 16.0 } else { 14.0 };
@@ -1703,7 +1949,13 @@ fn list_card(
         } else {
             Hints::Card
         };
-        draw_hints(p, pos2(x, y), &hint_items(words, m, lay, &which), cm.hint);
+        draw_hints(
+            p,
+            pos2(x, y),
+            &hint_items(words, m, lay, &which),
+            cm.hint,
+            w,
+        );
     }
 }
 
@@ -1763,8 +2015,7 @@ fn split_card(
     let mut yb = bottom;
     let dangers: Vec<Item> = items.iter().copied().filter(|i| i.danger()).collect();
     if let Some(ask) = focus.ask {
-        let need = cm.row * 1.14 * 1.6 + cm.help * 3.4 + 2.0 * cm.row_h;
-        yb -= need;
+        yb -= confirm_height(p, w, ask, cm, words);
         let cmr = CardMetrics {
             row_h: cm.row_h,
             ..*cm
@@ -1911,13 +2162,20 @@ fn split_card(
                 Sense::click()
             },
         );
-        if !dimmed && resp.contains_pointer() && pointer_moved(ui) {
-            focus.item = it;
+        if !dimmed && resp.contains_pointer() {
+            focus.input.over(Hit::Item(it));
         }
-        let focused = !dimmed && focus.item == it;
-        if focused {
-            theme::focus(&op, b, 5.0, resp.is_pointer_button_down_on());
-        }
+        let bar = !dimmed && focus.input.bar() && focus.item == it;
+        let lit = !dimmed && focus.input.lit(Hit::Item(it));
+        let focused = bar || lit;
+        theme::mark(
+            &op,
+            b,
+            5.0,
+            bar,
+            lit,
+            !dimmed && resp.is_pointer_button_down_on(),
+        );
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         let ctl = item_ctl(it, m, model, words.lang);
         if matches!(ctl, Ctl::None) {
@@ -1953,6 +2211,7 @@ fn split_card(
                 numw: 0.0,
                 gap: lab,
                 cell_w: 0.0,
+                cell_h: 48.0,
             };
             let res = match &ctl {
                 Ctl::Slider { frac, text, unit } => {
@@ -2134,7 +2393,7 @@ fn rail_head(
         let r = Rect::from_min_size(pos2(lx, top + 168.0 + th * i as f32), vec2(lw, th));
         let sel = i == focus.tab;
         let resp = ui.interact(r, Id::unique(("tab", i)), Sense::click());
-        if focus.row == 0 && sel {
+        if focus.input.bar() && focus.row == 0 && sel {
             theme::focus(
                 &p,
                 Rect::from_x_y_ranges(geo.safe.min.x..=left.max.x - 6.0, r.y_range()),
@@ -2296,7 +2555,7 @@ fn wide_head(
         let g = p.layout_no_wrap((*l).to_string(), theme::serif(size), col);
         let (gw, gh) = (g.size().x, g.size().y);
         let r = Rect::from_min_size(pos2(tx - 8.0, ty - 10.0), vec2(gw + 16.0, gh + 24.0));
-        if focus.row == 0 && sel {
+        if focus.input.bar() && focus.row == 0 && sel {
             theme::focus(&p, r, 3.0, false);
         }
         theme::outlined(&p, pos2(tx, ty), g, col, false);
@@ -2407,7 +2666,15 @@ fn settings_ui(
     let keys = model.live_rows(g);
     focus.row = focus.row.min(keys.len() + 1);
     // Bottom block: help line (and on desktop the hints and device line).
-    let help = match focus.row {
+    let help_row = if focus.input.bar() {
+        focus.row
+    } else {
+        match focus.input.hovered() {
+            Some(Hit::Row(r)) => r,
+            _ => 0,
+        }
+    };
+    let help = match help_row {
         0 => "",
         r if r <= keys.len() => model.row_text(keys[r - 1], words.lang).1,
         _ => words.ui("help_reset_page"),
@@ -2419,28 +2686,17 @@ fn settings_ui(
     } else {
         geo.safe.max.y - 80.0 - help_h - 28.0
     };
-    // Rows: label column, control column; scrolled to keep the focused row in view.
+    // Rows: label column (as wide as the widest label word), control column; every row as tall as its content.
+    // Only whole rows are shown, the list scrolled row by row to keep the focused row in view.
     let n = keys.len() + 1;
     let rh = pm.row_h;
     let list = Rect::from_x_y_ranges(panel.min.x..=panel.max.x, list_top..=bottom);
-    let content = rh * n as f32 + 12.0;
-    let max_scroll = (content - list.height()).max(0.0);
-    if ui.rect_contains_pointer(list) {
-        let d = ui.input(|i| i.smooth_scroll_delta.y);
-        focus.scroll -= d;
-    }
-    if focus.moved && focus.row > 0 {
-        let fy = rh * (focus.row - 1) as f32 + if focus.row > keys.len() { 12.0 } else { 0.0 };
-        if fy < focus.scroll {
-            focus.scroll = fy;
-        } else if fy + rh > focus.scroll + list.height() {
-            focus.scroll = fy + rh - list.height();
-        }
-    }
-    focus.scroll = focus.scroll.clamp(0.0, max_scroll);
-    let lp = p.with_clip_rect(list);
-    let moved = pointer_moved(ui);
-    let label_w = pm.label_w.min(w * 0.48);
+    let font = theme::serif(pm.row);
+    let labels: Vec<&str> = keys
+        .iter()
+        .map(|k| model.row_text(k, words.lang).0)
+        .collect();
+    let label_w = theme::label_width(&p, &labels, &font, pm.label_w.min(w * 0.36), w * 0.5);
     let st = CtlStyle {
         size: pm.row * 0.96,
         num: if split { pm.row } else { pm.row * 0.8 },
@@ -2455,40 +2711,110 @@ fn settings_ui(
         numw: 100.0,
         gap: pm.row * 1.2,
         cell_w: if split { 120.0 } else { 0.0 },
+        cell_h: 48.0,
     };
+    let pad = if split { 24.0 } else { 16.0 };
+    let mut tops = Vec::with_capacity(n + 1);
+    // Stacked rows: the label on its own line and the control the full width under it, when the control would
+    // wrap in its column but fits the full width in fewer lines.
+    let mut stacked = Vec::with_capacity(n);
+    let mut y = 0.0;
+    for (key, lab) in keys.iter().zip(&labels) {
+        tops.push(y);
+        let ctl = model.ctl(key, words.lang);
+        let lh = label_galley(&p, label_w - 16.0, lab, font.clone(), theme::TEXT)
+            .size()
+            .y;
+        let side = theme::ctl_height(&p, &ctl, &st, w - label_w);
+        let full = theme::ctl_height(&p, &ctl, &st, w);
+        let stack = full < side - 1.0;
+        stacked.push(stack);
+        y += if stack {
+            label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y + full + pad
+        } else {
+            rh.max(lh + pad).max(side + pad)
+        };
+    }
+    y += 12.0;
+    tops.push(y);
+    y += rh;
+    tops.push(y);
+    let content = y;
+    // The first row whose top makes the rest fit: the largest scroll.
+    let max_scroll = tops[..n]
+        .iter()
+        .copied()
+        .find(|&t| content - t <= list.height())
+        .unwrap_or(tops[n - 1]);
+    if ui.rect_contains_pointer(list) {
+        let d = ui.input(|i| i.smooth_scroll_delta.y);
+        focus.scroll -= d;
+    }
+    if focus.moved && focus.row > 0 {
+        let (ft, fb) = (tops[focus.row - 1], tops[focus.row]);
+        if ft < focus.scroll {
+            focus.scroll = ft;
+        } else if fb > focus.scroll + list.height() {
+            focus.scroll = tops[..n]
+                .iter()
+                .copied()
+                .find(|&t| fb - t <= list.height())
+                .unwrap_or(ft);
+        }
+    }
+    focus.scroll = focus.scroll.clamp(0.0, max_scroll);
+    let shown = tops[..n]
+        .iter()
+        .copied()
+        .rfind(|&t| t <= focus.scroll + 0.5)
+        .unwrap_or(0.0);
+    let visible = |i: usize| tops[i] >= shown - 0.5 && tops[i + 1] <= shown + list.height() + 0.5;
+    let lp = p.with_clip_rect(list);
     let ui_clip = ui.clip_rect();
     ui.set_clip_rect(list);
-    let mut y = list.min.y - focus.scroll;
+    let top = list.min.y - shown;
     for (k, key) in keys.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(x, y), vec2(w, rh));
+        if !visible(k) {
+            continue;
+        }
+        let r = Rect::from_x_y_ranges(x..=x + w, top + tops[k]..=top + tops[k + 1]);
         let b = Rect::from_x_y_ranges(panel.min.x + 6.0..=panel.max.x, r.y_range());
         let id = Id::unique(("row", *key));
-        let resp = ui.interact(b.intersect(list), id, Sense::click());
-        if resp.contains_pointer() && moved {
-            focus.row = k + 1;
-            focus.reset = false;
+        let resp = ui.interact(b, id, Sense::click());
+        if resp.contains_pointer() {
+            focus.input.over(Hit::Row(k + 1));
         }
-        let focused = focus.row == k + 1;
-        if focused {
-            theme::focus(
-                &lp,
-                b,
-                if split { 5.0 } else { 4.0 },
-                resp.is_pointer_button_down_on(),
-            );
-        }
-        let (lab, _) = model.row_text(key, words.lang);
-        let col = if focused { theme::TEXT_HI } else { theme::TEXT };
-        label(
+        let bar = focus.input.bar() && focus.row == k + 1;
+        let focused = bar || focus.input.lit(Hit::Row(k + 1));
+        theme::mark(
             &lp,
-            Rect::from_min_size(r.min, vec2(label_w - 16.0, rh)),
-            lab,
-            theme::serif(pm.row),
-            col,
+            b,
+            if split { 5.0 } else { 4.0 },
+            bar,
             focused,
+            resp.is_pointer_button_down_on(),
         );
+        let col = if focused { theme::TEXT_HI } else { theme::TEXT };
+        let cr = if stacked[k] {
+            let g = label_galley(&lp, w, labels[k], font.clone(), col);
+            let lh = g.size().y;
+            theme::outlined(&lp, pos2(x, r.min.y + pad / 2.0), g, col, focused);
+            Rect::from_min_max(
+                pos2(x, r.min.y + pad / 2.0 + lh),
+                pos2(x + w, r.max.y - pad / 2.0),
+            )
+        } else {
+            label(
+                &lp,
+                Rect::from_min_size(r.min, vec2(label_w - 16.0, r.height())),
+                labels[k],
+                font.clone(),
+                col,
+                focused,
+            );
+            Rect::from_min_max(pos2(x + label_w, r.min.y), r.max)
+        };
         let ctl = model.ctl(key, words.lang);
-        let cr = Rect::from_min_max(pos2(x + label_w, r.min.y), r.max);
         if let Some(o) = theme::value_ctl(ui, &lp, id, cr, &ctl, focused, &st) {
             focus.row = k + 1;
             model.ctl_input(key, o);
@@ -2496,27 +2822,26 @@ fn settings_ui(
             focus.row = k + 1;
             model.activate(key);
         }
-        y += rh;
     }
-    y += 4.0;
-    theme::rule(&lp, egui::Rangef::new(x, x + w), y);
-    y += 8.0;
-    {
+    if visible(n - 1) {
+        let y = top + tops[n - 1];
+        theme::rule(&lp, egui::Rangef::new(x, x + w), y - 8.0);
         let r = Rect::from_min_size(pos2(x, y), vec2(w, rh));
         let b = Rect::from_x_y_ranges(panel.min.x + 6.0..=panel.max.x, r.y_range());
-        let resp = ui.interact(b.intersect(list), Id::unique("reset page"), Sense::click());
-        if resp.contains_pointer() && moved {
-            focus.row = keys.len() + 1;
+        let resp = ui.interact(b, Id::unique("reset page"), Sense::click());
+        if resp.contains_pointer() {
+            focus.input.over(Hit::Row(keys.len() + 1));
         }
-        let focused = focus.row == keys.len() + 1;
-        if focused {
-            theme::focus(
-                &lp,
-                b,
-                if split { 5.0 } else { 4.0 },
-                resp.is_pointer_button_down_on(),
-            );
-        }
+        let bar = focus.input.bar() && focus.row == keys.len() + 1;
+        let focused = bar || focus.input.lit(Hit::Row(keys.len() + 1));
+        theme::mark(
+            &lp,
+            b,
+            if split { 5.0 } else { 4.0 },
+            bar,
+            focused,
+            resp.is_pointer_button_down_on(),
+        );
         let text = if focus.reset {
             words.ui("reset_page_ask")
         } else {
@@ -2539,21 +2864,44 @@ fn settings_ui(
             }
         }
     }
+    // More rows above / below: a small triangle at the list's edge.
+    let mark = |y: f32, down: bool| {
+        let (cx, h) = (x + w - 10.0, 7.0);
+        let (tip, base) = if down { (y + h, y) } else { (y - h, y) };
+        p.add(egui::Shape::convex_polygon(
+            vec![pos2(cx - h, base), pos2(cx + h, base), pos2(cx, tip)],
+            theme::HELP,
+            egui::Stroke::NONE,
+        ));
+    };
+    if shown > 0.5 {
+        mark(list.min.y - 2.0, false);
+    }
+    if (0..n).any(|i| tops[i] >= shown - 0.5 && !visible(i)) {
+        mark(bottom + 2.0, true);
+    }
     ui.set_clip_rect(ui_clip);
     let by = bottom + 14.0;
     theme::rule(&p, egui::Rangef::new(x, x + w), by);
     theme::shadowed(&p, pos2(x, by + 14.0), help_g, theme::HELP_HI);
     if !split {
         let hy = geo.safe.max.y - 60.0;
-        draw_hints(
+        let (hw, last) = draw_hints(
             &p,
             pos2(x, hy),
             &hint_items(words, m, lay, &Hints::Settings),
             pm.hint,
+            w,
         );
         let d = p.layout_no_wrap(words.device(m, lay), theme::sans(pm.hint), theme::HELP);
         let dw = d.size().x;
-        theme::shadowed(&p, pos2(x + w - dw, hy + 2.0), d, theme::HELP);
+        // The device line beside the last hints line, or under it when they would meet.
+        let dy = if hw + 24.0 + dw > w {
+            last + pm.hint * 1.7
+        } else {
+            last + 2.0
+        };
+        theme::shadowed(&p, pos2(x + w - dw, dy), d, theme::HELP);
     }
 }
 
@@ -2613,6 +2961,7 @@ const PASSES: u32 = 8;
 // What a `render_image` shows besides the settings.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Default)]
+#[expect(clippy::struct_excessive_bools, reason = "independent shot switches")]
 pub struct Shot {
     pub quit: bool,
     pub touch: bool,
@@ -2629,6 +2978,8 @@ pub struct Shot {
     pub ask: Option<ShotAsk>,
     // Key presses before the shot.
     pub navs: Vec<Nav>,
+    // The pointer rests on the menu, then leaves the window before the shot.
+    pub pointer_left: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2693,6 +3044,68 @@ pub fn render_image(
     );
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let ctx = new_ctx(s);
+    let (mut renderer, mut pending) = (None, egui::TexturesDelta::default());
+    let target = OverlayTarget {
+        device: &gfx.device,
+        queue: &gfx.queue,
+        view: &view,
+        format: gfx.surface_format(),
+        size: (w, h),
+        frame: gfx.frame_rect(w, h),
+    };
+    let mut img = None;
+    shot_passes(&ctx, s, (w, h), safe, shot, |last, out| {
+        pending.append(out.textures_delta);
+        if !last {
+            return;
+        }
+        let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
+        let mut enc = gfx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        paint(
+            &mut renderer,
+            &mut pending,
+            &jobs,
+            out.pixels_per_point,
+            &target,
+            &mut enc,
+        );
+        img = Some(gfx.read_texture(enc, &tex));
+    });
+    img.expect("last pass")
+}
+
+// The menu's last offscreen pass without a GPU, every stock egui style slot marked (`uicheck`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_frame(
+    s: &Settings,
+    size: (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+) -> Vec<crate::uicheck::Issue> {
+    let ctx = new_ctx(s);
+    crate::uicheck::mark_stock_slots(&ctx);
+    let mut shapes = Vec::new();
+    shot_passes(&ctx, s, size, safe, shot, |last, out| {
+        let out = crate::uicheck::shapes(out);
+        if last {
+            shapes = out;
+        }
+    });
+    crate::uicheck::check(&shapes, ctx.viewport_rect(), &crate::uicheck::scrolls(&ctx))
+}
+
+// The passes of an offscreen shot of the menu in `ctx`; `each(last, output)`.
+#[cfg(not(target_arch = "wasm32"))]
+fn shot_passes(
+    ctx: &egui::Context,
+    s: &Settings,
+    (w, h): (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+    mut each: impl FnMut(bool, egui::FullOutput),
+) {
     let mut model = launcher::Model::port_menu(s, shot.touch);
     let lay = layout(
         safe,
@@ -2702,7 +3115,6 @@ pub fn render_image(
         s.blit.integer,
     );
     let ppp = lay.ppp;
-    let (mut renderer, mut pending) = (None, egui::TexturesDelta::default());
     let cheats = s.active_cheats();
     let m = MenuState {
         pad: shot.pad.as_deref(),
@@ -2719,6 +3131,9 @@ pub fn render_image(
         split: lay.shape == Shape::Split,
         ..Focus::default()
     };
+    if shot.touch {
+        focus.input.pointer(true);
+    }
     if let Some(t) = shot.settings {
         focus.activate(Item::Settings, &m);
         focus.tab = t;
@@ -2735,14 +3150,6 @@ pub fn render_image(
     for &n in &shot.navs {
         focus.nav(n, &m, &mut model);
     }
-    let target = OverlayTarget {
-        device: &gfx.device,
-        queue: &gfx.queue,
-        view: &view,
-        format: gfx.surface_format(),
-        size: (w, h),
-        frame: gfx.frame_rect(w, h),
-    };
     for i in 0..PASSES {
         let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -2757,29 +3164,26 @@ pub fn render_image(
             .entry(egui::ViewportId::ROOT)
             .or_default()
             .native_pixels_per_point = Some(ppp);
+        if shot.pointer_left {
+            let at = egui::pos2(w as f32 / ppp * 0.8 + i as f32, h as f32 / ppp * 0.45);
+            raw.events = match i {
+                1..=3 => vec![egui::Event::PointerMoved(at)],
+                4 => vec![egui::Event::PointerGone],
+                _ => Vec::new(),
+            };
+        }
         focus.moved = i == 0;
         let out = ctx.run_pass(raw, |ctx| {
             menu_ui(ctx, &m, &mut model, &mut focus, &lay);
         });
-        pending.append(out.textures_delta);
-        if i + 1 < PASSES {
-            continue;
-        }
-        let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
-        let mut enc = gfx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        paint(
-            &mut renderer,
-            &mut pending,
-            &jobs,
-            out.pixels_per_point,
-            &target,
-            &mut enc,
-        );
-        return gfx.read_texture(enc, &tex);
+        each(i + 1 == PASSES, out);
     }
-    unreachable!()
+}
+
+// The number of settings tabs the menu shows for `s`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn settings_tabs(s: &Settings, touch: bool) -> usize {
+    launcher::Model::port_menu(s, touch).live_tabs().len()
 }
 
 #[cfg(test)]

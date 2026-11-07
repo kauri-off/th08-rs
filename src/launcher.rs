@@ -1493,39 +1493,84 @@ fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
     }
 }
 
+// A waiting / loading screen: the serif message in the middle of the panel.
 fn message_ui(ui: &mut egui::Ui, text: &str) {
-    egui::CentralPanel::default_margins().show(ui, |ui| {
-        ui.centered_and_justified(|ui| {
-            ui.label(text);
-        });
-    });
+    let r = ui.max_rect();
+    let p = ui.painter();
+    p.rect_filled(ui.ctx().viewport_rect(), 0.0, theme::PANEL);
+    let g = p.layout(
+        theme::latin_ellipsis(text).into_owned(),
+        theme::serif(theme::TITLE),
+        theme::TEXT,
+        (r.width() - 2.0 * theme::XL).max(40.0),
+    );
+    let pos = r.center() - g.size() / 2.0;
+    theme::outlined(p, pos, g, theme::TEXT, false);
 }
 
+// The start failure: heading, the message (scrolling when long), Back and Quit as text actions.
 fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
     let mut act = None;
-    egui::Panel::bottom("buttons").show(ui, |ui| {
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add(theme::button(i18n::ui(lang, "back"), theme::Kind::Primary))
-                .clicked()
-            {
-                act = Some(Action::Back);
-            }
-            if cfg!(not(target_arch = "wasm32")) && ui.button(i18n::ui(lang, "quit")).clicked() {
-                act = Some(Action::Quit);
-            }
+    let r = ui.max_rect();
+    ui.painter()
+        .rect_filled(ui.ctx().viewport_rect(), 0.0, theme::PANEL);
+    let x = r.min.x + theme::XL.max(r.width() * 0.06);
+    let w = r.max.x - theme::XL.max(r.width() * 0.06) - x;
+    let h = theme::heading(
+        ui.painter(),
+        egui::pos2(x, r.min.y + 26.0),
+        i18n::ui(lang, "start_failed"),
+        "",
+        theme::HEADING + 4.0,
+        0.0,
+    );
+    let actions_h = 56.0;
+    let body = egui::Rect::from_x_y_ranges(
+        x..=x + w,
+        r.min.y + 26.0 + h + 20.0..=r.max.y - actions_h - 12.0,
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
+    let out = egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(&mut child, |ui| {
+            let g = ui.painter().layout(
+                msg.to_string(),
+                theme::sans(theme::BODY),
+                theme::DANGER,
+                w - 16.0,
+            );
+            let (rr, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
+            theme::shadowed(ui.painter(), rr.min, g, theme::DANGER);
         });
-        ui.add_space(4.0);
-    });
-    egui::CentralPanel::default_margins().show(ui, |ui| {
-        ui.add_space(4.0);
-        ui.heading(i18n::ui(lang, "start_failed"));
-        ui.add_space(8.0);
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.colored_label(ui.visuals().error_fg_color, msg);
-        });
-    });
+    crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body);
+    theme::rule(
+        ui.painter(),
+        egui::Rangef::new(x, x + w),
+        r.max.y - actions_h - 6.0,
+    );
+    let bar = egui::Rect::from_x_y_ranges(x..=x + w, r.max.y - actions_h..=r.max.y);
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    row.spacing_mut().item_spacing.x = theme::XL;
+    if row
+        .add(theme::button(i18n::ui(lang, "back"), theme::Kind::Primary))
+        .clicked()
+    {
+        act = Some(Action::Back);
+    }
+    if cfg!(not(target_arch = "wasm32"))
+        && row
+            .add(theme::button(
+                i18n::ui(lang, "quit"),
+                theme::Kind::Secondary,
+            ))
+            .clicked()
+    {
+        act = Some(Action::Quit);
+    }
     act
 }
 
@@ -1904,16 +1949,22 @@ pub fn resend_atlas(ctx: &egui::Context, pending: &mut egui::TexturesDelta) {
     );
 }
 
+// The launcher's egui context: theme and fonts.
+fn new_ctx(model: &Model) -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.set_visuals(egui::Visuals::dark());
+    crate::theme::apply(
+        &ctx,
+        crate::theme::Density::new(cfg!(target_os = "android")),
+    );
+    let font = model.row("font").value.text();
+    i18n::install_fonts(&ctx, Some(font.as_str()).filter(|f| !f.is_empty()));
+    ctx
+}
+
 impl Painter {
     fn new(gfx: &Gfx, model: Model) -> Self {
-        let ctx = egui::Context::default();
-        ctx.set_visuals(egui::Visuals::dark());
-        crate::theme::apply(
-            &ctx,
-            crate::theme::Density::new(cfg!(target_os = "android")),
-        );
-        let font = model.row("font").value.text();
-        i18n::install_fonts(&ctx, Some(font.as_str()).filter(|f| !f.is_empty()));
+        let ctx = new_ctx(&model);
         let renderer = egui_wgpu::Renderer::new(
             &gfx.device,
             gfx.surface_format(),
@@ -2006,6 +2057,81 @@ impl Painter {
     }
 }
 
+// Passes of an offscreen frame, 0.1 s apart: fade-ins and scroll animations have ended by the last.
+#[cfg(not(target_arch = "wasm32"))]
+const SHOT_PASSES: u32 = 8;
+
+// Input an offscreen shot feeds before its last pass.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Probe {
+    #[default]
+    None,
+    // The pointer rests on the game folder row, then leaves the window.
+    PointerLeft,
+    // Two ↓ presses: the focus bar appears, then moves one row.
+    Keys,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+pub struct ShotOpts {
+    // The OS scale.
+    pub density: f32,
+    pub probe: Probe,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for ShotOpts {
+    fn default() -> Self {
+        Self {
+            density: 1.0,
+            probe: Probe::None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_events(probe: Probe, i: u32, screen: egui::Vec2) -> Vec<egui::Event> {
+    let key = |key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    match (probe, i) {
+        (Probe::PointerLeft, 1..=3) => vec![egui::Event::PointerMoved(egui::pos2(
+            screen.x * 0.7 + i as f32,
+            201.0,
+        ))],
+        (Probe::PointerLeft, 4) => vec![egui::Event::PointerGone],
+        (Probe::Keys, 1 | 2) => vec![key(egui::Key::ArrowDown)],
+        _ => Vec::new(),
+    }
+}
+
+// Input of offscreen pass `i` of a w×h px window.
+#[cfg(not(target_arch = "wasm32"))]
+fn shot_input(i: u32, (w, h): (u32, u32), safe: SafeArea, o: &ShotOpts) -> egui::RawInput {
+    let ppp = zoom(safe_size(safe, (w, h)), o.density);
+    let mut raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(w as f32 / ppp, h as f32 / ppp),
+        )),
+        time: Some(f64::from(i) / 10.0),
+        safe_area_insets: Some(insets(safe, ppp)),
+        ..Default::default()
+    };
+    raw.events = probe_events(o.probe, i, egui::vec2(w as f32, h as f32) / ppp);
+    raw.viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .native_pixels_per_point = Some(ppp);
+    raw
+}
+
 // Offscreen render of the launcher (tests, `launchershot`): a few passes so the layout settles, then read back.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_image(
@@ -2013,6 +2139,7 @@ pub fn render_image(
     model: Model,
     (w, h): (u32, u32),
     safe: SafeArea,
+    o: &ShotOpts,
 ) -> image::RgbaImage {
     let mut s = Painter::new(gfx, model);
     let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
@@ -2030,36 +2157,54 @@ pub fn render_image(
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let ppp = zoom(safe_size(safe, (w, h)), 1.0);
     let mut enc = None;
-    // Passes 0.1 s apart: a dialog's fade-in has ended by the last.
-    for i in 0..4 {
-        let mut raw = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(w as f32 / ppp, h as f32 / ppp),
-            )),
-            time: Some(f64::from(i) / 10.0),
-            safe_area_insets: Some(insets(safe, ppp)),
-            ..Default::default()
-        };
-        raw.viewports
-            .entry(egui::ViewportId::ROOT)
-            .or_default()
-            .native_pixels_per_point = Some(ppp);
+    for i in 0..SHOT_PASSES {
         #[cfg(not(target_os = "android"))]
         if i == 1 {
             s.model.settle_art();
         }
-        let (out, _) = s.pass(raw);
+        let (out, _) = s.pass(shot_input(i, (w, h), safe, o));
         let e = s.paint(gfx, out, &view, (w, h));
-        if i < 3 {
+        if i + 1 < SHOT_PASSES {
             gfx.queue.submit([e.finish()]);
         } else {
             enc = Some(e);
         }
     }
     gfx.read_texture(enc.unwrap(), &tex)
+}
+
+// The last offscreen pass's shapes without a GPU, every stock egui style slot marked (`uicheck`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_frame(
+    mut model: Model,
+    size: (u32, u32),
+    safe: SafeArea,
+    o: &ShotOpts,
+) -> Vec<crate::uicheck::Issue> {
+    let ctx = new_ctx(&model);
+    crate::uicheck::mark_stock_slots(&ctx);
+    let mut last = None;
+    for i in 0..SHOT_PASSES {
+        #[cfg(not(target_os = "android"))]
+        if i == 1 {
+            model.settle_art();
+        }
+        let raw = shot_input(i, size, safe, o);
+        let out = ctx.run_ui(raw, |ui| {
+            let rect = ui.ctx().content_rect();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                model.ui(ui);
+            });
+        });
+        last = Some(crate::uicheck::shapes(out));
+    }
+    let screen = ctx.viewport_rect();
+    crate::uicheck::check(
+        &last.unwrap_or_default(),
+        screen,
+        &crate::uicheck::scrolls(&ctx),
+    )
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

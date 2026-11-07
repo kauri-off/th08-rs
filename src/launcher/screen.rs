@@ -31,12 +31,26 @@ pub(super) enum Target {
     SavesImport,
     #[cfg(not(target_os = "android"))]
     SavesCfg,
+    // Replays / Stats tab rows: a text action, a word choice, a replay.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    Action(&'static str),
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    Choice(&'static str),
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    Replay(usize),
 }
 
 // Keyboard focus, the targets of the last pass in order, the reset question, the title art.
 #[derive(Default)]
 pub(super) struct Nav {
     focus: Option<Target>,
+    input: theme::Input<Target>,
+    // Z / ← → on a Replays / Stats row, for the row to take this pass.
+    #[cfg_attr(
+        any(target_arch = "wasm32", target_os = "android"),
+        expect(dead_code, reason = "no Replays / Stats tabs")
+    )]
+    pending: Option<(Target, i32)>,
     order: Vec<Target>,
     moved: bool,
     reset_ask: bool,
@@ -166,12 +180,32 @@ impl Model {
             return None;
         }
         let pressed = |k: Key| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
-        let order = &self.nav.order;
+        let mut act = None;
+        let nav = [
+            Key::ArrowDown,
+            Key::ArrowUp,
+            Key::ArrowLeft,
+            Key::ArrowRight,
+            Key::Z,
+            Key::Enter,
+        ];
+        // The first key press after pointer input only shows the focus bar (Z / Enter also act on its row).
+        if ui.input(|i| nav.iter().any(|&k| i.key_pressed(k)))
+            && let Some(hover) = self.nav.input.key()
+        {
+            if let Some(h) = hover {
+                self.nav.focus = Some(h);
+            }
+            self.nav.moved = true;
+            for k in &nav[..4] {
+                pressed(*k);
+            }
+        }
+        let order = self.nav.order.clone();
         let at = self
             .nav
             .focus
             .and_then(|f| order.iter().position(|&t| t == f));
-        let mut act = None;
         if pressed(Key::ArrowDown) {
             self.nav.focus = order
                 .get(at.map_or(0, |a| (a + 1).min(order.len() - 1)))
@@ -189,6 +223,8 @@ impl Model {
                         self.row_mut(key).apply(dir, false);
                     }
                     Some(Target::Developer) => self.dev = dir > 0,
+                    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+                    Some(t @ Target::Choice(_)) => self.nav.pending = Some((t, dir)),
                     _ => {}
                 }
             }
@@ -199,6 +235,7 @@ impl Model {
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         for (k, dir) in [(Key::Q, 2usize), (Key::E, 1)] {
             if pressed(k) {
+                self.nav.input.key();
                 let all = [super::Tab::Settings, super::Tab::Replays, super::Tab::Stats];
                 let at = all.iter().position(|&t| t == self.tab).unwrap_or(0);
                 self.set_tab(all[(at + dir) % 3]);
@@ -245,6 +282,11 @@ impl Model {
                 self.dev = !self.dev;
                 None
             }
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            t @ (Target::Action(_) | Target::Choice(_) | Target::Replay(_)) => {
+                self.nav.pending = Some((t, 0));
+                None
+            }
             Target::Reset => {
                 if std::mem::take(&mut self.nav.reset_ask) {
                     self.reset();
@@ -280,10 +322,19 @@ impl Model {
         let text = match t {
             Target::Play if !self.folder_ok() => i18n::ui(lang, "select_folder_first"),
             Target::Play => i18n::ui(lang, "help_play"),
+            Target::Folder if !self.game_dir().is_empty() => {
+                return tilde(self.game_dir().trim_end_matches(['/', '\\']));
+            }
             Target::Folder => crate::settings::find("game_dir").map_or("", |e| i18n::help(lang, e)),
             Target::Row(k) => i18n::help(lang, self.row(k).e),
             Target::Developer => i18n::ui(lang, "developer_hint"),
             Target::Reset => i18n::ui(lang, "reset"),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            Target::Choice("rp_sort") => i18n::ui(lang, "rp_hint"),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            Target::Action(k) | Target::Choice(k) => i18n::ui(lang, k),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            Target::Replay(_) => i18n::ui(lang, "rp_hint"),
             #[cfg(not(target_os = "android"))]
             Target::SavesExport | Target::SavesImport => i18n::ui(lang, "saves_hint"),
             #[cfg(not(target_os = "android"))]
@@ -294,25 +345,40 @@ impl Model {
             .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
     }
 
-    // The focus band when `t` has the focus; the pointer moving over `band` takes it.
+    // The row's mark: the focus bar under key / pad input, a hover band under the pointer, pressed on touch.
     fn target(&mut self, ui: &Ui, p: &Painter, band: Rect, t: Target) -> egui::Response {
         let id = Id::unique(("launcher target", format!("{t:?}")));
         let resp = ui.interact(band, id, Sense::click());
-        if resp.contains_pointer() && ui.input(|i| i.pointer.is_moving()) {
-            self.nav.focus = Some(t);
+        if resp.contains_pointer() {
+            self.nav.input.over(t);
         }
         self.nav.order.push(t);
-        if self.nav.focus == Some(t) {
-            theme::focus(p, band, 4.0, resp.is_pointer_button_down_on());
-            if self.nav.moved {
-                resp.scroll_to_me(None);
-            }
+        let bar = self.nav.input.bar() && self.nav.focus == Some(t);
+        theme::mark(
+            p,
+            band,
+            4.0,
+            bar,
+            self.nav.input.lit(t),
+            resp.is_pointer_button_down_on(),
+        );
+        if bar && self.nav.moved {
+            resp.scroll_to_me(None);
+        }
+        if resp.clicked() {
+            self.nav.focus = Some(t);
         }
         resp
     }
 
+    // `t` is drawn bright: it has the focus bar or the pointer.
+    pub(super) fn shows(&self, t: Target) -> bool {
+        (self.nav.input.bar() && self.nav.focus == Some(t)) || self.nav.input.lit(t)
+    }
+
     pub(super) fn settings_screen(&mut self, ui: &mut Ui) -> Option<Action> {
         let lang = self.lang();
+        self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
         let mut act = self.keys(ui);
         let full = ui.max_rect();
         let screen = ui.ctx().viewport_rect();
@@ -338,17 +404,30 @@ impl Model {
         self.nav.order.clear();
         let ver = i18n::ui_fmt(lang, "version", &[("version", &super::version_line())]);
         let caption = i18n::ui_fmt(lang, "launcher_caption", &[("version", &ver)]);
-        theme::heading(
-            &p,
-            pos2(x, full.min.y + 26.0),
-            i18n::ui(lang, "launcher_title"),
-            &caption,
-            HEAD,
-            CAP,
-        );
-        let mut y = full.min.y + 112.0;
+        // Short windows (under 600 pt) pack the head closer so the rows keep most of the height; under 500 pt with
+        // the title art beside it the heading (the art's title) is left out.
+        let compact = full.height() < 600.0;
+        let bare = full.height() < 500.0 && art_w > 0.0;
+        let (head_y, play_y, play_h) = if bare {
+            (0.0, 8.0, PLAY_H - 12.0)
+        } else if compact {
+            (12.0, 78.0, PLAY_H - 10.0)
+        } else {
+            (26.0, 112.0, PLAY_H)
+        };
+        if !bare {
+            theme::heading(
+                &p,
+                pos2(x, full.min.y + head_y),
+                i18n::ui(lang, "launcher_title"),
+                &caption,
+                HEAD,
+                CAP,
+            );
+        }
+        let mut y = full.min.y + play_y;
         // Play.
-        let r = Rect::from_min_size(pos2(x, y), vec2(w, PLAY_H));
+        let r = Rect::from_min_size(pos2(x, y), vec2(w, play_h));
         let resp = self.target(
             ui,
             &p,
@@ -356,7 +435,7 @@ impl Model {
             Target::Play,
         );
         let ok = self.can_play();
-        let focused = self.nav.focus == Some(Target::Play);
+        let focused = self.shows(Target::Play);
         let color = match (ok, focused) {
             (false, _) => theme::DISABLED,
             (true, true) => theme::TEXT_HI,
@@ -373,9 +452,9 @@ impl Model {
         if resp.clicked() && ok {
             act = Some(Action::Play);
         }
-        y += PLAY_H + 6.0;
+        y += play_h + if compact { 2.0 } else { 6.0 };
         // Game folder.
-        let fr = Rect::from_min_size(pos2(x, y), vec2(w, 58.0));
+        let fr = Rect::from_min_size(pos2(x, y), vec2(w, if compact { 52.0 } else { 58.0 }));
         let resp = self.target(
             ui,
             &p,
@@ -383,20 +462,28 @@ impl Model {
             Target::Folder,
         );
         self.folder_row(ui, &p, fr, lang, resp.clicked());
-        y += 64.0;
+        y += fr.height() + 6.0;
         theme::rule(&p, egui::Rangef::new(x, right), y);
         // Tabs.
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         {
-            self.tab_bar(ui, &p, pos2(x, y + 16.0), lang);
-            y += 58.0;
+            self.tab_bar(ui, &p, pos2(x, y + if compact { 10.0 } else { 16.0 }), lang);
+            y += if compact { 46.0 } else { 58.0 };
             theme::rule(&p, egui::Rangef::new(x, right), y);
         }
-        y += 6.0;
-        // Bottom: help line, hints, device.
-        let hint_y = full.max.y - 34.0;
-        let help_y = hint_y - 40.0;
-        let bottom = help_y - 14.0;
+        y += if compact { 2.0 } else { 6.0 };
+        // Bottom: help line (as tall as its text), hints, device.
+        let shown = if self.nav.input.bar() {
+            self.nav.focus
+        } else {
+            self.nav.input.hovered()
+        };
+        let help = shown.map(|t| self.help_of(t, lang)).unwrap_or_default();
+        let help_g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
+        let help_h = help_g.size().y.max(SMALL * 1.3);
+        let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
+        let help_y = hint_y - help_h - if compact { 10.0 } else { 20.0 };
+        let bottom = help_y - if compact { 8.0 } else { 14.0 };
         theme::rule(&p, egui::Rangef::new(x, right), bottom);
         let content = Rect::from_x_y_ranges(panel.min.x + 4.0..=screen.max.x, y..=bottom - 2.0);
         let mut child = ui.new_child(
@@ -408,13 +495,7 @@ impl Model {
         if let Some(a) = self.content_ui(&mut child, x, w, lang) {
             act = Some(a);
         }
-        let help = self
-            .nav
-            .focus
-            .map(|t| self.help_of(t, lang))
-            .unwrap_or_default();
-        let g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
-        theme::shadowed(&p, pos2(x, help_y), g, theme::HELP_HI);
+        theme::shadowed(&p, pos2(x, help_y), help_g, theme::HELP_HI);
         let mut hints = vec![
             ("↑↓", i18n::ui(lang, "hint_move")),
             ("←→", i18n::ui(lang, "hint_change")),
@@ -426,21 +507,27 @@ impl Model {
         if cfg!(not(target_arch = "wasm32")) {
             hints.push(("Esc", i18n::ui(lang, "hint_quit")));
         }
-        theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
+        let hw = theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
         let dev = p.layout_no_wrap(
             i18n::ui(lang, "device_keyboard").to_string(),
             theme::sans(HINT),
             theme::HELP,
         );
         let dw = dev.size().x;
-        theme::shadowed(&p, pos2(right - dw, hint_y), dev, theme::HELP);
+        // The input device at the right end of the hints line, when there is room for it.
+        if hw + 24.0 + dw <= w {
+            theme::shadowed(&p, pos2(right - dw, hint_y), dev, theme::HELP);
+        }
         self.nav.moved = false;
+        if self.nav.input.end() {
+            ui.ctx().request_repaint();
+        }
         act
     }
 
     // "Game folder", the path and its state, "Change…".
     fn folder_row(&mut self, ui: &Ui, p: &Painter, r: Rect, lang: Lang, clicked: bool) {
-        let focused = self.nav.focus == Some(Target::Folder);
+        let focused = self.shows(Target::Folder);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         text_in(
             p,
@@ -477,7 +564,6 @@ impl Model {
         let pw = r.max.x - px - cw;
         let pg = p.layout_no_wrap(fit_path(p, &path, pw), theme::sans(SMALL), theme::HELP_HI);
         let ph = pg.size().y;
-        theme::shadowed(p, pos2(px, r.min.y + 6.0), pg, theme::HELP_HI);
         let state = if ok {
             i18n::ui(lang, "dat_found")
         } else {
@@ -487,18 +573,15 @@ impl Model {
         let state: String = st
             .next()
             .map_or_else(String::new, |f| f.to_uppercase().chain(st).collect());
-        let sg = p.layout(
-            state,
-            theme::sans(SMALL - 1.0),
-            if ok { theme::NOTE } else { theme::DANGER },
-            pw,
-        );
-        theme::shadowed(
-            p,
-            pos2(px, r.min.y + 8.0 + ph),
-            sg,
-            if ok { theme::NOTE } else { theme::DANGER },
-        );
+        let sc = if ok { theme::NOTE } else { theme::DANGER };
+        // The state in at most two lines, so the block stays inside the row.
+        let mut job =
+            egui::text::LayoutJob::simple(state, theme::sans(SMALL - 1.0), sc, pw.max(20.0));
+        job.wrap.max_rows = 2;
+        let sg = p.fonts_mut(|f| f.layout_job(job));
+        let top = r.center().y - (ph + 2.0 + sg.size().y) / 2.0;
+        theme::shadowed(p, pos2(px, top), pg, theme::HELP_HI);
+        theme::shadowed(p, pos2(px, top + ph + 2.0), sg, sc);
         if native {
             let cr = Rect::from_min_size(
                 pos2(
@@ -568,21 +651,15 @@ impl Model {
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         match self.tab {
             super::Tab::Replays => {
-                return padded(ui, left, w, |ui| {
-                    egui::ScrollArea::both()
-                        .show(ui, |ui| self.replays_ui(ui, lang))
-                        .inner
-                });
+                return Self::tab_scroll(ui, |ui| self.replays_ui(ui, x, w, lang));
             }
             super::Tab::Stats => {
-                padded(ui, left, w, |ui| {
-                    egui::ScrollArea::both().show(ui, |ui| self.stats_ui(ui, lang));
-                });
+                Self::tab_scroll(ui, |ui| self.stats_ui(ui, x, w, lang));
                 return None;
             }
             super::Tab::Settings => {}
         }
-        egui::ScrollArea::vertical()
+        let out = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(4.0);
@@ -625,6 +702,7 @@ impl Model {
                 self.more_rows(ui, x, w, lang);
                 ui.add_space(12.0);
             });
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, ui.max_rect());
         act
     }
 
@@ -692,13 +770,12 @@ impl Model {
         let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
         let p = ui.painter().clone();
         let t = Target::Row(key);
-        let focused_before = self.nav.focus == Some(t);
         let resp = if matches!(ctl, Ctl::None) {
             ui.interact(band, Id::unique(("text row", key)), Sense::hover())
         } else {
             self.target(ui, &p, band, t)
         };
-        let focused = focused_before || self.nav.focus == Some(t);
+        let focused = self.shows(t);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         let label_w = LABEL_W.min(w * 0.42);
         let lr = Rect::from_min_size(row.min, vec2(label_w - 12.0, ROW_H));
@@ -710,9 +787,6 @@ impl Model {
             color,
             focused,
         );
-        if resp.hovered() {
-            self.nav.focus = Some(t);
-        }
         let cr = Rect::from_min_max(pos2(row.min.x + label_w, row.min.y), row.max);
         if matches!(ctl, Ctl::None) {
             let dev = self.dev;
@@ -741,6 +815,7 @@ impl Model {
             numw: 70.0,
             gap: ROW * 1.1,
             cell_w: 0.0,
+            cell_h: 48.0,
         };
         if let Some(o) = theme::value_ctl(
             ui,
@@ -780,7 +855,7 @@ impl Model {
         let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
         let p = ui.painter().clone();
         let resp = self.target(ui, &p, band, t);
-        let focused = self.nav.focus == Some(t);
+        let focused = self.shows(t);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         let label_w = LABEL_W.min(w * 0.42);
         text_in(
@@ -871,7 +946,7 @@ impl Model {
             let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
             let p = ui.painter().clone();
             let resp = self.target(ui, &p, band, t);
-            let focused = self.nav.focus == Some(t);
+            let focused = self.shows(t);
             let color = if focused { theme::TEXT_HI } else { theme::TEXT };
             let (text, lw) = match t {
                 Target::SavesExport => (i18n::ui(lang, "saves_export"), w),
@@ -905,6 +980,7 @@ impl Model {
                     numw: 0.0,
                     gap: ROW * 1.1,
                     cell_w: 0.0,
+                    cell_h: 48.0,
                 };
                 if let Some(theme::CtlOut::Pick(i)) =
                     theme::value_ctl(ui, &p, Id::unique("saves cfg"), cr, &ctl, focused, &st)
@@ -943,7 +1019,7 @@ impl Model {
             let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
             let p = ui.painter().clone();
             let resp = self.target(ui, &p, band, t);
-            let focused = self.nav.focus == Some(t);
+            let focused = self.shows(t);
             if t == Target::Developer {
                 let color = if focused { theme::TEXT_HI } else { theme::TEXT };
                 text_in(
@@ -972,6 +1048,7 @@ impl Model {
                     numw: 0.0,
                     gap: ROW * 1.1,
                     cell_w: 0.0,
+                    cell_h: 48.0,
                 };
                 if let Some(theme::CtlOut::Pick(i)) =
                     theme::value_ctl(ui, &p, Id::unique("dev ctl"), cr, &ctl, focused, &st)
@@ -1013,6 +1090,167 @@ impl Model {
     }
 }
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+impl Model {
+    // A row's band and mark for target `t` over `r` (the text column's rows); clicked or activated by Z.
+    pub(super) fn row_target(&mut self, ui: &Ui, r: Rect, t: Target) -> (egui::Response, bool) {
+        let full = ui.max_rect();
+        let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
+        let p = ui.painter().clone();
+        let resp = self.target(ui, &p, band, t);
+        let key = self
+            .nav
+            .pending
+            .take_if(|(p, d)| *p == t && *d == 0)
+            .is_some();
+        (resp.clone(), resp.clicked() || key)
+    }
+
+    // The band and mark of `t` without taking its Z.
+    pub(super) fn mark_target(&mut self, ui: &Ui, band: Rect, t: Target) {
+        let p = ui.painter().clone();
+        self.target(ui, &p, band, t);
+    }
+
+    // Z (0) or ← / → (-1 / 1) pressed on `t` this pass.
+    pub(super) fn take_pending(&mut self, t: Target) -> Option<(Target, i32)> {
+        self.nav.pending.take_if(|(p, _)| *p == t)
+    }
+
+    // A text action as a menu row (Refresh, Import replays…): its serif word; true when chosen.
+    pub(super) fn action_row(
+        &mut self,
+        ui: &mut Ui,
+        x: f32,
+        w: f32,
+        key: &'static str,
+        lang: Lang,
+    ) -> bool {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.max_rect().width(), ROW_H), Sense::hover());
+        let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+        let t = Target::Action(key);
+        let (_, go) = self.row_target(ui, row, t);
+        let color = if self.shows(t) {
+            theme::TEXT_HI
+        } else {
+            theme::TEXT
+        };
+        text_in(
+            ui.painter(),
+            row,
+            i18n::ui(lang, key),
+            theme::serif(ROW),
+            color,
+            self.shows(t),
+        );
+        go
+    }
+
+    // A labelled word choice (sort order, filters): the picked index when it changes.
+    #[expect(clippy::too_many_arguments, reason = "one painted row")]
+    pub(super) fn choice_row(
+        &mut self,
+        ui: &mut Ui,
+        x: f32,
+        w: f32,
+        key: &'static str,
+        lang: Lang,
+        words: Vec<String>,
+        sel: usize,
+    ) -> Option<usize> {
+        let label_w = theme::label_width(
+            ui.painter(),
+            &[i18n::ui(lang, key)],
+            &theme::serif(ROW),
+            LABEL_W.min(w * 0.36),
+            w * 0.5,
+        );
+        let st = CtlStyle {
+            size: ROW,
+            num: ROW * 0.8,
+            cells: false,
+            right: false,
+            indent: 0.0,
+            track: 0.0,
+            numw: 70.0,
+            gap: ROW * 1.1,
+            cell_w: 0.0,
+            cell_h: 48.0,
+        };
+        let n = words.len();
+        let ctl = Ctl::Choices {
+            words,
+            sel: Some(sel),
+        };
+        let h = ROW_H.max(theme::ctl_height(ui.painter(), &ctl, &st, w - label_w) + 16.0);
+        let (r, _) = ui.allocate_exact_size(vec2(ui.max_rect().width(), h), Sense::hover());
+        let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+        let t = Target::Choice(key);
+        let (resp, go) = self.row_target(ui, row, t);
+        let focused = self.shows(t);
+        let color = if focused { theme::TEXT_HI } else { theme::TEXT };
+        let p = ui.painter().clone();
+        text_in(
+            &p,
+            Rect::from_min_size(row.min, vec2(label_w - 12.0, h)),
+            i18n::ui(lang, key),
+            theme::serif(ROW),
+            color,
+            focused,
+        );
+        let cr = Rect::from_min_max(pos2(row.min.x + label_w, row.min.y), row.max);
+        let mut out =
+            match theme::value_ctl(ui, &p, Id::unique(("choice", key)), cr, &ctl, focused, &st) {
+                Some(theme::CtlOut::Pick(i)) => Some(i),
+                Some(theme::CtlOut::Step(d)) => {
+                    Some(sel.saturating_add_signed(d as isize).min(n - 1))
+                }
+                _ => None,
+            };
+        if let Some((_, d)) = self.nav.pending.take_if(|(p, _)| *p == t) {
+            out = Some(if d == 0 {
+                (sel + 1) % n
+            } else {
+                sel.saturating_add_signed(d as isize).min(n - 1)
+            });
+        } else if go || (resp.clicked() && out.is_none()) {
+            out = Some((sel + 1) % n);
+        }
+        out.filter(|&i| i != sel)
+    }
+
+    // The scroll area of a tab: the rest of the content rect, scrolling only when the rows need it.
+    pub(super) fn tab_scroll<R>(ui: &mut Ui, f: impl FnOnce(&mut Ui) -> R) -> R {
+        let space = ui.max_rect();
+        let out = egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                let r = f(ui);
+                ui.add_space(12.0);
+                r
+            });
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, space);
+        out.inner
+    }
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+// Sans text wrapped to `w` in the text column, as a flow item: notes, status lines, the tab hint.
+pub(super) fn note(ui: &mut Ui, x: f32, w: f32, text: &str, size: f32, color: egui::Color32) {
+    if text.is_empty() {
+        return;
+    }
+    let g = ui
+        .painter()
+        .layout(text.to_string(), theme::sans(size), color, w.max(10.0));
+    let (r, _) = ui.allocate_exact_size(
+        vec2(ui.max_rect().width(), g.size().y + 8.0),
+        Sense::hover(),
+    );
+    theme::shadowed(ui.painter(), pos2(x, r.min.y + 4.0), g, color);
+}
+
 // A folder / file setting (painted with "Change…" on desktop).
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn is_path(e: &crate::settings::Entry) -> bool {
@@ -1023,7 +1261,14 @@ fn is_path(e: &crate::settings::Entry) -> bool {
 }
 
 // Serif text in `r`, left and vertically centred; "…" after Latin / Cyrillic as three periods.
-fn text_in(p: &Painter, r: Rect, text: &str, font: egui::FontId, color: egui::Color32, glow: bool) {
+pub(super) fn text_in(
+    p: &Painter,
+    r: Rect,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    glow: bool,
+) {
     let g = p.layout(
         theme::latin_ellipsis(text).into_owned(),
         font,
@@ -1035,7 +1280,7 @@ fn text_in(p: &Painter, r: Rect, text: &str, font: egui::FontId, color: egui::Co
 }
 
 // A group title: small lavender serif caption over a rule.
-fn caption(ui: &mut Ui, x: f32, w: f32, text: &str) {
+pub(super) fn caption(ui: &mut Ui, x: f32, w: f32, text: &str) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.max_rect().width(), 34.0), Sense::hover());
     let p = ui.painter();
     let g = p.layout_no_wrap(text.to_string(), theme::serif(CAP), theme::ACCENT);
@@ -1056,27 +1301,56 @@ fn padded<R>(ui: &mut Ui, left: f32, w: f32, f: impl FnOnce(&mut Ui) -> R) -> R 
     .inner
 }
 
-// A path cut from the left to `w` points, folder by folder ("…/TH08 - Imperishable Night").
+// A path for a row: the root, "…" and the folder itself ("~/Games/…/TH08 - Imperishable Night"), shorter still
+// when `w` points do not hold it; the whole path is in the help line.
 fn fit_path(p: &Painter, path: &str, w: f32) -> String {
     let width = |s: &str| {
         p.layout_no_wrap(s.to_string(), theme::sans(SMALL), theme::TEXT)
             .size()
             .x
     };
-    let mut s = path.to_string();
-    while width(&s) > w {
-        let body = s.trim_start_matches("…/");
-        match body.find(['/', '\\']) {
-            Some(i) if i + 1 < body.len() => s = format!("…/{}", &body[i + 1..]),
-            _ => break,
-        }
+    let sep = if path.contains('\\') && !path.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    let parts: Vec<&str> = trimmed.split(['/', '\\']).collect();
+    let n = parts.len();
+    let mut tries = Vec::new();
+    if n <= 3 {
+        tries.push(trimmed.to_string());
     }
-    s
+    let last = parts[n - 1];
+    if n > 3 {
+        tries.push(format!("{}{sep}{}{sep}…{sep}{last}", parts[0], parts[1]));
+    }
+    if n > 2 {
+        tries.push(format!("{}{sep}…{sep}{last}", parts[0]));
+    }
+    if n > 1 {
+        tries.push(format!("…{sep}{last}"));
+    }
+    if let Some(t) = tries.iter().find(|t| width(t) <= w) {
+        return t.clone();
+    }
+    let mut s: String = last.to_string();
+    while !s.is_empty() && width(&format!("…{sep}{s}…")) > w {
+        s.pop();
+    }
+    format!("…{sep}{s}…")
 }
 
 // Blocks until the title art has loaded (offscreen shots).
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 impl Model {
+    // Offscreen shots: the settings list scrolled to its last row under key focus.
+    pub fn shot_scroll_end(&mut self) {
+        self.nav.focus = Some(Target::Reset);
+        self.nav.input.modality = theme::Modality::Keys;
+        self.nav.moved = true;
+    }
+
     pub(super) fn settle_art(&mut self) {
         if let Art::Loading(rx) = &self.nav.art {
             let img = rx.recv().ok().flatten();
@@ -1093,7 +1367,7 @@ impl Model {
 }
 
 // $HOME shortened to ~ in a shown path.
-fn tilde(path: &str) -> String {
+pub(super) fn tilde(path: &str) -> String {
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     if let Some(h) = std::env::var("HOME").ok().filter(|h| !h.is_empty())
         && let Some(rest) = path.strip_prefix(&h)

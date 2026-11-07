@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: tools/check NAME — runs the check tools/check_level names for this worktree's committed HEAD vs master as one
 #   q job (light: fmt, clippy -D warnings for linux and windows-gnu, cargo deny, rule scripts, unit tests; full and
-#   batch: the same lints, then arch_check; batch also marks the replay batch due) and waits up to ~8 min; exit 75 =
+#   batch: the same lints, then arch_check; batch also marks the replay batch due; a `ui:` line: the uishots layout
+#   check too) and waits up to ~8 min; exit 75 =
 #   still running, continue with `tools/check --wait ID`. On PASS writes devdata/checks/<tree>.pass in the main checkout,
 #   which tools/land reads. Refuses uncommitted or untracked files. --block NAME waits until the job ends.
 set -u
@@ -44,6 +45,9 @@ if [[ ${1:-} == run ]]; then
     step tools/core_deps
     step tools/emit_rule
     step tools/doc_pointers
+    if "$TOOLS/check_level" "$(git merge-base master "$head")" "$head" | grep -q '^ui:'; then
+      step env -u TH08_DIR cargo run -q --locked -p th08-tools --bin uishots
+    fi
     if [[ $level == light ]]; then
       step env -u TH08_DIR -u TH08_REQUIRE_DATA cargo test -q --locked --workspace
     else

@@ -185,7 +185,7 @@ pub fn apply(ctx: &egui::Context, d: Density) {
         };
         v.slider_trailing_fill = true;
         v.handle_shape = egui::style::HandleShape::Circle;
-        v.selection.bg_fill = FILL;
+        v.selection.bg_fill = BAND;
         v.selection.stroke = Stroke::new(1.5, TEXT_HI);
         v.text_cursor.stroke = Stroke::new(2.0, ACCENT);
         v.striped = false;
@@ -195,14 +195,21 @@ pub fn apply(ctx: &egui::Context, d: Density) {
         w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
         w.noninteractive.bg_stroke = Stroke::new(1.0, RULE);
         w.noninteractive.corner_radius = CornerRadius::ZERO;
-        for (x, fill, stroke, fg) in [
-            (&mut w.inactive, CELL, Stroke::new(1.0, EDGE), TEXT),
-            (&mut w.hovered, PRESSED, Stroke::new(1.0, DIM), TEXT_HI),
-            (&mut w.active, PRESSED, Stroke::new(1.0, ACCENT), TEXT_HI),
-            (&mut w.open, PRESSED, Stroke::new(1.0, EDGE), TEXT_HI),
+        // Buttons are bare serif words (a band under the pointer, pressed fill), as the painted rows' text actions.
+        for (x, fill, weak, stroke, fg) in [
+            (
+                &mut w.inactive,
+                CELL,
+                Color32::TRANSPARENT,
+                Stroke::NONE,
+                TEXT,
+            ),
+            (&mut w.hovered, PRESSED, BAND, Stroke::NONE, TEXT_HI),
+            (&mut w.active, PRESSED, PRESSED, Stroke::NONE, TEXT_HI),
+            (&mut w.open, PRESSED, BAND, Stroke::NONE, TEXT_HI),
         ] {
             x.bg_fill = fill;
-            x.weak_bg_fill = fill;
+            x.weak_bg_fill = weak;
             x.bg_stroke = stroke;
             x.fg_stroke = Stroke::new(1.5, fg);
             x.corner_radius = CornerRadius::ZERO;
@@ -243,14 +250,12 @@ pub enum Kind {
 }
 
 pub fn button<'a>(text: impl Into<String>, kind: Kind) -> egui::Button<'a> {
-    let text = RichText::new(text.into());
-    match kind {
-        Kind::Primary => egui::Button::new(text.color(TEXT_HI))
-            .fill(PRESSED)
-            .stroke(Stroke::new(1.0, ACCENT)),
-        Kind::Secondary => egui::Button::new(text.color(TEXT)),
-        Kind::Danger => egui::Button::new(text.color(DANGER)),
-    }
+    let text = RichText::new(latin_ellipsis(&text.into()).into_owned());
+    egui::Button::new(match kind {
+        Kind::Primary => text.color(TEXT_HI),
+        Kind::Secondary => text.color(TEXT),
+        Kind::Danger => text.color(DANGER),
+    })
 }
 
 // An underline tab bar in the egui flow (launcher Replays / Stats screens): serif words, the selected one white
@@ -381,15 +386,16 @@ pub fn layout(p: &Painter, text: &str, font: FontId, wrap: f32) -> Arc<Galley> {
 pub fn heading(p: &Painter, pos: Pos2, word: &str, caption: &str, size: f32, cap: f32) -> f32 {
     let g = p.layout_no_wrap(word.to_string(), serif(size), TEXT_HI);
     let h = g.size().y;
-    outlined(p, pos, g, TEXT_HI, false);
+    outlined(p, pos, g.clone(), TEXT_HI, false);
     if caption.is_empty() {
         return h;
     }
     let c = p.layout_no_wrap(caption.to_string(), serif(cap), ACCENT);
     let ch = c.size().y;
-    let at = pos + vec2(0.0, size * 1.18);
-    caption_text(p, at, c);
-    (size * 1.18 + ch).max(h)
+    // Under the word's descenders: at least 3 points between the inks.
+    let dy = (size * 1.18).max(g.mesh_bounds.max.y + 3.0 - c.mesh_bounds.min.y);
+    caption_text(p, pos + vec2(0.0, dy), c);
+    (dy + ch).max(h)
 }
 
 // A small lavender serif caption with the plum glow.
@@ -440,6 +446,123 @@ trait RoundPx {
 impl RoundPx for f32 {
     fn round_to_px(self, px: f32) -> f32 {
         (self / px).floor() * px + px / 2.0
+    }
+}
+
+// The last kind of input: the keyboard focus bar shows only after a key or pad press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modality {
+    Pointer,
+    Keys,
+    Touch,
+}
+
+// Hover and modality of a screen's rows, kept apart from its keyboard focus (focus-visible).
+#[derive(Clone, Debug)]
+pub struct Input<T> {
+    pub modality: Modality,
+    // The row under the pointer in the last finished pass, and in this one.
+    hover: Option<T>,
+    next: Option<T>,
+}
+
+impl<T> Default for Input<T> {
+    fn default() -> Self {
+        Self {
+            modality: Modality::Pointer,
+            hover: None,
+            next: None,
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> Input<T> {
+    pub fn new(modality: Modality) -> Self {
+        Self {
+            modality,
+            hover: None,
+            next: None,
+        }
+    }
+
+    // Start of a pass: a moving or pressing pointer makes it pointer input (touch on a touch screen).
+    pub fn begin(&mut self, ctx: &egui::Context, touch_screen: bool) {
+        let (touch, pointer) = ctx.input(|i| {
+            (
+                i.any_touches()
+                    || i.raw
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, egui::Event::Touch { .. })),
+                i.pointer.is_moving() || i.pointer.any_pressed(),
+            )
+        });
+        if touch || (pointer && touch_screen) {
+            self.pointer(true);
+        } else if pointer {
+            self.pointer(false);
+        }
+        self.next = None;
+    }
+
+    pub fn pointer(&mut self, touch: bool) {
+        self.modality = if touch {
+            Modality::Touch
+        } else {
+            Modality::Pointer
+        };
+    }
+
+    // `t` is under the pointer this pass.
+    pub fn over(&mut self, t: T) {
+        if self.modality != Modality::Touch {
+            self.next = Some(t);
+        }
+    }
+
+    // End of a pass; true when the hovered row changed (the help line needs another pass).
+    pub fn end(&mut self) -> bool {
+        let changed = self.hover != self.next;
+        self.hover = self.next;
+        changed
+    }
+
+    // A key or pad press. None: the focus bar was showing and moves as usual; Some(h): the bar appears now, on the
+    // hovered row `h` if any (else on the last focused row), and the press does nothing else.
+    pub fn key(&mut self) -> Option<Option<T>> {
+        if self.modality == Modality::Keys {
+            return None;
+        }
+        self.modality = Modality::Keys;
+        Some(self.hover)
+    }
+
+    pub fn bar(&self) -> bool {
+        self.modality == Modality::Keys
+    }
+
+    // The transient pointer highlight of `t` (only while the pointer is over it).
+    pub fn lit(&self, t: T) -> bool {
+        self.modality == Modality::Pointer && self.next == Some(t)
+    }
+
+    // The row the help line describes under pointer input.
+    pub fn hovered(&self) -> Option<T> {
+        match self.modality {
+            Modality::Pointer => self.hover,
+            _ => None,
+        }
+    }
+}
+
+// How a row is marked: the focus bar (keys / pad), a hover band (pointer), pressed (touch), or not at all.
+pub fn mark(p: &Painter, band: Rect, tick_w: f32, bar: bool, lit: bool, pressed: bool) {
+    if bar {
+        focus(p, band, tick_w, pressed);
+    } else if pressed {
+        p.rect_filled(band, 0.0, PRESSED);
+    } else if lit {
+        p.rect_filled(band, 0.0, BAND.gamma_multiply(0.55));
     }
 }
 
@@ -612,6 +735,8 @@ pub struct CtlStyle {
     pub numw: f32,
     pub gap: f32,
     pub cell_w: f32,
+    // Phone choice cells: the least cell height.
+    pub cell_h: f32,
 }
 
 fn hit(ui: &Ui, id: egui::Id, r: Rect, sense: egui::Sense) -> Response {
@@ -634,90 +759,50 @@ pub fn value_ctl(
     let mut out = None;
     match ctl {
         Ctl::None => {}
+        Ctl::Choices { words, sel } if words.len() > MAX_WORDS => {
+            let word = sel.and_then(|i| words.get(i)).cloned().unwrap_or_default();
+            out = stepper(ui, p, id, rect, st, focused, |p, r| {
+                // A single word wider than the middle is set smaller (to 60 %) rather than overflowing.
+                let wide = p
+                    .layout_no_wrap(word.clone(), serif(st.size), TEXT)
+                    .size()
+                    .x;
+                let size = st.size * ((r.width() - 8.0) / wide.max(1.0)).clamp(0.6, 1.0);
+                let g = p.layout(word.clone(), serif(size), TEXT, r.width().max(10.0));
+                let pos = if st.cells {
+                    r.center() - g.size() / 2.0
+                } else {
+                    pos2(r.min.x, r.center().y - g.size().y / 2.0)
+                };
+                outlined(p, pos, g, if focused { TEXT_HI } else { TEXT }, false);
+            });
+        }
         Ctl::Choices { words, sel } => {
-            let gs: Vec<Arc<Galley>> = words
-                .iter()
-                .map(|w| p.layout_no_wrap(w.clone(), serif(st.size), TEXT))
-                .collect();
-            let cells = st.cells && {
-                let need = st.cell_w * words.len() as f32;
-                need <= rect.width() + 0.5
-            };
-            let total: f32 =
-                gs.iter().map(|g| g.size().x).sum::<f32>() + st.gap * (gs.len().max(1) - 1) as f32;
-            let room = rect.width() - if st.right { 0.0 } else { st.indent };
-            if cells {
-                // `right` spreads the cells over the whole rect (the phone quick settings), else 1 cell width each.
-                let cw = if st.right {
-                    rect.width() / words.len() as f32
+            let (items, lines) = choice_layout(p, words, st, rect.width());
+            let lh = line_h(st);
+            let top = cy - lines as f32 * lh / 2.0;
+            for (i, (g, x, line, w)) in items.into_iter().enumerate() {
+                let r =
+                    Rect::from_min_size(pos2(rect.min.x + x, top + line as f32 * lh), vec2(w, lh));
+                let hr = if st.cells {
+                    r
                 } else {
-                    st.cell_w
+                    r.expand2(vec2(st.gap / 2.0, 0.0))
                 };
-                let x0 = rect.min.x;
-                for (i, g) in gs.into_iter().enumerate() {
-                    let r = Rect::from_min_size(
-                        pos2(x0 + cw * i as f32, rect.min.y),
-                        vec2(cw, rect.height()),
-                    );
-                    let on = *sel == Some(i);
-                    let resp = hit(ui, id.with(("pick", i)), r, egui::Sense::click());
-                    if resp.is_pointer_button_down_on() {
-                        p.rect_filled(r.shrink(4.0), 0.0, PRESSED);
-                    }
-                    if resp.clicked() {
-                        out = Some(CtlOut::Pick(i));
-                    }
-                    // A word wider than its cell is set smaller to fit (long Russian words).
-                    let fit = (cw - 12.0) / g.size().x.max(1.0);
-                    let g = if fit < 1.0 {
-                        p.layout_no_wrap(words[i].clone(), serif(st.size * fit.max(0.6)), TEXT)
-                    } else {
-                        g
-                    };
-                    let pos = r.center() - g.size() / 2.0;
-                    outlined(p, pos, g, if on { TEXT_HI } else { DIM }, false);
+                let resp = hit(ui, id.with(("pick", i)), hr, egui::Sense::click());
+                if st.cells && resp.is_pointer_button_down_on() {
+                    p.rect_filled(r.shrink(4.0), 0.0, PRESSED);
                 }
-            } else if total <= room {
-                let mut x = if st.right {
-                    rect.max.x - total
+                if resp.clicked() {
+                    out = Some(CtlOut::Pick(i));
+                }
+                let pos = if st.cells {
+                    r.center() - g.size() / 2.0
                 } else {
-                    rect.min.x + st.indent
+                    pos2(r.min.x, r.center().y - g.size().y / 2.0)
                 };
-                for (i, g) in gs.into_iter().enumerate() {
-                    let w = g.size().x;
-                    let r = Rect::from_min_max(
-                        pos2(x - st.gap / 2.0, rect.min.y),
-                        pos2(x + w + st.gap / 2.0, rect.max.y),
-                    );
-                    if hit(ui, id.with(("pick", i)), r, egui::Sense::click()).clicked() {
-                        out = Some(CtlOut::Pick(i));
-                    }
-                    let on = *sel == Some(i);
-                    outlined(
-                        p,
-                        pos2(x, cy - g.size().y / 2.0),
-                        g,
-                        if on { TEXT_HI } else { DIM },
-                        false,
-                    );
-                    x += w + st.gap;
-                }
-            } else {
-                let word = sel.and_then(|i| words.get(i)).cloned().unwrap_or_default();
-                out = stepper(ui, p, id, rect, st, focused, |p, r| {
-                    let wide = p
-                        .layout_no_wrap(word.clone(), serif(st.size), TEXT)
-                        .size()
-                        .x;
-                    let size = st.size * (r.width() / wide.max(1.0)).clamp(0.6, 1.0);
-                    let g = p.layout_no_wrap(word.clone(), serif(size), TEXT);
-                    let pos = if st.cells {
-                        r.center() - g.size() / 2.0
-                    } else {
-                        pos2(r.min.x, r.center().y - g.size().y / 2.0)
-                    };
-                    outlined(p, pos, g, if focused { TEXT_HI } else { TEXT }, false);
-                });
+                let on = *sel == Some(i);
+                outlined(p, pos, g, if on { TEXT_HI } else { DIM }, false);
             }
         }
         Ctl::Slider { frac, text, unit } => {
@@ -770,13 +855,28 @@ pub fn value_ctl(
                 }
             } else {
                 let ah = st.size * 0.5;
-                let w = ah + 16.0 + st.track + 16.0 + ah + st.numw;
+                // The number column fits its text; the track gives way so the slider stays inside its rect.
+                let numw = {
+                    let n = p.layout_no_wrap(text.clone(), sans(st.num), TEXT).size().x;
+                    let u = if unit.is_empty() {
+                        0.0
+                    } else {
+                        p.layout_no_wrap(unit.clone(), sans(st.num * 0.78), HELP)
+                            .size()
+                            .x
+                            + 3.0
+                    };
+                    st.numw.max(n + u + 12.0)
+                };
+                let fixed = ah + 16.0 + 16.0 + ah + numw;
+                let track_len = st.track.min(rect.width() - fixed).max(24.0);
+                let w = fixed + track_len;
                 let x0 = if st.right { rect.max.x - w } else { rect.min.x };
                 let left =
                     Rect::from_center_size(pos2(x0 + ah / 2.0, cy), vec2(ah + 16.0, rect.height()));
                 let tx = x0 + ah + 16.0;
                 let right = Rect::from_center_size(
-                    pos2(tx + st.track + 16.0 + ah / 2.0, cy),
+                    pos2(tx + track_len + 16.0 + ah / 2.0, cy),
                     vec2(ah + 16.0, rect.height()),
                 );
                 arrow(p, left.center(), ah, false, arrow_c);
@@ -787,7 +887,7 @@ pub fn value_ctl(
                 if hit(ui, id.with("inc"), right, egui::Sense::click()).clicked() {
                     out = Some(CtlOut::Step(1));
                 }
-                let tr = egui::Rangef::new(tx, tx + st.track);
+                let tr = egui::Rangef::new(tx, tx + track_len);
                 track(p, tr, cy, *frac, focused);
                 if let Some(f) = drag(ui, id, Rect::from_x_y_ranges(tr, rect.y_range())) {
                     out = Some(CtlOut::Frac(f));
@@ -813,6 +913,91 @@ pub fn value_ctl(
         }
     }
     out
+}
+
+// Enums with more values than this get a stepper; fewer show all their words (the menus' one rule).
+pub const MAX_WORDS: usize = 5;
+
+// Height of one line of choice words.
+fn line_h(st: &CtlStyle) -> f32 {
+    if st.cells {
+        (st.size * 2.3).max(st.cell_h)
+    } else {
+        st.size * 1.8
+    }
+}
+
+// The shortest gap between two choice words (cells: the room around the word inside its cell).
+fn word_gap(st: &CtlStyle) -> f32 {
+    st.gap.max(st.size * 0.8)
+}
+
+// Choice words laid out in lines of `room` points: (galley, x, line, item width) and the line count. Words keep
+// their size and wrap to the next line; `right` cells share one line evenly when every word fits its share.
+// A laid-out choice word: galley, x, line, item width.
+type Placed = (Arc<Galley>, f32, usize, f32);
+
+fn choice_layout(p: &Painter, words: &[String], st: &CtlStyle, room: f32) -> (Vec<Placed>, usize) {
+    let indent = if st.right || st.cells { 0.0 } else { st.indent };
+    let gs: Vec<Arc<Galley>> = words
+        .iter()
+        .map(|w| p.layout_no_wrap(w.clone(), serif(st.size), TEXT))
+        .collect();
+    let pad = word_gap(st);
+    if st.cells && st.right {
+        let share = room / gs.len().max(1) as f32;
+        if gs.iter().all(|g| g.size().x + pad <= share) {
+            let n = gs.len();
+            let v = gs
+                .into_iter()
+                .enumerate()
+                .map(|(i, g)| (g, share * i as f32, 0, share))
+                .collect();
+            return (v, usize::from(n > 0));
+        }
+    }
+    let width = |g: &Galley| {
+        if st.cells {
+            st.cell_w.max(g.size().x + pad)
+        } else {
+            g.size().x
+        }
+    };
+    let gap = if st.cells { 0.0 } else { pad };
+    let (mut x, mut line, mut v) = (indent, 0, Vec::new());
+    for g in gs {
+        let w = width(&g);
+        if x > indent && x + w > room + 0.5 {
+            x = indent;
+            line += 1;
+        }
+        v.push((g, x, line, w));
+        x += w + gap;
+    }
+    let lines = if v.is_empty() { 0 } else { line + 1 };
+    (v, lines)
+}
+
+// The height a control needs in a row `w` points wide.
+pub fn ctl_height(p: &Painter, ctl: &Ctl, st: &CtlStyle, w: f32) -> f32 {
+    match ctl {
+        Ctl::Choices { words, .. } if words.len() <= MAX_WORDS => {
+            choice_layout(p, words, st, w).1 as f32 * line_h(st)
+        }
+        Ctl::None => 0.0,
+        _ => line_h(st),
+    }
+}
+
+// The label column (16 points of it the gap to the control): at least `base`, wide enough for the widest single
+// word of `labels` (labels wrap only between words), at most `max`.
+pub fn label_width(p: &Painter, labels: &[&str], font: &FontId, base: f32, max: f32) -> f32 {
+    let widest = labels
+        .iter()
+        .flat_map(|l| l.split_whitespace())
+        .map(|w| p.layout_no_wrap(w.to_string(), font.clone(), TEXT).size().x)
+        .fold(0.0, f32::max);
+    (widest + 24.0).max(base).min(max)
 }
 
 // ◀ [middle] ▶: phone cells at both ends, or small arrows around the middle on desktop.
@@ -959,6 +1144,40 @@ mod tests {
     }
 
     // Desktop windows: the OS scale up to 1.75× 640×480, growing to 1.5× at most; touch: the density.
+    #[test]
+    fn modality() {
+        let mut i: Input<u8> = Input::new(Modality::Pointer);
+        i.over(3);
+        assert!(i.lit(3) && !i.bar());
+        assert!(i.end());
+        assert_eq!(i.hovered(), Some(3));
+        // The pointer leaves: nothing stays lit, the help line falls back.
+        assert!(!i.end());
+        i.next = None;
+        assert!(i.end());
+        assert!(!i.lit(3));
+        assert_eq!(i.hovered(), None);
+        // A key press over a row: the bar appears on that row; the next press moves it.
+        i.over(5);
+        i.end();
+        assert_eq!(i.key(), Some(Some(5)));
+        assert!(i.bar() && !i.lit(5));
+        assert_eq!(i.hovered(), None);
+        assert_eq!(i.key(), None);
+        // Pointer again: bar gone; a key press with no row hovered starts from the last focus.
+        i.pointer(false);
+        i.next = None;
+        i.end();
+        assert!(!i.bar());
+        assert_eq!(i.key(), Some(None));
+        // Touch: no hover band, no bar.
+        i.pointer(true);
+        i.over(2);
+        assert!(!i.lit(2) && !i.bar());
+        i.end();
+        assert_eq!(i.hovered(), None);
+    }
+
     #[test]
     fn scale() {
         assert_eq!(ppp(1120.0, 840.0, 1.0, false), 1.0);

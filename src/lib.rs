@@ -27,6 +27,7 @@ pub mod stats;
 pub mod theme;
 pub mod translations;
 pub mod transport;
+pub mod uicheck;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
