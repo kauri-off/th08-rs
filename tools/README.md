@@ -11,7 +11,7 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 
 | Tool | Who | What |
 |---|---|---|
-| `check_level [BASE]` | all | which check a change needs: `light`, `full` or `batch`, plus a `pixels:` line for th08-render changes |
+| `check_level [BASE]` | all | which check a change needs: `light`, `full` or `batch`, plus a `pixels:` line for th08-render changes and a `batch-due:` line for dependency changes outside the core tree |
 | `spec_refs.py` | all (CI) | every `NN §x.y` citation in the code points at an existing spec heading |
 | `core_deps` | all (CI) | th08-core / th08-out have no window, GPU, audio or CLI crates among their dependencies |
 | `emit_rule` | all (CI) | th08-core logic outside `src/emit/` never names the emit side |
@@ -28,11 +28,12 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `android/cargo_android.sh` | all | `libth08.so` per ABI with the NDK (used by the Gradle build) |
 | `android/run_debug.sh` | all | debug APK on an emulator: build, install, run, screenshot |
 | `android/build_apk.sh` | all | convenience wrapper; `cargo xtask dist --target android-apk` is the supported way |
-| `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots) |
+| `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots); stall watchdog (`wait` exit 76, `kill ID`), emulator snapshot around emu jobs, scratch quota warning; `q selftest` |
 | `arch_job NAME` | maintainer | `arch_check run devdata/arch_ref` as a `q` job |
-| `batch_job NAME` | maintainer | the replay batch (sets `ref500`, `ref_b2`) as a `q` job |
+| `batch_job NAME` | maintainer | the replay batch (sets `ref500`, `ref_b2`) as a `q` job; `due` / `train [--now]`: the batch train for batch-due commits (bisects on FAIL) |
 | `check NAME` | maintainer | runs the `check_level` check of a worktree's committed HEAD as a `q` job; on PASS writes a stamp in `devdata/checks/` |
 | `land BRANCH` | maintainer | lands an agent branch on master: fast-forward with a pass stamp, else rebase, `check`, fast-forward; removes the worktree; `--setup` registers the merge drivers of `.gitattributes`, `--selftest` |
+| `release_gate` | maintainer | refuses a release while batch-due commits wait or no passing batch covers HEAD |
 | `merge_wt WT NAME` | maintainer | applies an agent worktree's changes to this checkout and removes the worktree |
 
 `batch/*.identical` lists the replays of each set that match the original; `xplat_replays.list` the replays the

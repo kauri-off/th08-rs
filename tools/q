@@ -2,12 +2,20 @@
 """usage: tools/q  (one-line summary)
        tools/q submit [--kind check|test|emu|full|batch|long] [--prio high|normal] [--label TEXT] [-C DIR]
                 [--progress 'GLOB|N']… -- CMD…  (prints ID)
-       tools/q wait ID [--max SECONDS] [--tail N] | ls | top [--once] | stats [--since 24h] [--id ID] | cancel ID | selftest
-       tools/q legacy [-w SECS] -- CMD…  (exclusive QLOCK, wait/run logged as kind=legacy)
+                [--stall SECS]
+       tools/q wait ID [--max SECONDS] [--tail N] | ls | top [--once] | stats [--since 24h] [--id ID] | cancel ID | kill ID
+       tools/q selftest | legacy [-w SECS] -- CMD…  (exclusive QLOCK, wait/run logged as kind=legacy)
 Job queue for heavy runs: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
 check 2, test 1, emu 1 + the emulator token, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
 runs); prio high first, strict FIFO behind the head), holds QLOCK SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
-Env: QDIR (default <repo>/target/queue), QLOCK (default QDIR/compat.lock), QPOLL (s)."""
+Stall watchdog: a running job whose process tree used < QSTALL_CPU % of one core and whose out.log did not grow for
+QSTALL s (or --stall) shows as `stalled` in ls / top with its blocked threads; wait on it exits 76. It is not killed:
+`kill ID` stops it (cancel, TERM to the whole tree, KILL after QKILL_GRACE s) and waits until it is gone.
+emu jobs: the emulator is saved to snapshot q_pre before the job and restored after it (also when cancelled), plus
+user_rotation / wm size / wm density; job env QEMU_HYGIENE=0 skips that, QADB names adb. ls warns when a job's
+scratch dir (/tmp/claude-UID/<mangled cwd>) passes QSCRATCH_GB.
+Env: QDIR (default <repo>/target/queue), QLOCK (default QDIR/compat.lock), QPOLL (s), QSTALL (600), QSTALL_CPU (2),
+QKILL_GRACE (10), QSCRATCH_GB (3), QSCRATCH_ROOT."""
 import glob as globmod, fcntl, json, os, random, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
 
 _me = os.path.realpath(__file__)
@@ -21,6 +29,12 @@ WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2, "long": 2}
 WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
 EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
 EXIT_CANCELLED = 125
+EXIT_STALLED = 76  # job running but stalled (see the watchdog); not killed
+STALL = float(os.environ.get("QSTALL", "600"))
+STALL_CPU = float(os.environ.get("QSTALL_CPU", "2")) / 100
+KILL_GRACE = float(os.environ.get("QKILL_GRACE", "10"))
+SCRATCH_GB = float(os.environ.get("QSCRATCH_GB", "3"))
+SCRATCH_ROOT = os.environ.get("QSCRATCH_ROOT") or f"/tmp/claude-{os.getuid()}"
 # Unit prefix: the real queue gets q-ID, a scratch QDIR (selftest) qt-ID, so both can coexist.
 PREFIX = "q" if QDIR == f"{MAIN}/target/queue" else "qt"
 
@@ -127,6 +141,183 @@ def worktree(cwd):
     return m.group(1) if m else ("main" if cwd.startswith(MAIN) else os.path.basename(cwd))
 
 
+# ---- process tree, stall watchdog -------------------------------------------------------------------------------
+
+def cgroup_dir():
+    """The runner's own cgroup v2 dir (the job's systemd unit), or None."""
+    try:
+        for l in open("/proc/self/cgroup"):
+            if l.startswith("0::"):
+                d = "/sys/fs/cgroup" + l[3:].strip()
+                return d if os.path.isfile(f"{d}/cgroup.procs") else None
+    except OSError: pass
+    return None
+
+
+def tree_pids(cg, root):
+    """The job's processes except the runner: its cgroup, or (no cgroup) every process in the child's session."""
+    me = os.getpid()
+    if cg:
+        try: return [int(x) for x in open(f"{cg}/cgroup.procs").read().split() if int(x) != me]
+        except (OSError, ValueError): pass
+    out = []
+    for p in os.listdir("/proc"):
+        if not p.isdigit(): continue
+        try:
+            f = open(f"/proc/{p}/stat").read().rpartition(")")[2].split()
+            if int(f[3]) == root: out.append(int(p))  # field 6 = session id
+        except (OSError, ValueError, IndexError): pass
+    return out
+
+
+TICK = os.sysconf("SC_CLK_TCK")
+
+
+def tree_cpu(cg, root):
+    """CPU seconds used by the job's process tree so far (cgroup total minus the runner's own share)."""
+    if cg:
+        try:
+            u = next(int(l.split()[1]) for l in open(f"{cg}/cpu.stat") if l.startswith("usage_usec "))
+            t = os.times()
+            return u / 1e6 - t.user - t.system
+        except (OSError, ValueError, StopIteration): pass
+    tot = 0.0
+    for p in tree_pids(None, root):
+        try:
+            f = open(f"/proc/{p}/stat").read().rpartition(")")[2].split()
+            tot += sum(int(x) for x in f[11:15]) / TICK  # utime stime cutime cstime
+        except (OSError, ValueError, IndexError): pass
+    return tot
+
+
+def blocked_threads(pids, top=6):
+    """Threads of pids grouped by (comm, wchan), busiest first: 'comm wchan ×n (cpu s)'."""
+    g = {}
+    for p in pids:
+        try: tids = os.listdir(f"/proc/{p}/task")
+        except OSError: continue
+        for t in tids:
+            b = f"/proc/{p}/task/{t}"
+            try:
+                raw = open(f"{b}/stat").read()
+                comm = raw[raw.find("(") + 1:raw.rfind(")")]
+                f = raw.rpartition(")")[2].split()
+                state, cpu = f[0], (int(f[11]) + int(f[12])) / TICK
+                wc = open(f"{b}/wchan").read().strip() or "-"
+            except (OSError, ValueError, IndexError): continue
+            if state == "R": wc = "running"
+            k = (comm, wc)
+            n, c = g.get(k, (0, 0.0)); g[k] = (n + 1, c + cpu)
+    rows = sorted(g.items(), key=lambda x: (-x[1][1], -x[1][0]))[:top]
+    return ", ".join(f"{c} {w}" + (f" ×{n}" if n > 1 else "") + f" ({cpu:.0f} s)" for (c, w), (n, cpu) in rows) or "no threads"
+
+
+class Watchdog:
+    """Stall check of a running job: CPU of the tree and out.log growth over the last `win` seconds."""
+    def __init__(self, cg, root, out_path, win):
+        self.cg, self.root, self.out, self.win = cg, root, out_path, win
+        self.samples, self.size, self.grow, self.t0 = [], -1, now(), now()
+
+    def check(self):
+        """None when the job is active, else the stall record."""
+        t = now(); c = tree_cpu(self.cg, self.root)
+        self.samples.append((t, c))
+        while len(self.samples) > 1 and self.samples[1][0] <= t - self.win: self.samples.pop(0)
+        try: sz = os.path.getsize(self.out)
+        except OSError: sz = 0
+        if sz != self.size: self.size, self.grow = sz, t
+        ot, oc = self.samples[0]
+        if t - self.grow < self.win or ot > t - self.win: return None
+        use = max(0.0, (c - oc) / (t - ot))
+        if use >= STALL_CPU: return None
+        return {"since": self.grow, "cpu_pct": round(100 * use, 2), "silent": round(t - self.grow),
+                "reason": f"out.log silent {t - self.grow:.0f} s, {100 * use:.2f} % of one core over {t - ot:.0f} s",
+                "threads": blocked_threads(tree_pids(self.cg, self.root))}
+
+
+def kill_tree(cg, root, sig):
+    try: os.killpg(root, sig)
+    except (ProcessLookupError, PermissionError): pass
+    for p in tree_pids(cg, root):
+        try: os.kill(p, sig)
+        except (ProcessLookupError, PermissionError): pass
+
+
+# ---- emulator hygiene, scratch quota ---------------------------------------------------------------------------
+
+class Emu:
+    """Snapshot q_pre of every running emulator before an emu job, restored with rotation / wm size / density after."""
+    def __init__(self, env, log_path):
+        self.env, self.log, self.saved = env, log_path, {}
+        sdk = env.get("ANDROID_HOME") or env.get("ANDROID_SDK_ROOT") or ""
+        self.adb = env.get("QADB") or shutil.which("adb", path=env.get("PATH")) or (
+            f"{sdk}/platform-tools/adb" if sdk and os.path.exists(f"{sdk}/platform-tools/adb") else None)
+        self.on = env.get("QEMU_HYGIENE", "1") != "0" and bool(self.adb)
+
+    def run(self, *a, t=120):
+        try:
+            r = subprocess.run([self.adb, *a], env=self.env, capture_output=True, text=True, timeout=t, stdin=subprocess.DEVNULL)
+            out = (r.stdout + r.stderr).strip()
+            rc = r.returncode
+        except (OSError, subprocess.TimeoutExpired) as x: out, rc = str(x), -1
+        with open(self.log, "a") as f: f.write(f"$ adb {' '.join(a)} -> {rc}\n" + (out + "\n" if out else ""))
+        return rc, out
+
+    def serials(self):
+        rc, out = self.run("devices")
+        return [l.split()[0] for l in out.splitlines() if l.startswith("emulator-") and l.split()[1:2] == ["device"]]
+
+    def save(self):
+        if not self.on: return "emu hygiene off" if self.adb else "no adb"
+        for s in self.serials():
+            rot = self.run("-s", s, "shell", "settings", "get", "system", "user_rotation")[1].strip()
+            ok = self.run("-s", s, "emu", "avd", "snapshot", "save", "q_pre")[0] == 0
+            self.saved[s] = {"snap": ok, "rot": rot if rot.isdigit() else None}
+        return "saved q_pre on " + (", ".join(self.saved) if self.saved else "no running emulator")
+
+    def restore(self):
+        if not self.on: return ""
+        done = []
+        for s in self.serials():
+            sv = self.saved.get(s, {})
+            if sv.get("snap"):
+                self.run("-s", s, "emu", "avd", "snapshot", "load", "q_pre")
+                self.run("-s", s, "wait-for-device", t=60)
+            if sv.get("rot") is not None: self.run("-s", s, "shell", "settings", "put", "system", "user_rotation", sv["rot"])
+            self.run("-s", s, "shell", "wm", "size", "reset"); self.run("-s", s, "shell", "wm", "density", "reset")
+            done.append(s + (" (snapshot)" if sv.get("snap") else ""))
+        return "restored " + (", ".join(done) if done else "no running emulator")
+
+
+def du(p):
+    tot = 0
+    for r, ds, fs in os.walk(p):
+        for f in fs:
+            try: tot += os.lstat(os.path.join(r, f)).st_blocks * 512
+            except OSError: pass
+    return tot
+
+
+def scratch_warn(job):
+    """A warning when the job's scratch dir (else all of SCRATCH_ROOT) passes SCRATCH_GB, or ''; sizes cached 60 s."""
+    env = rjson(f"{jdir(job['id'])}/env.json", {})
+    cand = []
+    tmp = env.get("TMPDIR") or ""
+    if tmp.startswith(SCRATCH_ROOT + "/"): cand.append(SCRATCH_ROOT + "/" + tmp[len(SCRATCH_ROOT) + 1:].split("/")[0])
+    cand.append(f"{SCRATCH_ROOT}/" + re.sub(r"[^A-Za-z0-9]", "-", job["cwd"]))
+    p = next((c for c in cand if os.path.isdir(c)), None)
+    whose = "job scratch" if p else "scratch total (job's dir not found)"
+    p = p or SCRATCH_ROOT
+    if not os.path.isdir(p): return ""
+    cache = rjson(f"{QDIR}/scratch.json", {})
+    t, n = cache.get(p, (0, 0))
+    if now() - t > 60:
+        n = du(p); cache[p] = (now(), n)
+        try: wjson(f"{QDIR}/scratch.json", cache)
+        except OSError: pass
+    return f"{whose} {p} is {n / 2**30:.1f} GB (> {SCRATCH_GB:g} GB)" if n > SCRATCH_GB * 2**30 else ""
+
+
 # ---- estimates -------------------------------------------------------------------------------------------------
 
 def pct(v, p):
@@ -178,12 +369,13 @@ def summary(s=None):
 # ---- commands --------------------------------------------------------------------------------------------------
 
 def cmd_submit(a):
-    kind, prio, label, cwd, prog = "check", "normal", "", os.getcwd(), []
+    kind, prio, label, cwd, prog, stall = "check", "normal", "", os.getcwd(), [], None
     while a and a[0] != "--":
         o = a.pop(0)
-        if o in ("--kind", "--prio", "--label", "-C", "--progress") and a: v = a.pop(0)
+        if o in ("--kind", "--prio", "--label", "-C", "--progress", "--stall") and a: v = a.pop(0)
         else: die(f"submit: unknown option {o}")
         if o == "--progress": prog.append(v)
+        elif o == "--stall": stall = parse_dur(v)
         elif o == "--kind": kind = v
         elif o == "--prio": prio = v
         elif o == "--label": label = v
@@ -202,7 +394,8 @@ def cmd_submit(a):
     d = jdir(i)
     os.makedirs(d, mode=0o700)
     job = {"id": i, "cmd": a, "cwd": cwd, "label": label, "kind": kind, "prio": prio, "weight": WEIGHT[kind],
-           "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}", "progress": prog}
+           "submit": now(), "worktree": worktree(cwd), "unit": f"{PREFIX}-{i}", "progress": prog,
+           "stall": stall}
     wjson(f"{d}/job.json", job)
     wjson(f"{d}/env.json", env)
     wjson(f"{d}/status.json", {"state": "queued", "submit": job["submit"]})
@@ -216,6 +409,7 @@ def cmd_submit(a):
     r = subprocess.run(["systemd-run", "--user", "-q", "--collect", "--unit", job["unit"], f"--working-directory={QDIR}",
                         "--description", f"th08 queue {kind} {label}", "-p", "Nice=10", "-p", f"CPUQuota={cpu}%", "-p", "LimitCORE=0",
                         "-E", f"QDIR={QDIR}", "-E", f"QLOCK={QLOCK}", "-E", f"QPOLL={POLL}",
+                        "-E", f"QSTALL={STALL}", "-E", f"QSTALL_CPU={STALL_CPU * 100}", "-E", f"QKILL_GRACE={KILL_GRACE}",
                         "/usr/bin/python3", "-I", f"{d}/runner.py", "_run", i], capture_output=True, text=True)
     if r.returncode:
         with Locked() as s: s["jobs"].pop(i, None)
@@ -234,7 +428,8 @@ def finish(i, job, st, state, rc, out_path):
                 "submit": job["submit"], "start": start, "end": st["end"],
                 "wait": round((start or st["end"]) - job["submit"], 1),
                 "lockwait": st.get("lockwait"), "run": round(st["end"] - start, 1) if start else None,
-                "J": st.get("J"), "load": st.get("load"), "load_max": st.get("load_max"), "out": out_path})
+                "J": st.get("J"), "load": st.get("load"), "load_max": st.get("load_max"), "out": out_path,
+                "stalled": st.get("stalled", 0), "emu": st.get("emu")})
 
 
 def cmd_run(a):
@@ -245,12 +440,13 @@ def cmd_run(a):
     out_path = f"{d}/out.log"
     child = [None]
     term = [False]
+    term_t = [None]
+    cg = cgroup_dir()
 
     def on_term(*_):
         term[0] = True
-        if child[0]:
-            try: os.killpg(child[0].pid, signal.SIGTERM)
-            except ProcessLookupError: pass
+        if term_t[0] is None: term_t[0] = now()
+        if child[0]: kill_tree(cg, child[0].pid, signal.SIGTERM)
     signal.signal(signal.SIGTERM, on_term)
 
     with Locked() as s:
@@ -288,15 +484,22 @@ def cmd_run(a):
         st.update(start=None); st.setdefault("reason", "cancelled")
         finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path); return
     st.update(start=now(), lock="shared"); wjson(f"{d}/status.json", st)
+    emu = Emu(env, f"{d}/emu.log") if job["kind"] == "emu" else None
+    if emu:
+        st["emu"] = emu.save(); wjson(f"{d}/status.json", st)
     with os.fdopen(os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as out:
         try:
             child[0] = subprocess.Popen(job["cmd"], cwd=job["cwd"], env=env, stdout=out, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL, start_new_session=True)
         except OSError as x:
             out.write(f"q: cannot start {job['cmd']}: {x}\n".encode())
+            if emu: st["emu"] += "; " + emu.restore()
             finish(i, job, st, "failed", 127, out_path); return
         loads = []
         st["J"] = env.get("J")
+        wd = Watchdog(cg, child[0].pid, out_path, job.get("stall") or STALL)
+        killed = False
+        last_wd = 0.0
         while child[0].poll() is None:
             time.sleep(POLL)
             try: loads.append(float(open("/proc/loadavg").read().split()[0]))
@@ -304,9 +507,23 @@ def cmd_run(a):
             if loads: st.update(load=round(sum(loads) / len(loads), 1), load_max=round(max(loads), 1))
             if not os.path.isdir(job["cwd"]) and not term[0]:
                 st["reason"] = "worktree removed"; on_term()
+            if term[0] and not killed and now() - term_t[0] >= KILL_GRACE:
+                kill_tree(cg, child[0].pid, signal.SIGKILL); killed = True
+            stall = wd.check() if not term[0] else None
+            if stall:
+                if not st.get("stall") or now() - last_wd >= 60:
+                    st["stall"] = stall; st["stalled"] = st.get("stalled", 0) + (0 if st.get("stall_on") else 1)
+                    st["stall_on"] = True; last_wd = now(); wjson(f"{d}/status.json", st)
+            elif st.get("stall"):
+                st.pop("stall"); st["stall_on"] = False; wjson(f"{d}/status.json", st)
+        st.pop("stall", None); st.pop("stall_on", None)
+        if term[0]: kill_tree(cg, child[0].pid, signal.SIGKILL)  # leftovers of a cancelled job
+    if emu:
+        st["emu"] = (st.get("emu") or "") + "; " + emu.restore()
     rc = child[0].returncode
     if term[0]:
-        st.setdefault("reason", "cancelled"); finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path)
+        with Locked() as s: why = (s["jobs"].get(i) or {}).get("cancel")
+        st.setdefault("reason", why or "cancelled"); finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path)
     else:
         finish(i, job, st, "done" if rc == 0 else "failed", rc if rc >= 0 else 128 - rc, out_path)
 
@@ -341,7 +558,7 @@ def cmd_wait(a):
     t0 = now()
     while True:
         st = rjson(f"{jdir(i)}/status.json", {})
-        if st.get("state") not in ("queued", "running"): break
+        if st.get("state") not in ("queued", "running") or st.get("stall"): break
         if now() - t0 >= mx: break
         with Locked() as s: prune(s)
         time.sleep(min(POLL, max(0.05, mx - (now() - t0))))
@@ -357,6 +574,9 @@ def cmd_wait(a):
             print(summ); sys.exit(EXIT_PENDING)
         if st.get("state") == "running":
             ran = now() - st["start"]
+            if st.get("stall"):
+                print(stall_text(i, st["stall"]))
+                print(summ); sys.exit(EXIT_STALLED)
             if st.get("lock") == "waiting":
                 print(f"admitted, waiting {ran:.0f} s for a legacy exclusive .agents.lock holder (flock without q)")
             else:
@@ -373,6 +593,11 @@ def cmd_wait(a):
     print(job_line(i, st, job))
     print(summ)
     sys.exit(rc)
+
+
+def stall_text(i, sl):
+    return (f"STALLED: job {i} {sl['reason']}\n  blocked threads: {sl['threads']}\n"
+            f"  not killed; `tools/q wait {i}` again if it should resume, `tools/q kill {i}` to stop it")
 
 
 def progress(job, st):
@@ -407,6 +632,33 @@ def cmd_cancel(a):
     print(f"job {i} cancel requested ({state})")
 
 
+def cmd_kill(a):
+    """Cancel and wait until the job is gone (runner: TERM, KILL after KILL_GRACE; else the whole unit is killed)."""
+    if len(a) != 1: die(__doc__, 2)
+    i = resolve(a[0]); job = rjson(f"{jdir(i)}/job.json")
+    with Locked() as s:
+        e = s["jobs"].get(i)
+        if e is None:
+            print(f"job {i} is not queued or running"); return
+        e["cancel"] = "killed"
+        state = e["state"]
+    if state == "running":
+        subprocess.run(["systemctl", "--user", "kill", "-s", "TERM", "--kill-whom=main", job["unit"]], capture_output=True)
+    t0 = now()
+    while now() - t0 < KILL_GRACE + 30 + 2 * POLL:
+        st = rjson(f"{jdir(i)}/status.json", {})
+        if st.get("state") not in ("queued", "running"):
+            print(f"job {i} {st.get('state')} ({st.get('reason', '-')}) after {now() - t0:.0f} s"); return
+        time.sleep(min(POLL, 0.5))
+    subprocess.run(["systemctl", "--user", "kill", "-s", "KILL", job["unit"]], capture_output=True)
+    subprocess.run(["systemctl", "--user", "stop", job["unit"]], capture_output=True)
+    st = rjson(f"{jdir(i)}/status.json", {})
+    if st.get("state") in ("queued", "running"):
+        st["reason"] = "killed with its unit"
+        finish(i, job, st, "cancelled", EXIT_CANCELLED, f"{jdir(i)}/out.log")
+    print(f"job {i} cancelled (killed with its unit after {now() - t0:.0f} s)")
+
+
 def cmd_ls(a):
     hist = read_log()
     with Locked() as s:
@@ -419,7 +671,11 @@ def cmd_ls(a):
             st = rjson(f"{jdir(i)}/status.json", {})
             et = "lock wait" if st.get("lock") == "waiting" else f"~{max(0, est_run(e['kind'], hist) - ran):.0f}s left"
             pg = progress(rjson(f"{jdir(i)}/job.json", {"kind": e["kind"], "cwd": e["cwd"], "id": i}), st).lstrip(", ")
-            print(f"{i:22} {'running':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {waited:6.0f}s {ran:6.0f}s {et:>12}  {pg}")
+            stl = st.get("stall")
+            print(f"{i:22} {'stalled' if stl else 'running':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {waited:6.0f}s {ran:6.0f}s {et:>12}  {pg}")
+            if stl: print(f"  ! stalled: {stl['reason']}; blocked: {stl['threads']}")
+            sw = scratch_warn(rjson(f"{jdir(i)}/job.json", {"id": i, "cwd": e["cwd"]}))
+            if sw: print(f"  ! {sw}")
         else:
             print(f"{i:22} {'queued':8} {e['kind']:5} {e['prio']:6} {worktree(e['cwd'])[:14]:14} {e['label'][:20]:20} {now() - e['submit']:6.0f}s {'-':>7} {'start ~' + str(int(max(0, est.get(i, now()) - now()))) + 's':>12}")
     print(summ)
@@ -522,7 +778,15 @@ def die(m, rc=1):
 
 def cmd_selftest(a):
     tmp = tempfile.mkdtemp(prefix="qtest.", dir=os.environ.get("TMPDIR"))
-    env = dict(os.environ, QDIR=f"{tmp}/queue", QLOCK=f"{tmp}/agents.lock", QPOLL="0.2")
+    adb = f"{tmp}/fake_adb"
+    with open(adb, "w") as f:
+        f.write('#!/bin/sh\necho "$*" >> "$ADBLOG"\ncase "$*" in\n'
+                "  devices) printf 'List of devices attached\\nemulator-5554\\tdevice\\nPHONE1\\tdevice\\n';;\n"
+                '  *"settings get system user_rotation") echo 1;;\nesac\n')
+    os.chmod(adb, 0o755)
+    env = dict(os.environ, QDIR=f"{tmp}/queue", QLOCK=f"{tmp}/agents.lock", QPOLL="0.2", QSTALL="600", QKILL_GRACE="1",
+               QADB=adb, ADBLOG=f"{tmp}/adb.log", QSCRATCH_ROOT=f"{tmp}/scratch", QSCRATCH_GB="0.001")
+    env.pop("QEMU_HYGIENE", None); env.pop("J", None)
     me = os.path.abspath(__file__)
     fails = []
 
@@ -530,8 +794,8 @@ def cmd_selftest(a):
         r = subprocess.run([sys.executable, "-I", me, *args], env=env, capture_output=True, text=True)
         return r
 
-    def sub(kind, *cmd, prio="normal", label="", C=None):
-        r = q("submit", "--kind", kind, "--prio", prio, "--label", label, *(["-C", C] if C else []), "--", *cmd)
+    def sub(kind, *cmd, prio="normal", label="", C=None, extra=()):
+        r = q("submit", "--kind", kind, "--prio", prio, "--label", label, *(["-C", C] if C else []), *extra, "--", *cmd)
         if r.returncode: fails.append(f"submit failed: {r.stderr}"); return None
         return r.stdout.strip()
 
@@ -621,6 +885,44 @@ def cmd_selftest(a):
         ok(rs.returncode == 0 and all(k in rs.stdout for k in ("check", "test", "emu", "full", "legacy", "peak queue length", "capacity use")),
            "stats: all kinds, peak queue, capacity use")
         print("     " + rs.stdout.strip().replace("\n", "\n     "))
+        # stall watchdog: a silent sleeper (ignoring TERM) stalls; a busy and a chatty job do not; kill stops the tree
+        sj = sub("test", "sh", "-c", "trap '' TERM; sleep 60; echo late", label="sleeper", extra=("--stall", "2"))
+        bz = sub("test", sys.executable, "-c", "import time\ne = time.time() + 5\nwhile time.time() < e: pass",
+                 label="busy", extra=("--stall", "2"))
+        ch = sub("test", "sh", "-c", "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo $i; sleep 0.5; done", label="chatty",
+                 extra=("--stall", "2"))
+        until(lambda: st(sj).get("stall"), 15)
+        rl = q("ls")
+        ok(re.search(rf"{sj}\s+stalled", rl.stdout) and "sleep" in rl.stdout, "stall: ls marks the sleeper stalled with its threads")
+        print("     " + rl.stdout.strip().replace("\n", "\n     "))
+        rs = q("wait", sj, "--max", "5")
+        ok(rs.returncode == EXIT_STALLED and "STALLED" in rs.stdout and "sleep" in rs.stdout, f"stall: wait exits {EXIT_STALLED}")
+        print("     " + rs.stdout.strip().replace("\n", "\n     "))
+        done(bz, ch)
+        ok(st(bz).get("rc") == 0 and st(ch).get("rc") == 0 and not st(bz).get("stalled") and not st(ch).get("stalled"),
+           "stall: busy (no output) and chatty (low CPU) jobs never stalled")
+        ok(st(sj).get("state") == "running", "stall: a stalled job is not killed")
+        t0 = now(); rk = q("kill", sj)
+        act = subprocess.run(["systemctl", "--user", "is-active", f"qt-{sj}"], capture_output=True, text=True).stdout.strip()
+        ok(rk.returncode == 0 and st(sj).get("state") == "cancelled" and now() - t0 < 15 and act != "active",
+           f"kill: TERM-ignoring tree gone in {now() - t0:.1f} s ({rk.stdout.strip()}, unit {act})")
+        # emulator hygiene with a fake adb: snapshot + settings around emu jobs, also when cancelled; never a phone
+        alog = lambda: open(env["ADBLOG"]).read() if os.path.exists(env["ADBLOG"]) else ""
+        ok(alog().count("emu avd snapshot save q_pre") == 2 and alog().count("emu avd snapshot load q_pre") == 2
+           and "settings put system user_rotation 1" in alog() and "wm size reset" in alog() and "wm density reset" in alog(),
+           "emu: q_pre saved and restored around both emu jobs, rotation / size / density reset")
+        ec = sub("emu", "sleep", "30", label="emu-cancel")
+        until(lambda: "saved" in (st(ec).get("emu") or ""), 15); q("cancel", ec); done(ec)
+        ok(alog().count("emu avd snapshot load q_pre") == 3 and st(ec).get("state") == "cancelled", "emu: restored after a cancel")
+        ok("PHONE1" not in alog(), "emu: a non-emulator device is never touched")
+        # scratch quota: a job whose scratch dir passes QSCRATCH_GB gets a warning line in ls
+        wt = tempfile.mkdtemp(dir=tmp)
+        sd = f"{env['QSCRATCH_ROOT']}/" + re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(wt)) + "/sess"
+        os.makedirs(sd)
+        with open(f"{sd}/big", "wb") as f: f.write(os.urandom(2 << 20))
+        sq = sub("test", "sleep", "3", C=wt); until(lambda: st(sq).get("lock") == "shared")
+        rl = q("ls"); ok("job scratch" in rl.stdout and "GB" in rl.stdout, "scratch: ls warns about a job scratch dir over quota")
+        done(sq)
         rl = q("ls"); ok(rl.returncode == 0 and "0 queued" in rl.stdout, "ls: empty queue at the end")
     finally:
         with open(f"{tmp}/queue/state.json") as f: left = json.load(f)["jobs"]
@@ -638,7 +940,7 @@ def main():
     a = sys.argv[1:]
     if not a: print(summary()); return
     c = a.pop(0)
-    f = {"submit": cmd_submit, "_run": cmd_run, "wait": cmd_wait, "ls": cmd_ls, "stats": cmd_stats, "cancel": cmd_cancel,
+    f = {"submit": cmd_submit, "_run": cmd_run, "wait": cmd_wait, "ls": cmd_ls, "stats": cmd_stats, "cancel": cmd_cancel, "kill": cmd_kill,
          "legacy": cmd_legacy, "selftest": cmd_selftest, "top": cmd_top}.get(c)
     if not f: die(__doc__, 2)
     f(a)

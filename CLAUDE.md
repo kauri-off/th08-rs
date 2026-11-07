@@ -46,12 +46,17 @@ same checks directly, without the queue: [CONTRIBUTING.md](CONTRIBUTING.md#check
   build / check / clippy / fmt / unit tests need no lock.
 - Heavy runs (arch_check, cargo tests with game data, the emulator, replay batches) go through the job queue:
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
-  foreground until it ends (exit 75 = not done yet). From a worktree, use the main checkout's `tools/q` so all jobs
-  share one queue. Never take `target/.agents.lock` by hand.
+  foreground until it ends (exit 75 = not done yet; 76 = stalled: no output and ~no CPU for 10 min, not killed —
+  look at the printed threads, `tools/q kill ID` stops it). From a worktree, use the main checkout's `tools/q` so all
+  jobs share one queue. Never take `target/.agents.lock` by hand. emu jobs get the emulator restored to a snapshot
+  afterwards (rotation, wm size / density too); `q ls` warns when a job's scratch dir passes 3 GB.
 - `tools/check_level` says which check a change needs: `light` (build, clippy, unit tests; no arch_check),
   `full` (arch_check: a game crate, th08-render / -tools, `specs/data/` or the settings changed) or `batch` (plus the
-  replay batch: core logic, dependencies, build flags or toolchain); a `pixels:` line for th08-render changes names
-  the hirescmp check (arch_check does not compare pixels). Recipes: CONTRIBUTING "Changing game logic / the renderer".
+  replay batch: core logic, build flags, toolchain or th08-core / -formats / -out's dependency tree); a `pixels:` line
+  for th08-render changes names the hirescmp check (arch_check does not compare pixels). A `batch-due:` line
+  (dependencies outside that tree): after committing, `tools/batch_job due COMMIT`; `tools/batch_job train` runs one
+  batch for ≥ 3 due commits and bisects on FAIL; `tools/release_gate` before a release. Recipes: CONTRIBUTING
+  "Changing game logic / the renderer".
 
 - Agent branches land without the maintainer re-running checks: the agent commits on its `t3/…` branch, runs
   `git rebase master`, then `tools/check NAME` in its worktree (the check_level check as one q job, exit 75 = still

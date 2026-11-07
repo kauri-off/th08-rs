@@ -2,30 +2,103 @@
 # usage: tools/batch_job NAME — the replay batch (ref500 + ref_b2) as a q job (kind batch, KIND= overrides); prints the ID.
 #        tools/batch_job run NAME — the job: builds session (profile TH08_BATCH_PROFILE, default release) once, runs
 # tools/batch_run on both sets with it into target/batch_NAME/, prints the regressed replays; exit 1 on a regression
-# or a missing replay.
+# or a missing replay. A run on a clean tree is recorded in devdata/batch_results (`SHA PASS|FAIL NAME TIME`).
+#        tools/batch_job due [REV…] — lists devdata/batch_due, or adds commits to it (check_level said batch-due).
+#        tools/batch_job train [--now] — with ≥ 3 due commits (or --now), one q job: the batch on master; PASS clears
+# the due list, FAIL bisects the due commits (a batch on each probe in a temporary worktree) and names the first bad one.
 # Keeps the newest 3 target/batch_* dirs. Env: J, TH08_BATCH_LIMIT (passed to tools/batch_run), KIND, TH08_BATCH_PROFILE (ship = the shipped packages' profile).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SETS="ref500 ref_b2"
-
-if [[ ${1:-} != run ]]; then
-  n=${1:-}; [[ -n $n ]] || { sed -n 2,6p "$0"; exit 2; }
-  source "$ROOT/re/tools/localenv.sh"
-  # From a worktree, the main checkout's queue.
-  main=$ROOT
-  if [[ -f $ROOT/.git ]]; then
-    g=$(sed -n 's/^gitdir: //p' "$ROOT/.git"); [[ $g == */.git/worktrees/* ]] && main=${g%%/.git/worktrees/*}
-  fi
-  prog=()
-  for s in $SETS; do
-    x=$(grep -l '^rpy_result: accepted' "${TH08_EXT_REPLAYS:-/nonexistent}/$s"/*/meta.txt 2> /dev/null | wc -l)
-    [[ -n ${TH08_BATCH_LIMIT:-} ]] && (( x > TH08_BATCH_LIMIT )) && x=$TH08_BATCH_LIMIT
-    prog+=(--progress "target/batch_$n/$s/rep/*.txt|$x")
-  done
-  exec "$main/tools/q" submit --kind "${KIND:-batch}" --label "b-$n" -C "$ROOT" "${prog[@]}" -- tools/batch_job run "$n"
+# From a worktree, the main checkout (its queue and devdata/).
+MAIN=$ROOT
+if [[ -f $ROOT/.git ]]; then
+  g=$(sed -n 's/^gitdir: //p' "$ROOT/.git"); [[ $g == */.git/worktrees/* ]] && MAIN=${g%%/.git/worktrees/*}
 fi
+DUE=$MAIN/devdata/batch_due
+RESULTS=$MAIN/devdata/batch_results
 
-n=${2:-}; [[ -n $n ]] || { sed -n 2,6p "$0"; exit 2; }
+usage() { sed -n 2,10p "$0"; exit 2; }
+
+record() {  # record SHA rc NAME
+  mkdir -p "$MAIN/devdata"
+  echo "$1 $([[ $2 == 0 ]] && echo PASS || echo FAIL) $3 $(date +%s)" >> "$RESULTS"
+}
+
+# One batch on commit $1 in a temporary worktree of the main checkout; exit code of the batch.
+batch_at() {
+  local sha=$1 name=$2 wt=$MAIN/target/batch_train/wt-${1:0:12} rc
+  git -C "$MAIN" worktree remove --force "$wt" 2> /dev/null
+  git -C "$MAIN" worktree add -q --detach "$wt" "$sha" || return 2
+  echo "== batch $name on $(git -C "$MAIN" log -1 --format='%h %s' "$sha")"
+  (cd "$wt" && TH08_BATCH_NORECORD=1 env -u CARGO_TARGET_DIR tools/batch_job run "$name"); rc=$?
+  git -C "$MAIN" worktree remove --force "$wt"
+  return $rc
+}
+
+case ${1:-} in
+  '' | -h | --help) usage ;;
+  due)
+    shift
+    if (( $# == 0 )); then [[ -s $DUE ]] && cat "$DUE" || echo "batch_due: empty"; exit 0; fi
+    mkdir -p "$MAIN/devdata"; touch "$DUE"
+    for r in "$@"; do
+      sha=$(git -C "$ROOT" rev-parse --verify -q "$r^{commit}") || { echo "batch_job due: no commit $r"; exit 2; }
+      grep -q "^$sha " "$DUE" || git -C "$ROOT" log -1 --format='%H %s' "$sha" >> "$DUE"
+    done
+    cat "$DUE"; exit 0 ;;
+  train)
+    n=$( [[ -f $DUE ]] && grep -c . "$DUE" || echo 0)
+    if [[ ${2:-} != --now ]] && (( n < 3 )); then echo "batch train: $n due commit(s), runs at 3 (or --now)"; exit 0; fi
+    exec "$MAIN/tools/q" submit --kind "${KIND:-batch}" --label "b-train" -C "$MAIN" -- tools/batch_job _train ;;
+  _train)
+    cd "$MAIN" || exit 2
+    snap=$(mktemp); trap 'rm -f "$snap"' EXIT
+    [[ -f $DUE ]] && cp "$DUE" "$snap"
+    master=$(git rev-parse master) || exit 2
+    echo "== train: master $(git log -1 --format='%h %s' master), $(grep -c . "$snap") due"
+    if [[ $(git rev-parse HEAD) == "$master" && -z $(git status --porcelain --untracked-files=no) ]]; then
+      TH08_BATCH_NORECORD=1 tools/batch_job run train; rc=$?
+    else
+      batch_at "$master" train; rc=$?
+    fi
+    if [[ -n ${TH08_BATCH_LIMIT:-} ]]; then echo "== train: TH08_BATCH_LIMIT run, nothing recorded or cleared"; exit $rc; fi
+    record "$master" "$rc" train
+    if (( rc == 0 )); then
+      [[ -s $snap ]] && { grep -vxFf "$snap" "$DUE" > "$DUE.tmp"; mv "$DUE.tmp" "$DUE"; }
+      echo "== train: PASS on master; due list cleared"; exit 0
+    fi
+    # Bisect the due commits in history order; before the first one counts as good, master as bad.
+    mapfile -t due < <(git rev-list --reverse master | grep -xFf <(cut -d' ' -f1 "$snap"))
+    lo=-1 hi=${#due[@]}
+    while (( hi - lo > 1 )); do
+      mid=$(( (lo + hi) / 2 ))
+      batch_at "${due[mid]}" "bisect-${due[mid]:0:8}"; r=$?
+      record "${due[mid]}" "$r" "bisect-${due[mid]:0:8}"
+      if (( r == 0 )); then lo=$mid; else hi=$mid; fi
+    done
+    if (( ${#due[@]} == 0 )); then
+      echo "== train: FAIL on master; no due commits on master to bisect"
+    elif (( hi < ${#due[@]} )); then
+      echo "== train: FAIL on master; first bad due commit: $(git log -1 --format='%H %s' "${due[hi]}")"
+    else
+      echo "== train: FAIL on master; every due commit passes, the regression comes after $(git log -1 --format=%h "${due[-1]:-$master}")"
+    fi
+    exit 1 ;;
+  run) ;;
+  *)
+    n=$1
+    source "$ROOT/re/tools/localenv.sh"
+    prog=()
+    for s in $SETS; do
+      x=$(grep -l '^rpy_result: accepted' "${TH08_EXT_REPLAYS:-/nonexistent}/$s"/*/meta.txt 2> /dev/null | wc -l)
+      [[ -n ${TH08_BATCH_LIMIT:-} ]] && (( x > TH08_BATCH_LIMIT )) && x=$TH08_BATCH_LIMIT
+      prog+=(--progress "target/batch_$n/$s/rep/*.txt|$x")
+    done
+    exec "$MAIN/tools/q" submit --kind "${KIND:-batch}" --label "b-$n" -C "$ROOT" "${prog[@]}" -- tools/batch_job run "$n" ;;
+esac
+
+n=${2:-}; [[ -n $n ]] || usage
 cd "$ROOT" || exit 2
 T=${CARGO_TARGET_DIR:-$ROOT/target}
 O=$ROOT/target/batch_$n
@@ -42,6 +115,10 @@ for s in $SETS; do
 done
 if [[ -n $failed ]]; then echo "== batch $n: FAIL:$failed"; else echo "== batch $n: PASS"; fi
 for s in $SETS; do [[ -s $O/$s/regressions.txt ]] && cut -d' ' -f1 "$O/$s/regressions.txt" | sed "s/^/regressed $s: /"; done
+# Only a clean tree's result stands for its commit; a full-set run only (TH08_BATCH_LIMIT unset).
+if [[ -z ${TH08_BATCH_NORECORD:-} && -z ${TH08_BATCH_LIMIT:-} && -z $(git status --porcelain --untracked-files=no) ]]; then
+  record "$(git rev-parse HEAD)" "$rc" "$n"
+fi
 # Keep the newest 3 batch dirs.
-ls -dt "$ROOT"/target/batch_*/ 2> /dev/null | tail -n +4 | xargs -r rm -rf --
+ls -dt "$ROOT"/target/batch_*/ 2> /dev/null | grep -v '/batch_train/$' | tail -n +4 | xargs -r rm -rf --
 exit $rc

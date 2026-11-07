@@ -43,9 +43,12 @@ land() {
       git merge --ff-only -q "$br" || die "fast-forward failed"
       echo "tools/land: $br landed ($LEVEL):"
       git log --oneline "$old..master"
-      if [[ $LEVEL == batch ]]; then
-        echo "$(git rev-parse master) $br" >> devdata/batch_due
-        echo "tools/land: replay batch due (devdata/batch_due: $(wc -l < devdata/batch_due) entries)"
+      # Core logic: the batch runs now; a dependency-only change joins the batch train.
+      cl=$(tools/check_level "$old" master)
+      if [[ $(head -1 <<< "$cl") == batch ]]; then
+        echo "tools/land: core change, run the replay batch now: tools/batch_job ${br##*/}"
+      elif grep -q '^batch-due:' <<< "$cl"; then
+        tools/batch_job due master > /dev/null && echo "tools/land: batch due ($(grep -c . devdata/batch_due) in the train)"
       fi
       if [[ -n $wt ]]; then
         if [[ -n $(git -C "$wt" status --porcelain 2> /dev/null) ]]; then

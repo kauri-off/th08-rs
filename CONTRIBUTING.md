@@ -39,9 +39,11 @@ tool and who can run it.
 |---|---|---|---|
 | `light` | app, launcher, platform, docs, xtask | the CI set below | nothing |
 | `full` | th08-core / -formats / -out / -render / -tools, `specs/data/`, settings | the CI set plus `tools/arch_check` | your game files |
-| `batch` | core logic, dependencies, build flags, toolchain | `full` plus the replay batch | the replay sets (maintainer) |
+| `batch` | core logic, build flags, toolchain, th08-core / -formats / -out's dependency tree | `full` plus the replay batch | the replay sets (maintainer) |
 
-A th08-render change also prints a `pixels:` line: see [Changing the renderer](#changing-the-renderer).
+A th08-render change also prints a `pixels:` line: see [Changing the renderer](#changing-the-renderer). A dependency
+change that leaves the th08-core / -formats / -out tree alone is `full` plus a `batch-due:` line: the maintainer's
+batch train runs the replay batch for several such commits at once.
 
 **The CI set** (`.github/workflows/check.yml`, every push to `master` and every pull request; run it locally the same
 way): `cargo fmt --check`, `cargo deny check`, `cargo clippy --workspace --all-targets -- -D warnings`,
@@ -201,7 +203,8 @@ profile of `libth08.so`, default `release`).
 The release workflow (`.github/workflows/release.yml`) runs by hand from the Actions tab on `master`
 (`gh workflow run release.yml -f publish=true`). With `publish` it tags `v<Cargo.toml version>` at that commit and
 creates the release; without it only builds the artifacts. To release, bump `version` in `Cargo.toml`, commit,
-push, then run the workflow; it refuses a version whose tag already points at another commit, and a version that
+check `tools/release_gate` (maintainer: no batch-due commits, a passing replay batch covers HEAD), push, then run the
+workflow; it refuses a version whose tag already points at another commit, and a version that
 already has a release (published assets are never replaced: bump the version, or delete the release by hand). Tags
 are not pushed by hand: a tag-triggered run could not reuse the build cache, which is kept per branch.
 

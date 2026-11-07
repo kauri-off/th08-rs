@@ -3,7 +3,10 @@
 # untracked files vs HEAD; with TIP: the commit TIP vs BASE). Prints light | full | batch with the deciding files; exit 0.
 #   light: build, clippy, unit tests (+ tools/android_check for Android/JNI code); no arch_check.
 #   full:  arch_check (game crates, the settings / host that configure them, the session tools or render changed).
-#   batch: full + the external replay batch (core logic, dependencies, build flags or toolchain changed).
+#   batch: full + the external replay batch (core / formats logic, build flags, toolchain, or the normal dependency
+#          tree of th08-core / -formats / -out changed: `cargo tree` against BASE).
+#   A manifest / Cargo.lock change that leaves that tree alone is full plus a `batch-due:` line (the batch train
+#   covers it: `tools/batch_job due COMMIT` after landing it); one that only bumps workspace versions is full.
 # th08-render changed: also a pixel check (arch_check hashes the draw commands, not the GPU output), printed as
 #   `pixels: …` after the level.
 # A core / formats source whose changed lines are all comments or blank is full, not batch.
@@ -20,12 +23,74 @@ comment_only() {
   body=$(git diff -U0 "$base" $tip -- "$1" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ')
   [[ -n $body ]] && ! grep -qvE '^[-+][[:space:]]*(//.*)?$' <<<"$body"
 }
-batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats|out)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
+manifests='^(Cargo\.lock|Cargo\.toml|crates/th08-(core|formats|out)/Cargo\.toml)$'
+batch=$(grep -E '^(\.cargo/|rust-toolchain)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
   while read -r f; do comment_only "$f" || echo "$f"; done)
+deps=$(grep -E "$manifests" <<<"$files")
 full=$(grep -E '^crates/th08-(core|formats|out|tools|render)/|^specs/data/|^src/(settings|platform)\.rs$|^tools/arch_check$' <<<"$files")
+due=
+if [[ -n $deps && -z $batch ]]; then
+  # Prints `core: why` (batch), `deps: why` (batch-due) or `version` (workspace versions only).
+  scope=$(python3 -I - "$base" $deps <<'PY'
+import os, re, subprocess, sys, tempfile, tomllib
+base, files = sys.argv[1], sys.argv[2:]
+DEP = {"dependencies", "dev-dependencies", "build-dependencies"}
+def strip(d):
+    d = {k: v for k, v in d.items() if k not in DEP}
+    if isinstance(d.get("target"), dict):
+        d["target"] = {t: {k: v for k, v in c.items() if k not in DEP} for t, c in d["target"].items()}
+        d["target"] = {t: c for t, c in d["target"].items() if c} or None
+    for k in ("package",):
+        if isinstance(d.get(k), dict): d[k] = {a: b for a, b in d[k].items() if a != "version"}
+    if isinstance(d.get("workspace"), dict):
+        w = {a: b for a, b in d["workspace"].items() if a != "dependencies"}
+        if isinstance(w.get("package"), dict): w["package"] = {a: b for a, b in w["package"].items() if a != "version"}
+        d["workspace"] = w
+    return d
+for f in files:
+    if not f.endswith(".toml"): continue
+    old = subprocess.run(["git", "show", f"{base}:{f}"], capture_output=True, text=True)
+    try: new = open(f).read()
+    except OSError: new = ""
+    if old.returncode or not new: print(f"core: {f} added or removed"); sys.exit()
+    if strip(tomllib.loads(old.stdout)) != strip(tomllib.loads(new)):
+        print("core: keys besides dependencies / versions changed"); sys.exit()
+def tree(root, *sel):
+    r = subprocess.run(["cargo", "tree", "-q", "--locked", "--offline", *sel, "--prefix", "depth", "-f", "{p} {f}"],
+                       cwd=root, capture_output=True, text=True)
+    if r.returncode: return None
+    out = []
+    for l in r.stdout.splitlines():
+        l = re.sub(r" \(/[^)]*\)", " (path)", l.strip())
+        out.append(re.sub(r"^(\S+) v\S+ \(path\)", r"\1 (path)", l))
+    return out
+with tempfile.TemporaryDirectory(prefix="check_level.") as t:
+    a = subprocess.Popen(["git", "archive", base], stdout=subprocess.PIPE)
+    subprocess.run(["tar", "-x", "-C", t], stdin=a.stdout, check=True); a.wait()
+    core = ["-e", "normal", "-p", "th08-core", "-p", "th08-formats", "-p", "th08-out"]
+    b, n = tree(t, *core), tree(".", *core)
+    if b is None or n is None: print("core: cargo tree failed (offline, --locked)"); sys.exit()
+    if b != n:
+        c = lambda v: {x.lstrip("0123456789").removesuffix(" (*)") for x in v}
+        d = [f"+{x}" for x in sorted(c(n) - c(b))] + [f"-{x}" for x in sorted(c(b) - c(n))]
+        d = d or ["(dependency edges)"]
+        print("core: th08-core / -formats / -out tree " + ", ".join(d[:4]) + (" …" if len(d) > 4 else "")); sys.exit()
+    ws = ["--workspace", "-e", "normal,build"]
+    print("version" if tree(t, *ws) == tree(".", *ws) else "deps: dependencies outside the th08-core / -formats / -out tree")
+PY
+)
+  case $scope in
+    core:*) batch=$(echo "$deps" | sed "1s|\$|  (${scope#core: })|") ;;
+    deps:*) full=$(printf '%s\n%s' "$full" "$deps" | grep -v '^$'); due=${scope#deps: } ;;
+    *) full=$(printf '%s\n%s' "$full" "$deps" | grep -v '^$') ;;
+  esac
+elif [[ -n $deps ]]; then batch=$(printf '%s\n%s' "$batch" "$deps")
+fi
 if [[ -n $batch ]]; then echo batch; echo "$batch" | sed 's/^/  /' | head -20
 elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
 else echo light; fi
+[[ -n $due && -z $batch ]] &&
+  echo "batch-due: $due; after landing: tools/batch_job due COMMIT (the batch train runs it)"
 grep -q '^crates/th08-render/' <<<"$files" &&
   echo "pixels: hirescmp SRC --scale 1 --save OLD on the old build, --ref OLD on the new one (TH08_DIR, GPU); cargo test -p th08-render"
 exit 0

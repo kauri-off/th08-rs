@@ -1,0 +1,30 @@
+#!/bin/bash
+# usage: tools/release_gate — exit 1 (refuse a release) while devdata/batch_due lists commits, or when no passing
+# replay batch covers HEAD: the batch result recorded nearest HEAD (on it or an ancestor, devdata/batch_results) must
+# be PASS, and the diff from that commit to HEAD must need no batch (tools/check_level). Needs a clean tree.
+cd "$(dirname "$0")/.." || exit 2
+M=$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")
+DUE=$M/devdata/batch_due RESULTS=$M/devdata/batch_results
+no() { echo "release_gate: REFUSED: $*"; exit 1; }
+[[ -z $(git status --porcelain --untracked-files=no) ]] || no "the tree has uncommitted changes"
+if [[ -s $DUE ]]; then
+  echo "batch due:"; sed 's/^/  /' "$DUE"
+  no "$(grep -c . "$DUE") commit(s) wait for the batch train (tools/batch_job train --now)"
+fi
+[[ -s $RESULTS ]] || no "no replay batch recorded (tools/batch_job NAME on master)"
+best= depth=-1 res=
+while read -r sha r _; do
+  git merge-base --is-ancestor "$sha" HEAD 2> /dev/null || continue
+  d=$(git rev-list --count "$sha")
+  (( d >= depth )) && { best=$sha depth=$d res=$r; }
+done < "$RESULTS"
+[[ -n $best ]] || no "no replay batch recorded on HEAD or an ancestor"
+what=$(git log -1 --format='%h %s' "$best")
+[[ $res == PASS ]] || no "the last batch ($what) failed"
+if [[ $best != $(git rev-parse HEAD) ]]; then
+  lvl=$(tools/check_level "$best")
+  if [[ $(head -1 <<< "$lvl") == batch ]] || grep -q '^batch-due:' <<< "$lvl"; then
+    echo "$lvl"; no "commits after the last batch ($what) need one"
+  fi
+fi
+echo "release_gate: ok (batch PASS on $what)"
