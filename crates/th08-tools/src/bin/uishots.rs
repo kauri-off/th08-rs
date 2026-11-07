@@ -301,9 +301,17 @@ fn menu_pages(fx: &Fixture, phone: bool) -> Vec<Page> {
     v
 }
 
-fn launcher_model(fx: &Fixture, lang: &str, view: &str) -> (th08::launcher::Model, Probe) {
+fn launcher_model(
+    fx: &Fixture,
+    lang: &str,
+    view: &str,
+    art: Option<&image::RgbaImage>,
+) -> (th08::launcher::Model, Probe) {
     let s = fx.settings(lang);
     let mut m = th08::launcher::Model::new(&s, th08::launcher::Folder::Native);
+    if let Some(a) = art {
+        m.shot_art(a);
+    }
     let mut probe = Probe::None;
     match view {
         "settings_end" => m.shot_scroll_end(),
@@ -353,9 +361,8 @@ fn backdrop(stage: Option<&image::RgbaImage>, sz: &Size, shot: &Shot) -> image::
     img
 }
 
-// `docs/briefs/uiref/05_th08_stage.png` in this checkout or, from a worktree, in the main checkout.
-fn stage_reference() -> Option<image::RgbaImage> {
-    const REL: &str = "docs/briefs/uiref/05_th08_stage.png";
+// A design reference image `rel` in this checkout or, from a worktree, in the main checkout.
+fn reference(rel: &str) -> Option<image::RgbaImage> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let main = std::process::Command::new("git")
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -367,7 +374,7 @@ fn stage_reference() -> Option<image::RgbaImage> {
     [Some(repo), main]
         .into_iter()
         .flatten()
-        .find_map(|r| image::open(r.join(REL)).ok())
+        .find_map(|r| image::open(r.join(rel)).ok())
         .map(|i| i.to_rgba8())
 }
 
@@ -405,7 +412,16 @@ fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    let stage = gfx.as_ref().and_then(|_| stage_reference());
+    let stage = gfx
+        .as_ref()
+        .and_then(|_| reference("docs/briefs/uiref/05_th08_stage.png"));
+    // Without game data the launcher's title art (title00.png) is stood in for by the title screen reference,
+    // scaled to the game's 640×480.
+    let title = th08::settings::test_game_dir()
+        .is_none()
+        .then(|| reference("docs/briefs/uiref/03_th08_title.png"))
+        .flatten()
+        .map(|i| image::imageops::resize(&i, 640, 480, image::imageops::FilterType::Triangle));
     if gfx.is_some() && stage.is_none() {
         eprintln!("uishots: no stage reference image, the port menu renders over a gradient");
     }
@@ -427,11 +443,12 @@ fn main() -> anyhow::Result<()> {
                         let o = |probe| ShotOpts {
                             density: sz.density,
                             probe,
+                            touch: sz.phone,
                         };
-                        let (m, probe) = launcher_model(&fx, lang, view);
+                        let (m, probe) = launcher_model(&fx, lang, view, title.as_ref());
                         let issues = th08::launcher::check_frame(m, sz.px, sz.safe, &o(probe));
                         if let (Some(g), Some(dir)) = (&gfx, &args.out) {
-                            let (m, probe) = launcher_model(&fx, lang, view);
+                            let (m, probe) = launcher_model(&fx, lang, view, title.as_ref());
                             th08::launcher::render_image(g, m, sz.px, sz.safe, &o(probe))
                                 .save(dir.join(&file))?;
                         }

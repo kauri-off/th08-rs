@@ -442,19 +442,20 @@ impl Model {
                 p.layout_no_wrap(text, theme::serif(theme::BODY), theme::TEXT)
             })
             .collect();
-        // Action words in lines of `w`, at least a word's height apart.
-        let gap = theme::BODY * 1.4;
+        // Action words in lines of `w`, at least a word's height apart; on touch, 48 dp cells.
+        let touch = self.touch_ui();
+        let gap = theme::BODY * if touch { 2.4 } else { 1.4 };
         let mut pos = Vec::new();
         let (mut ax, mut line) = (0.0, 0usize);
         for g in &words {
-            if ax > 0.0 && ax + g.size().x > w {
+            if ax > 0.0 && ax + g.size().x + if touch { 28.0 } else { 0.0 } > w {
                 ax = 0.0;
                 line += 1;
             }
             pos.push((ax, line));
             ax += g.size().x + gap;
         }
-        let lh = theme::BODY * 1.9;
+        let lh = if touch { 56.0 } else { theme::BODY * 1.9 };
         let h = 10.0
             + tg.size().y
             + 2.0
@@ -488,7 +489,10 @@ impl Model {
         for (((a, k, on), g), (ax, line)) in acts.iter().zip(words).zip(pos) {
             let gw = g.size();
             let wr = egui::Rect::from_min_size(
-                egui::pos2(x + ax, y + line as f32 * lh),
+                egui::pos2(
+                    x + ax + if touch { 14.0 } else { 0.0 },
+                    y + line as f32 * lh,
+                ),
                 egui::vec2(gw.x, lh),
             );
             let resp = ui.interact(
@@ -500,6 +504,15 @@ impl Model {
                     egui::Sense::hover()
                 },
             );
+            if touch {
+                let cell = wr.expand2(egui::vec2(14.0, -4.0));
+                let fill = if resp.is_pointer_button_down_on() {
+                    theme::PRESSED
+                } else {
+                    theme::CELL
+                };
+                p.rect_filled(cell, 0.0, fill);
+            }
             let c = match (*on, *a) {
                 (false, _) => theme::DISABLED,
                 _ if resp.hovered() => theme::TEXT_HI,

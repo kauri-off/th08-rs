@@ -158,7 +158,12 @@ impl Model {
         }
         // The title down the column in the menu face, as the title screen's logo.
         let size = (rect.height() / 6.6).min(rect.width() * 0.42);
-        let x = rect.max.x - size * 1.45;
+        // Over the art the column stands where the title screen's logo does; alone it is centred.
+        let x = if art {
+            rect.max.x - size * 1.45
+        } else {
+            rect.center().x - size / 2.0
+        };
         let color = if art {
             egui::Color32::from_rgb(0xd2, 0xc8, 0xd8)
         } else {
@@ -387,6 +392,11 @@ impl Model {
         resp
     }
 
+    // Touch input: no key hints or key letters, a touch device line.
+    pub(super) fn touch_ui(&self) -> bool {
+        self.touch || self.nav.input.modality == theme::Modality::Touch
+    }
+
     // `t` is drawn bright: it has the focus bar or the pointer.
     pub(super) fn shows(&self, t: Target) -> bool {
         (self.nav.input.bar() && self.nav.focus == Some(t)) || self.nav.input.lit(t)
@@ -394,7 +404,10 @@ impl Model {
 
     // The title art column (on windows 760 pt and wider) and the lacquer panel: art width, panel, text x and right.
     fn frame(&mut self, ui: &Ui, p: &Painter, full: Rect, screen: Rect) -> (f32, Rect, f32, f32) {
-        let art_w = if full.width() >= 760.0 {
+        // A phone-sized window (under 420 pt tall) keeps a narrow strip of it.
+        let art_w = if full.height() < 420.0 && full.width() >= 600.0 {
+            (full.width() * 0.12).clamp(80.0, 130.0).round()
+        } else if full.width() >= 760.0 {
             (full.width() * 0.344).round()
         } else {
             0.0
@@ -429,15 +442,53 @@ impl Model {
         // Short windows (under 600 pt) pack the head closer so the rows keep most of the height; under 500 pt with
         // the title art beside it the heading (the art's title) is left out.
         let compact = full.height() < 600.0;
-        let bare = full.height() < 500.0 && art_w > 0.0;
-        let (head_y, play_y, play_h) = if bare {
+        // A phone-sized window: the heading on one line, Play beside the game folder.
+        let phone = full.height() < 420.0;
+        let bare = full.height() < 500.0 && art_w > 0.0 && !phone;
+        let (head_y, play_y, play_h) = if phone {
+            (8.0, 58.0, 56.0)
+        } else if bare {
             (0.0, 8.0, PLAY_H - 12.0)
         } else if compact {
             (12.0, 78.0, PLAY_H - 10.0)
         } else {
             (26.0, 112.0, PLAY_H)
         };
-        if !bare {
+        // Phone: the title on one line with the tabs beside it (the caption instead where there are no tabs);
+        // without room for both the tabs keep the line and the art strip carries the title.
+        let tabs_in_head = phone && cfg!(not(any(target_arch = "wasm32", target_os = "android")));
+        if phone {
+            let g = p.layout_no_wrap(
+                i18n::ui(lang, "launcher_title").to_string(),
+                theme::serif(HEAD * 0.72),
+                theme::TEXT_HI,
+            );
+            let (gw, gh) = (g.size().x, g.size().y);
+            let ty = full.min.y + head_y;
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            {
+                let tw = self.tabs_width(&p, lang);
+                let tx = if gw + 36.0 + tw <= w {
+                    theme::outlined(&p, pos2(x, ty), g.clone(), theme::TEXT_HI, false);
+                    x + gw + 36.0
+                } else {
+                    x
+                };
+                self.tab_bar(ui, &p, pos2(tx, ty + 2.0), lang);
+            }
+            if !tabs_in_head {
+                theme::outlined(&p, pos2(x, ty), g, theme::TEXT_HI, false);
+                let c = p.layout(
+                    caption.clone(),
+                    theme::serif(CAP),
+                    theme::ACCENT,
+                    (w - gw - 16.0).max(40.0),
+                );
+                let ch = c.size().y;
+                theme::caption_text(&p, pos2(x + gw + 16.0, ty + gh - ch - 4.0), c);
+            }
+            theme::rule(&p, egui::Rangef::new(x, right), ty + 44.0);
+        } else if !bare {
             theme::heading(
                 &p,
                 pos2(x, full.min.y + head_y),
@@ -449,13 +500,26 @@ impl Model {
         }
         let mut y = full.min.y + play_y;
         // Play.
-        let r = Rect::from_min_size(pos2(x, y), vec2(w, play_h));
-        let resp = self.target(
-            ui,
-            &p,
-            Rect::from_x_y_ranges(band_x.clone(), r.y_range()),
-            Target::Play,
-        );
+        let play_w = if phone {
+            let pw = p
+                .layout_no_wrap(
+                    i18n::ui(lang, "play").to_string(),
+                    theme::serif(PLAY),
+                    theme::TEXT,
+                )
+                .size()
+                .x;
+            (pw + 40.0).max(w * 0.22)
+        } else {
+            w
+        };
+        let r = Rect::from_min_size(pos2(x, y), vec2(play_w, play_h));
+        let play_band = if phone {
+            Rect::from_x_y_ranges(panel.min.x + 6.0..=r.max.x, r.y_range())
+        } else {
+            Rect::from_x_y_ranges(band_x.clone(), r.y_range())
+        };
+        let resp = self.target(ui, &p, play_band, Target::Play);
         let ok = self.can_play();
         let focused = self.shows(Target::Play);
         let color = match (ok, focused) {
@@ -474,28 +538,35 @@ impl Model {
         if resp.clicked() && ok {
             act = Some(Action::Play);
         }
-        y += play_h + if compact { 2.0 } else { 6.0 };
-        // Game folder.
-        let fr = Rect::from_min_size(pos2(x, y), vec2(w, if compact { 52.0 } else { 58.0 }));
-        let resp = self.target(
-            ui,
-            &p,
-            Rect::from_x_y_ranges(band_x.clone(), fr.y_range()),
-            Target::Folder,
-        );
+        // Game folder: under Play, or beside it on a phone.
+        let fr = if phone {
+            Rect::from_x_y_ranges(r.max.x + 24.0..=x + w, r.y_range())
+        } else {
+            y += play_h + if compact { 2.0 } else { 6.0 };
+            Rect::from_min_size(pos2(x, y), vec2(w, if compact { 52.0 } else { 58.0 }))
+        };
+        let folder_band = if phone {
+            Rect::from_x_y_ranges(fr.min.x - 12.0..=screen.max.x, fr.y_range())
+        } else {
+            Rect::from_x_y_ranges(band_x.clone(), fr.y_range())
+        };
+        let resp = self.target(ui, &p, folder_band, Target::Folder);
+        if phone {
+            y = fr.min.y;
+        }
         self.folder_row(ui, &p, fr, lang, resp.clicked());
         y += fr.height() + 6.0;
         theme::rule(&p, egui::Rangef::new(x, right), y);
         // Tabs.
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-        {
+        if !tabs_in_head {
             self.tab_bar(ui, &p, pos2(x, y + if compact { 10.0 } else { 16.0 }), lang);
             y += if compact { 46.0 } else { 58.0 };
             theme::rule(&p, egui::Rangef::new(x, right), y);
         }
         y += if compact { 8.0 } else { 10.0 };
         // Bottom: help line (as tall as its text), hints, device.
-        let shown = if self.nav.input.bar() {
+        let shown = if self.nav.input.bar() || self.touch_ui() {
             self.nav.focus
         } else {
             self.nav.input.hovered()
@@ -503,8 +574,13 @@ impl Model {
         let help = shown.map(|t| self.help_of(t, lang)).unwrap_or_default();
         let help_g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
         let help_h = help_g.size().y.max(SMALL * 1.3);
+        // Touch has no key hints: the help line takes the bottom.
         let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
-        let help_y = hint_y - help_h - if compact { 10.0 } else { 20.0 };
+        let help_y = if self.touch_ui() {
+            full.max.y - help_h - 10.0
+        } else {
+            hint_y - help_h - if compact { 10.0 } else { 20.0 }
+        };
         let bottom = help_y - if compact { 8.0 } else { 14.0 };
         theme::rule(&p, egui::Rangef::new(x, right), bottom);
         let content = Rect::from_x_y_ranges(panel.min.x + 4.0..=screen.max.x, y..=bottom - 2.0);
@@ -518,6 +594,7 @@ impl Model {
             act = Some(a);
         }
         theme::shadowed(&p, pos2(x, help_y), help_g, theme::HELP_HI);
+        let touch = self.touch_ui();
         let mut hints = vec![
             ("↑↓", i18n::ui(lang, "hint_move")),
             ("←→", i18n::ui(lang, "hint_change")),
@@ -529,15 +606,26 @@ impl Model {
         if cfg!(not(target_arch = "wasm32")) {
             hints.push(("Esc", i18n::ui(lang, "hint_quit")));
         }
+        if touch {
+            hints.clear();
+        }
         let hw = theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
         let dev = p.layout_no_wrap(
-            i18n::ui(lang, "device_keyboard").to_string(),
+            i18n::ui(
+                lang,
+                if touch {
+                    "device_touch"
+                } else {
+                    "device_keyboard"
+                },
+            )
+            .to_string(),
             theme::sans(HINT),
             theme::HELP,
         );
         let dw = dev.size().x;
         // The input device at the right end of the hints line, when there is room for it.
-        if hw + 24.0 + dw <= w {
+        if !touch && hw + 24.0 + dw <= w {
             theme::shadowed(&p, pos2(right - dw, hint_y), dev, theme::HELP);
         }
         self.nav.moved = false;
@@ -578,7 +666,11 @@ impl Model {
             pos2(x, full.min.y + if compact { 12.0 } else { 26.0 }),
             head,
             if error { "" } else { &caption },
-            HEAD,
+            if full.height() < 420.0 {
+                HEAD * 0.8
+            } else {
+                HEAD
+            },
             CAP,
         );
         let mut y =
@@ -589,9 +681,15 @@ impl Model {
             self.progress_body(ui, &p, status, x, w, measure, full);
             return None;
         };
+        // A phone-sized window sets the cause smaller so the message keeps room above the rows.
+        let cause_size = if full.height() < 420.0 {
+            SMALL + 2.0
+        } else {
+            ROW
+        };
         let cause = p.layout(
             i18n::ui(lang, "start_failed_body").to_string(),
-            theme::serif(ROW),
+            theme::serif(cause_size),
             theme::TEXT,
             measure,
         );
@@ -618,7 +716,7 @@ impl Model {
         }
         // Bottom up: hints, help line, the rows, a rule; the message scrolls in what is left.
         let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
-        let shown = if self.nav.input.bar() {
+        let shown = if self.nav.input.bar() || self.touch_ui() {
             self.nav.focus
         } else {
             self.nav.input.hovered()
@@ -677,18 +775,28 @@ impl Model {
         if cfg!(not(target_arch = "wasm32")) {
             hints.push(("Esc", i18n::ui(lang, "hint_quit")));
         }
-        theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
-        let body = Rect::from_x_y_ranges(x..=x + measure, y..=rows_top - 12.0);
+        if !self.touch_ui() {
+            theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
+        }
+        // The message box holds whole lines only; the rest scrolls.
+        let line = p
+            .layout_no_wrap("Ag".into(), theme::sans(SMALL), theme::HELP)
+            .size()
+            .y;
+        let lines = ((rows_top - 12.0 - y) / line).floor().max(1.0);
+        let body = Rect::from_x_y_ranges(x..=x + measure, y..=y + lines * line);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
         child.set_clip_rect(body);
         let out = egui::ScrollArea::vertical()
+            .min_scrolled_height(body.height())
+            .max_height(body.height())
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
                 let g = ui.painter().layout(
                     (*msg).to_string(),
                     theme::sans(SMALL),
                     theme::HELP,
-                    measure - 16.0,
+                    ui.available_width().min(measure - 16.0),
                 );
                 let (rr, _) = ui.allocate_exact_size(g.size(), Sense::hover());
                 theme::shadowed(ui.painter(), rr.min, g, theme::HELP);
@@ -747,6 +855,7 @@ impl Model {
         ui.ctx().request_repaint();
         let mut hy = ly + 22.0;
         if let Some(h) = hint
+            && !self.touch_ui()
             && cfg!(not(any(target_arch = "wasm32", target_os = "android")))
         {
             theme::key_hints(p, pos2(x, hy), &[("Shift", h)], SMALL);
@@ -762,14 +871,22 @@ impl Model {
     fn folder_row(&mut self, ui: &Ui, p: &Painter, r: Rect, lang: Lang, clicked: bool) {
         let focused = self.shows(Target::Folder);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
-        text_in(
-            p,
-            Rect::from_min_size(r.min, vec2(LABEL_W.min(r.width() * 0.3), r.height())),
-            i18n::ui(lang, "game_folder").trim_end_matches([':', '：']),
-            theme::serif(ROW + 1.0),
-            color,
-            focused,
-        );
+        // A narrow row (beside Play on a phone) leaves out the label: the path and its state say what it is.
+        let label_w = if r.width() < 600.0 {
+            0.0
+        } else {
+            LABEL_W.min(r.width() * 0.3)
+        };
+        if label_w > 0.0 {
+            text_in(
+                p,
+                Rect::from_min_size(r.min, vec2(label_w, r.height())),
+                i18n::ui(lang, "game_folder").trim_end_matches([':', '：']),
+                theme::serif(ROW + 1.0),
+                color,
+                focused,
+            );
+        }
         let ok = self.folder_ok();
         let path = match &self.folder {
             Folder::Native => {
@@ -793,7 +910,7 @@ impl Model {
             color,
         );
         let cw = if native { change.size().x + 16.0 } else { 0.0 };
-        let px = r.min.x + LABEL_W.min(r.width() * 0.3);
+        let px = r.min.x + label_w;
         let pw = r.max.x - px - cw;
         let pg = p.layout_no_wrap(fit_path(p, &path, pw), theme::sans(SMALL), theme::HELP_HI);
         let ph = pg.size().y;
@@ -832,6 +949,29 @@ impl Model {
     }
 
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    // The width `tab_bar` takes.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn tabs_width(&self, p: &Painter, lang: Lang) -> f32 {
+        let words: f32 = ["tab_settings", "tab_replays", "tab_stats"]
+            .iter()
+            .map(|id| {
+                p.layout_no_wrap(
+                    i18n::ui(lang, id).to_string(),
+                    theme::serif(ROW),
+                    theme::TEXT,
+                )
+                .size()
+                .x + 28.0
+            })
+            .sum();
+        let keys = if self.touch_ui() {
+            0.0
+        } else {
+            2.0 * HINT + 24.0
+        };
+        words - 28.0 + keys
+    }
+
     fn tab_bar(&mut self, ui: &Ui, p: &Painter, at: egui::Pos2, lang: Lang) {
         let all = [
             (super::Tab::Settings, "tab_settings"),
@@ -845,8 +985,11 @@ impl Model {
             theme::shadowed(p, pos2(x, at.y + ROW * 0.5), g, theme::KEYCAP);
             w
         };
+        let keys = !self.touch_ui();
         let mut x = at.x;
-        x += key(p, x, "Q") + 18.0;
+        if keys {
+            x += key(p, x, "Q") + 18.0;
+        }
         for (t, id) in all {
             let sel = self.tab == t;
             let col = if sel { theme::TEXT_HI } else { theme::HELP };
@@ -870,7 +1013,9 @@ impl Model {
             }
             x += gw + 28.0;
         }
-        key(p, x - 6.0, "E");
+        if keys {
+            key(p, x - 6.0, "E");
+        }
     }
 
     // The tab's content in the scrolling area under the tabs.
@@ -1136,11 +1281,17 @@ impl Model {
                 .unwrap_or_else(|| i18n::ui(lang, "not_set"))
                 .to_string()
         };
-        let pg = p.layout_no_wrap(
-            fit_path(&p, &shown, (right - px).max(20.0)),
-            theme::sans(SMALL),
-            theme::HELP_HI,
-        );
+        // A path is shortened in its middle; a sentence (the default's name) wraps, never cut.
+        let room = (right - px).max(20.0);
+        let pg = if set {
+            p.layout_no_wrap(
+                fit_path(&p, &shown, room),
+                theme::sans(SMALL),
+                theme::HELP_HI,
+            )
+        } else {
+            theme::balanced(&p, &shown, theme::sans(SMALL), theme::HELP_HI, room)
+        };
         theme::shadowed(
             &p,
             pos2(px, row.center().y - pg.size().y / 2.0),
@@ -1528,12 +1679,19 @@ pub(super) fn caption(ui: &mut Ui, x: f32, w: f32, text: &str) {
 }
 
 // Egui-flow content (lists, buttons) in the text column.
+// An empty block takes no height (the row's least height is lifted while it is opened).
 fn padded<R>(ui: &mut Ui, left: f32, w: f32, f: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.horizontal(|ui| {
-        ui.add_space(left);
-        ui.vertical(|ui| {
-            ui.set_max_width(w);
-            f(ui)
+    let least = ui.spacing().interact_size.y;
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 0.0;
+        ui.horizontal(|ui| {
+            ui.add_space(left);
+            ui.vertical(|ui| {
+                ui.spacing_mut().interact_size.y = least;
+                ui.set_max_width(w);
+                f(ui)
+            })
+            .inner
         })
         .inner
     })
@@ -1588,6 +1746,15 @@ impl Model {
         self.nav.focus = Some(Target::Reset);
         self.nav.input.modality = theme::Modality::Keys;
         self.nav.moved = true;
+    }
+
+    // Offscreen shots without game data: a stand-in for title00.png, shown as the real art would be.
+    pub fn shot_art(&mut self, img: &image::RgbaImage) {
+        let (w, h) = img.dimensions();
+        let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(Some(img));
+        self.nav.art = Art::Loading(rx);
     }
 
     pub(super) fn settle_art(&mut self) {

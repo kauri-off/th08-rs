@@ -410,6 +410,8 @@ pub struct Model {
     #[cfg(not(target_os = "android"))]
     saves: SavesUi,
     pub view: View,
+    // A touch screen is the main input: no key hints, 48 dp targets.
+    pub touch: bool,
     // The previous run's `last_error.txt`, shown until dismissed or Play.
     last_error: Option<String>,
     // The Keyboard row waiting for a key press (its entry key).
@@ -500,6 +502,7 @@ impl Model {
             #[cfg(not(target_os = "android"))]
             saves: SavesUi::default(),
             view: View::Settings,
+            touch: cfg!(target_os = "android"),
             last_error,
             capture: None,
             pad: gamepad::PadUi::default(),
@@ -1724,13 +1727,8 @@ fn insets(safe: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
 }
 
 // Window px per point for the safe rect: the OS scale (`density`), growing with big windows.
-fn zoom(size_px: (u32, u32), density: f32) -> f32 {
-    crate::theme::ppp(
-        size_px.0 as f32,
-        size_px.1 as f32,
-        density,
-        cfg!(target_os = "android"),
-    )
+fn zoom(size_px: (u32, u32), density: f32, touch: bool) -> f32 {
+    crate::theme::ppp(size_px.0 as f32, size_px.1 as f32, density, touch)
 }
 
 // egui context and renderer on the game's device, drawing the model.
@@ -1802,7 +1800,11 @@ impl Screen {
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
-        let ppp = zoom(safe_size(gfx.safe, (w, h)), window.scale_factor() as f32);
+        let ppp = zoom(
+            safe_size(gfx.safe, (w, h)),
+            window.scale_factor() as f32,
+            cfg!(target_os = "android"),
+        );
         let z = ppp / window.scale_factor() as f32;
         // egui's zoom-change pass lays out one frame with the old insets: draw once more after it.
         if self.p.ctx.zoom_factor() != z {
@@ -1868,10 +1870,7 @@ pub fn resend_atlas(ctx: &egui::Context, pending: &mut egui::TexturesDelta) {
 fn new_ctx(model: &Model) -> egui::Context {
     let ctx = egui::Context::default();
     ctx.set_visuals(egui::Visuals::dark());
-    crate::theme::apply(
-        &ctx,
-        crate::theme::Density::new(cfg!(target_os = "android")),
-    );
+    crate::theme::apply(&ctx, crate::theme::Density::new(model.touch));
     let font = model.row("font").value.text();
     i18n::install_fonts(&ctx, Some(font.as_str()).filter(|f| !f.is_empty()));
     ctx
@@ -1994,6 +1993,8 @@ pub struct ShotOpts {
     // The OS scale.
     pub density: f32,
     pub probe: Probe,
+    // A touch screen (phone sizes).
+    pub touch: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2002,6 +2003,7 @@ impl Default for ShotOpts {
         Self {
             density: 1.0,
             probe: Probe::None,
+            touch: false,
         }
     }
 }
@@ -2029,7 +2031,7 @@ fn probe_events(probe: Probe, i: u32, screen: egui::Vec2) -> Vec<egui::Event> {
 // Input of offscreen pass `i` of a w×h px window.
 #[cfg(not(target_arch = "wasm32"))]
 fn shot_input(i: u32, (w, h): (u32, u32), safe: SafeArea, o: &ShotOpts) -> egui::RawInput {
-    let ppp = zoom(safe_size(safe, (w, h)), o.density);
+    let ppp = zoom(safe_size(safe, (w, h)), o.density, o.touch);
     let mut raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -2056,6 +2058,8 @@ pub fn render_image(
     safe: SafeArea,
     o: &ShotOpts,
 ) -> image::RgbaImage {
+    let mut model = model;
+    model.touch = o.touch;
     let mut s = Painter::new(gfx, model);
     let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("launcher shot"),
@@ -2097,6 +2101,7 @@ pub fn check_frame(
     safe: SafeArea,
     o: &ShotOpts,
 ) -> Vec<crate::uicheck::Issue> {
+    model.touch = o.touch;
     let ctx = new_ctx(&model);
     crate::uicheck::mark_stock_slots(&ctx);
     let mut last = None;
