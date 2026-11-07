@@ -3033,6 +3033,13 @@ impl Readback {
 mod tests {
     use super::*;
 
+    // One headless device at a time: parallel Vulkan device creation can deadlock in the driver.
+    fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+        static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        GPU.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn png(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
         let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba(f(x, y)));
         let mut out = std::io::Cursor::new(Vec::new());
@@ -3069,6 +3076,7 @@ mod tests {
 
     #[test]
     fn rebuild_restores_bytes_writes_and_copies() {
+        let _gpu = gpu_lock();
         let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
             eprintln!("no GPU adapter; skipped");
             return;
@@ -3092,6 +3100,7 @@ mod tests {
     // A 1:1 sprite, a rect with edges on pixel centres and a capture drawn back: scale 2 averaged down = scale 1.
     #[test]
     fn render_scale_keeps_picture() {
+        let _gpu = gpu_lock();
         let shot = |k: u32| -> Option<image::RgbaImage> {
             let mut gfx = pollster::block_on(Gfx::headless()).ok()?;
             gfx.offscreen = true;
@@ -3154,6 +3163,7 @@ mod tests {
 
     #[test]
     fn copy_within_one_texture() {
+        let _gpu = gpu_lock();
         let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
             eprintln!("no GPU adapter; skipped");
             return;
@@ -3186,6 +3196,7 @@ mod tests {
     // Blit options touch only the scaled window copy; at 2× sharp-bilinear hits texel centres like nearest.
     #[test]
     fn blit_options_window_only() {
+        let _gpu = gpu_lock();
         let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
             eprintln!("no GPU adapter; skipped");
             return;

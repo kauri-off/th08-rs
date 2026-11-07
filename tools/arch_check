@@ -133,8 +133,10 @@ srefs=$(python3 "$ROOT/tools/spec_refs.py" 2>&1 | grep "^spec_refs:")
 [[ $srefs == *" 0 broken"* ]] && echo "spec refs ok" || { echo "spec refs FAILED: $srefs"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
 ta=$SECONDS; a=$("$ROOT/tools/android_check"); ar=$?; echo "$a ($((SECONDS - ta)) s)"; [[ $ar == 0 ]] || fail=1
-t=$(cargo test -q --release --workspace 2>&1)
-if grep -qE 'FAILED|panicked|error(\[|:)' <<< "$t"; then echo "cargo test FAILED"; grep -E 'FAILED|panicked' <<< "$t" | head; fail=1
+# A hung test (GPU driver) must not hold the queue: 30 min covers the build and every test.
+t=$(timeout -k 10 1800 cargo test -q --release --workspace 2>&1); trc=$?
+if (( trc == 124 || trc == 137 )); then echo "cargo test TIMED OUT (30 min)"; fail=1
+elif grep -qE 'FAILED|panicked|error(\[|:)' <<< "$t"; then echo "cargo test FAILED"; grep -E 'FAILED|panicked' <<< "$t" | head; fail=1
 else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END{print s+0}') passed)"; fi
 echo "checks done in $((SECONDS - t0)) s"
 
