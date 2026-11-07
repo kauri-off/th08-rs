@@ -49,6 +49,14 @@ saved = "保存済み"
 port_menu = "移植版メニュー"
 paused = "ゲームは一時停止中です"
 resume = "再開"
+volume = "音量"
+paused_title = "一時停止"
+quit_confirm = "タイトルに戻りますか？ もう一度押す"
+settings_page = "設定 ›"
+hitboxes_short = "当たり判定"
+touch_layout_short = "タッチ配置"
+nav_hint = "矢印 / 十字キー · Z / A: 決定 · X / B: 戻る"
+tabs_hint = "Q / E か LB / RB: タブ"
 quit_title = "タイトルに戻る"
 key_back = "戻るボタン"
 controller = "コントローラー: {name}"
@@ -239,7 +247,7 @@ help = "th08.dat と thbgm.dat のあるゲームフォルダ（最初の引数�
 [entry.game_text]
 label = "ゲーム内テキストの言語"
 summary = "ゲーム中のテキストの言語"
-help = "会話などゲーム内テキストの言語: follow（画面の言語に合わせる）、ja（オリジナル）、またはインストール済みの翻訳の言語コード（en、ru、de、pt-br…）"
+help = "会話などゲーム内テキストの言語: 「画面の言語に合わせる」、日本語（オリジナル）、またはインストール済みの翻訳の言語コード（en、ru、de、pt-br…）"
 
 [entry.game_text.words]
 follow = "画面の言語に合わせる"
@@ -248,7 +256,7 @@ ja = "日本語（オリジナル）"
 [entry.language]
 label = "言語"
 summary = "設定画面の言語"
-help = "この画面と移植版メニューの言語: auto（システムの言語）、ja、en、ru"
+help = "この画面と移植版メニューの言語: 「システムの言語」、日本語、English、Русский"
 
 [entry.language.words]
 auto = "システムの言語"
@@ -297,13 +305,13 @@ help = "キャラクター、難易度、ステージ（またはリプレイ／
 
 [entry.pause_unfocused]
 label = "フォーカスを失ったら一時停止"
-summary = "ステージ中に別のウィンドウへ切り替えるとポートメニューを開く"
-help = "ステージ中にウィンドウやブラウザのタブがフォーカスを失ったらポートメニューを開く"
+summary = "ステージ中に別のウィンドウへ切り替えると移植版メニューを開く"
+help = "ステージ中にウィンドウやブラウザのタブがフォーカスを失ったら移植版メニューを開く"
 
 [entry.scale_filter]
 label = "拡大フィルタ"
 summary = "画面をウィンドウに合わせて拡大する方法"
-help = "ウィンドウの拡大方法: smooth（バイリニア）、sharp（くっきりしたピクセルと滑らかな境目）、nearest"
+help = "ウィンドウの拡大方法: 「スムーズ」（バイリニア）、「シャープ」（くっきりしたピクセルと滑らかな境目）、「ドット」"
 
 [entry.scale_filter.words]
 smooth = "スムーズ"
@@ -318,7 +326,7 @@ help = "収まる最大の 640x480 の整数倍で画面を拡大する"
 [entry.render_scale]
 label = "描画解像度"
 summary = "ゲームを 640×480 の 1 倍・2 倍・3 倍で描画"
-help = "内部解像度: 2 倍や 3 倍では大きな画面で回転するスプライト、3D 背景、文字がくっきりする。auto はウィンドウに収まる最大の倍率、1 は元の画面"
+help = "内部解像度: 2 倍や 3 倍では大きな画面で回転するスプライト、3D 背景、文字がくっきりする。「ウィンドウに合わせる」はウィンドウに収まる最大の倍率、1 は元の画面"
 
 [entry.render_scale.words]
 1 = "640×480"
@@ -372,7 +380,7 @@ unit = " フレーム"
 [entry.color_filter]
 label = "カラーフィルタ"
 summary = "色覚やコントラストに合わせて色を調整"
-help = "ウィンドウ画面のカラーフィルタ: off、protan、deutan、tritan（色覚補正）、high_contrast"
+help = "ウィンドウ画面のカラーフィルタ: 「オフ」、「1 型色覚」「2 型色覚」「3 型色覚」（色覚補正）、「ハイコントラスト」"
 
 [entry.color_filter.words]
 off = "オフ"
@@ -392,7 +400,7 @@ help = "画面のガンマ（パーセント、100 = 変更なし。上げると
 [entry.hitboxes]
 label = "当たり判定表示"
 summary = "当たり判定の形を表示（リプレイは変わらない）"
-help = "当たり判定ビューア: off、player（自機の当たり判定とグレイズ範囲）、all（弾・レーザー・敵も）。ゲーム中は F3 か移植版メニューで切り替え"
+help = "当たり判定ビューア: 「オフ」、「自機」（自機の当たり判定とグレイズ範囲）、「すべて」（弾・レーザー・敵も）。ゲーム中は F3 か移植版メニューで切り替え"
 
 [entry.hitboxes.words]
 off = "オフ"
@@ -562,7 +570,7 @@ none = "なし"
 [entry.screenshot_size]
 label = "スクリーンショットの大きさ"
 summary = "F12 と移植版メニューで screenshots/ に PNG を保存"
-help = "スクリーンショットの大きさ: game（640x480 の画面）または window（ウィンドウと同じ拡大）"
+help = "スクリーンショットの大きさ: 「640×480」（ゲームの画面）または「ウィンドウの大きさ」（ウィンドウと同じ拡大）"
 
 [entry.screenshot_size.words]
 game = "640×480"
@@ -571,7 +579,7 @@ window = "ウィンドウの大きさ"
 [entry.input_display]
 label = "入力表示"
 summary = "各フレームのゲーム入力を隅に表示（リプレイでも）"
-help = "入力表示: off、または各フレームの方向・ショット・ボム・低速・ポーズを表示するウィンドウの隅"
+help = "入力表示: 「オフ」、または各フレームの方向・ショット・ボム・低速・ポーズを表示するウィンドウの隅"
 
 [entry.input_display.words]
 off = "オフ"
@@ -588,7 +596,7 @@ help = "入力表示の不透明度（パーセント）"
 [entry.touch]
 label = "タッチオーバーレイ"
 summary = "タッチ画面用の画面上ボタン"
-help = "タッチオーバーレイ: auto（タッチ対応の環境で表示）、on、off"
+help = "タッチオーバーレイ: 「自動」（タッチ対応の環境で表示）、「オン」、「オフ」"
 
 [entry.touch.words]
 auto = "自動"

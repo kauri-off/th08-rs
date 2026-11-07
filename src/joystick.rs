@@ -36,6 +36,10 @@ pub const ANDROID_KEYS: [u32; 16] = [
 // Button index of Select / Back / View: opens the port menu, like Android Back.
 pub const MENU_BUTTON: usize = 8;
 
+// Presses kept for `take_presses`.
+#[cfg(any(not(target_os = "linux"), feature = "gamepad-linux"))]
+const MAX_PRESSES: usize = 16;
+
 // Stick deflection (of ±1000) that counts as using the pad (hides the touch overlay).
 const IN_USE: i32 = 300;
 
@@ -165,6 +169,8 @@ pub struct Joystick {
     pub map: crate::platform::padmap::PadMap,
     // Select pressed on a gilrs pad since the last `take_menu`.
     menu: bool,
+    // Button indices pressed on a gilrs pad since the last `take_presses` (port menu navigation), oldest first.
+    presses: Vec<usize>,
     // Pad input since the last `take_used`.
     used: bool,
 }
@@ -198,6 +204,11 @@ impl Joystick {
                         if b == BUTTONS[MENU_BUTTON] {
                             self.menu = true;
                         }
+                        if let Some(i) = BUTTONS.iter().position(|&x| x == b)
+                            && self.presses.len() < MAX_PRESSES
+                        {
+                            self.presses.push(i);
+                        }
                     }
                     gilrs::EventType::AxisChanged(_, v, _) if axis_value(v).abs() > IN_USE => {
                         self.used = true;
@@ -214,6 +225,11 @@ impl Joystick {
     // A gilrs Select press since the last call (Android Select arrives as a window key event instead).
     pub fn take_menu(&mut self) -> bool {
         std::mem::take(&mut self.menu)
+    }
+
+    // gilrs button presses since the last call (the game never takes them; the queue is bounded).
+    pub fn take_presses(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.presses)
     }
 
     // Pad input since the last call.

@@ -1,14 +1,382 @@
-//! Port menu (F1 / Android Back / resume from the background): an egui pass over the held game's dimmed last frame.
+//! Port menu (F1 / Android Back / pad Select / resume from the background): a pause card, docked in the letterbox when it fits, and a tabbed settings page, drawn with egui over the held game's last frame.
 
 use super::touch::{TouchConfig, TouchLayout};
 use super::touchedit::{EditOut, TouchEdit};
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};
 use crate::settings::Settings;
-use egui::{Align2, Color32, Id, LayerId, Order, RichText};
+use egui::{Align2, Color32, Id, LayerId, Order, RichText, Stroke, StrokeKind, vec2};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
+use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 use winit::window::Window;
+
+// Menu input from keys and pad buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav {
+    Up,
+    Down,
+    Left,
+    Right,
+    Activate,
+    Back,
+    PrevTab,
+    NextTab,
+}
+
+impl Nav {
+    // Keyboard; Esc, F1 and Android Back go through the app (`PortMenu::back`).
+    pub fn of_key(k: KeyCode, shift: bool) -> Option<Self> {
+        Some(match k {
+            KeyCode::ArrowUp => Self::Up,
+            KeyCode::Tab if shift => Self::Up,
+            KeyCode::ArrowDown | KeyCode::Tab => Self::Down,
+            KeyCode::ArrowLeft => Self::Left,
+            KeyCode::ArrowRight => Self::Right,
+            KeyCode::KeyZ | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                Self::Activate
+            }
+            KeyCode::KeyX | KeyCode::Backspace => Self::Back,
+            KeyCode::KeyQ | KeyCode::PageUp => Self::PrevTab,
+            KeyCode::KeyE | KeyCode::PageDown => Self::NextTab,
+            _ => return None,
+        })
+    }
+
+    // A gamepad button in `joystick` order: A, B, LB, RB and the d-pad.
+    pub fn of_button(i: usize) -> Option<Self> {
+        Some(match i {
+            0 => Self::Activate,
+            1 => Self::Back,
+            4 => Self::PrevTab,
+            5 => Self::NextTab,
+            12 => Self::Up,
+            13 => Self::Down,
+            14 => Self::Left,
+            15 => Self::Right,
+            _ => return None,
+        })
+    }
+
+    // Stick / hat edges (axes of ±1000, y down-positive) from `prev` to `now`.
+    fn of_axes(prev: [i32; 2], now: [i32; 2]) -> Vec<Self> {
+        let mut out = Vec::new();
+        for (i, (neg, pos)) in [(Self::Left, Self::Right), (Self::Up, Self::Down)]
+            .into_iter()
+            .enumerate()
+        {
+            if now[i] > STICK_NAV && prev[i] <= STICK_NAV {
+                out.push(pos);
+            } else if now[i] < -STICK_NAV && prev[i] >= -STICK_NAV {
+                out.push(neg);
+            }
+        }
+        out
+    }
+}
+
+// Stick / hat deflection that moves the focus once.
+const STICK_NAV: i32 = 600;
+
+// Theme colours; `theme_contrast` checks text ≥ 4.5:1 and outlines ≥ 3:1 on the panel.
+const PANEL: Color32 = Color32::from_rgb(24, 20, 34);
+const TEXT: Color32 = Color32::from_rgb(236, 232, 244);
+const TEXT_DIM: Color32 = Color32::from_rgb(184, 176, 200);
+const ACCENT: Color32 = Color32::from_rgb(104, 62, 168);
+const BUTTON: Color32 = Color32::from_rgb(50, 42, 68);
+const BUTTON_HOVER: Color32 = Color32::from_rgb(70, 60, 96);
+const BORDER: Color32 = Color32::from_rgb(134, 122, 164);
+const FOCUS: Color32 = Color32::from_rgb(255, 214, 102);
+const WARN: Color32 = Color32::from_rgb(255, 140, 128);
+
+// Text sizes, points (= dp on touch screens, where ppp ≥ the display density).
+const BODY: f32 = 16.0;
+const SMALL: f32 = 14.0;
+const HEADING: f32 = 22.0;
+
+// Where and how big the menu is for one window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layout {
+    // Window px per egui point.
+    pub ppp: f32,
+    // Minimum target height, points (48 = 48 dp on touch screens).
+    pub target: f32,
+    // Card width, points.
+    pub card_w: f32,
+    // The card is docked as a sheet at the right edge, beside the picture.
+    pub sheet: bool,
+    // The safe area the held frame is drawn in: narrowed by the sheet.
+    pub picture: SafeArea,
+    pub touch: bool,
+}
+
+// The picture may shrink to this share of its full size to make room for the sheet.
+const SHEET_MIN_PICTURE: f32 = 0.8;
+
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "the sheet width is between the card width and the safe width"
+)]
+// `density`: the window's scale factor (Android: dp → px); `touch`: a touch screen is the main input.
+pub fn layout(safe: SafeArea, (w, h): (u32, u32), density: f32, touch: bool) -> Layout {
+    let [_, _, sw, sh] = safe.rect(w, h);
+    let fit = |width: f32| (width / 640.0).min(sh / 480.0);
+    let ppp = fit(sw).max(0.5).max(density);
+    let target = if touch { 48.0 } else { 36.0 };
+    let min_card = if touch { 300.0 } else { 280.0 };
+    let rest = sw - min_card * ppp;
+    let sheet = rest > 0.0 && fit(rest) >= SHEET_MIN_PICTURE * fit(sw) && sh / ppp >= 320.0;
+    if !sheet {
+        return Layout {
+            ppp,
+            target,
+            card_w: (min_card + 40.0).min(sw / ppp - 24.0),
+            sheet,
+            picture: safe,
+            touch,
+        };
+    }
+    let free = (sw - (640.0 * fit(rest)).floor()).min(400.0 * ppp).floor();
+    Layout {
+        ppp,
+        target,
+        card_w: free / ppp,
+        sheet,
+        picture: SafeArea {
+            right: safe.right + free as u32,
+            ..safe
+        },
+        touch,
+    }
+}
+
+// The card's targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Item {
+    Resume,
+    Quit,
+    Volume,
+    Speed,
+    Hitboxes,
+    Screenshot,
+    TouchLayout,
+    Settings,
+}
+
+// The card's rows in focus order; the tiles share one row (← / → between them).
+fn card_rows(m: &MenuState<'_>) -> Vec<Vec<Item>> {
+    let mut rows = vec![vec![Item::Resume]];
+    if m.quit {
+        rows.push(vec![Item::Quit]);
+    }
+    rows.push(vec![Item::Volume]);
+    if m.speed.is_some() {
+        rows.push(vec![Item::Speed]);
+    }
+    let mut tiles = vec![Item::Hitboxes, Item::Screenshot];
+    if m.touch {
+        tiles.push(Item::TouchLayout);
+    }
+    rows.push(tiles);
+    rows.push(vec![Item::Settings]);
+    rows
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    Card,
+    Settings,
+}
+
+// What a press or click asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Do {
+    Nothing,
+    Resume,
+    Quit,
+    Screenshot,
+    Speed((u32, u32)),
+    Hitboxes,
+    EditLayout,
+}
+
+const VOLUME: &str = "volume_master";
+
+// Focus: the card's (row, column); on the settings page the tab and the row (0 = the tab bar).
+#[derive(Debug)]
+struct Focus {
+    page: Page,
+    card: (usize, usize),
+    tab: usize,
+    row: usize,
+    // "Quit to title" was pressed once; the next press quits.
+    confirm: bool,
+    // Moved by a key this pass: the focused row is scrolled into view.
+    moved: bool,
+}
+
+impl Default for Focus {
+    fn default() -> Self {
+        Self {
+            page: Page::Card,
+            card: (0, 0),
+            tab: 0,
+            row: 1,
+            confirm: false,
+            moved: false,
+        }
+    }
+}
+
+impl Focus {
+    fn clamp(&mut self, rows: &[Vec<Item>]) -> Item {
+        let r = self.card.0.min(rows.len() - 1);
+        let c = self.card.1.min(rows[r].len() - 1);
+        self.card = (r, c);
+        rows[r][c]
+    }
+
+    fn focus_item(&mut self, rows: &[Vec<Item>], it: Item) {
+        for (r, row) in rows.iter().enumerate() {
+            if let Some(c) = row.iter().position(|&x| x == it) {
+                self.card = (r, c);
+            }
+        }
+    }
+
+    fn nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+        self.moved = true;
+        match self.page {
+            Page::Card => self.card_nav(n, m, model),
+            Page::Settings => {
+                self.settings_nav(n, m, model);
+                Do::Nothing
+            }
+        }
+    }
+
+    fn card_nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+        let rows = card_rows(m);
+        let it = self.clamp(&rows);
+        let (r, c) = self.card;
+        if n != Nav::Activate && n != Nav::Back {
+            self.confirm = false;
+        }
+        match n {
+            Nav::Up => self.card = (r.saturating_sub(1), c),
+            Nav::Down => self.card = ((r + 1).min(rows.len() - 1), c),
+            Nav::Left | Nav::Right => {
+                let dir = if n == Nav::Left { -1 } else { 1 };
+                if rows[r].len() > 1 {
+                    self.card.1 = c.saturating_add_signed(dir).min(rows[r].len() - 1);
+                } else if it == Item::Volume && has_volume(model) {
+                    model.step(VOLUME, dir as i32);
+                } else if it == Item::Speed
+                    && let Some(now) = m.speed
+                {
+                    let rates = crate::transport::SLOW;
+                    let at = rates.iter().position(|&x| x == now).unwrap_or(0);
+                    let to = at.saturating_add_signed(dir).min(rates.len() - 1);
+                    if to != at {
+                        return Do::Speed(rates[to]);
+                    }
+                }
+            }
+            Nav::Activate => return self.activate(it, &rows),
+            Nav::Back => {
+                if !self.back(&rows) {
+                    return Do::Resume;
+                }
+            }
+            Nav::PrevTab | Nav::NextTab => {}
+        }
+        if self.card.0 != r {
+            self.card = (self.card.0, self.card.1.min(rows[self.card.0].len() - 1));
+        }
+        Do::Nothing
+    }
+
+    fn settings_nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) {
+        let tabs = model.live_tabs();
+        if tabs.is_empty() {
+            if n == Nav::Back {
+                self.back(&card_rows(m));
+            }
+            return;
+        }
+        self.tab = self.tab.min(tabs.len() - 1);
+        let keys = model.live_rows(tabs[self.tab]);
+        self.row = self.row.min(keys.len());
+        let last = tabs.len() - 1;
+        match n {
+            Nav::Up => self.row = self.row.saturating_sub(1),
+            Nav::Down => self.row = (self.row + 1).min(keys.len()),
+            Nav::Left if self.row == 0 => self.tab = self.tab.saturating_sub(1),
+            Nav::Right if self.row == 0 => self.tab = (self.tab + 1).min(last),
+            Nav::Left => {
+                model.step(keys[self.row - 1], -1);
+            }
+            Nav::Right => {
+                model.step(keys[self.row - 1], 1);
+            }
+            Nav::PrevTab | Nav::NextTab => {
+                self.tab = if n == Nav::PrevTab {
+                    self.tab.checked_sub(1).unwrap_or(last)
+                } else if self.tab == last {
+                    0
+                } else {
+                    self.tab + 1
+                };
+                self.row = self.row.min(1);
+            }
+            Nav::Activate if self.row > 0 => {
+                model.activate(keys[self.row - 1]);
+            }
+            Nav::Activate => {}
+            Nav::Back => {
+                self.back(&card_rows(m));
+            }
+        }
+    }
+
+    // A press or click of a card target.
+    fn activate(&mut self, it: Item, rows: &[Vec<Item>]) -> Do {
+        self.focus_item(rows, it);
+        let confirm = std::mem::take(&mut self.confirm);
+        match it {
+            Item::Resume => Do::Resume,
+            Item::Quit if confirm => Do::Quit,
+            Item::Quit => {
+                self.confirm = true;
+                Do::Nothing
+            }
+            Item::Volume | Item::Speed => Do::Nothing,
+            Item::Hitboxes => Do::Hitboxes,
+            Item::Screenshot => Do::Screenshot,
+            Item::TouchLayout => Do::EditLayout,
+            Item::Settings => {
+                self.page = Page::Settings;
+                self.tab = 0;
+                self.row = 1;
+                Do::Nothing
+            }
+        }
+    }
+
+    // One level back; false on the plain card (the menu closes).
+    fn back(&mut self, rows: &[Vec<Item>]) -> bool {
+        if self.page == Page::Settings {
+            self.page = Page::Card;
+            self.focus_item(rows, Item::Settings);
+            return true;
+        }
+        std::mem::take(&mut self.confirm)
+    }
+}
+
+fn has_volume(model: &launcher::Model) -> bool {
+    model.live_keys().contains(&VOLUME)
+}
 
 pub struct PortMenu {
     ctx: egui::Context,
@@ -28,7 +396,7 @@ pub struct PortMenu {
     opened: (Lang, bool),
     // `Gfx::generation` of the first paint; a change means the renderer is dead (device rebuilt).
     generation: Option<u32>,
-    // The active gamepad's name for the controller row (set by the app before each redraw).
+    // The active gamepad's name for the controller line (set by the app before each redraw).
     pub controller: Option<String>,
     // Active Cheats rows (`Settings::active_cheats`), shown as a no-saves note.
     pub cheats: Vec<&'static str>,
@@ -42,12 +410,13 @@ pub struct PortMenu {
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
     saved: Option<TouchLayout>,
-}
-
-// The launcher's 640×480 layout scale for a window's safe rect (launcher.rs `zoom`).
-fn zoom(safe: SafeArea, (w, h): (u32, u32)) -> f32 {
-    let [_, _, sw, sh] = safe.rect(w, h);
-    (sw / 640.0).min(sh / 480.0).max(0.5)
+    focus: Focus,
+    // Key / pad presses since the last pass.
+    navs: Vec<Nav>,
+    mods: winit::keyboard::ModifiersState,
+    axes: [i32; 2],
+    // The style was set for this (target, touch).
+    styled: Option<(u32, bool)>,
 }
 
 impl PortMenu {
@@ -81,12 +450,48 @@ impl PortMenu {
             touch,
             edit: None,
             saved: None,
+            focus: Focus::default(),
+            navs: Vec::new(),
+            mods: winit::keyboard::ModifiersState::empty(),
+            axes: [0; 2],
+            styled: None,
         }
     }
 
-    // Back / Esc: closes the layout editor without saving; false when the menu itself should close.
+    // Esc / Android Back: closes the layout editor, an open list or the settings page, or cancels the quit
+    // question; false when the menu itself should close.
     pub fn back(&mut self) -> bool {
-        self.edit.take().is_some()
+        if self.edit.take().is_some() {
+            return true;
+        }
+        if egui::Popup::is_any_open(&self.ctx) {
+            egui::Popup::close_all(&self.ctx);
+            return true;
+        }
+        let rows = card_rows(&self.state_now());
+        self.focus.back(&rows)
+    }
+
+    // The layout editor is open (F1 / Select then close it first).
+    pub fn editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    // A gamepad button press (`joystick` order); true when the menu needs a redraw.
+    pub fn pad_button(&mut self, i: usize) -> bool {
+        let n = Nav::of_button(i).filter(|_| self.edit.is_none());
+        self.navs.extend(n);
+        n.is_some()
+    }
+
+    // The event-fed pad's stick / hat (Android); true when the menu needs a redraw.
+    pub fn pad_axes(&mut self, axes: [i32; 2]) -> bool {
+        let n = Nav::of_axes(std::mem::replace(&mut self.axes, axes), axes);
+        let any = !n.is_empty() && self.edit.is_none();
+        if any {
+            self.navs.extend(n);
+        }
+        any
     }
 
     // The live rows changed since the last call: (key, value text) of every shown row.
@@ -109,69 +514,119 @@ impl PortMenu {
         self.saved.take()
     }
 
-    // Returns whether the window needs a redraw.
+    // Returns whether the window needs a redraw. Menu keys move the focus and never reach egui (no hidden egui
+    // focus that Enter could toggle).
     pub fn on_event(&mut self, window: &Window, ev: &WindowEvent) -> bool {
+        if let WindowEvent::ModifiersChanged(m) = ev {
+            self.mods = m.state();
+        }
+        if self.edit.is_none()
+            && let WindowEvent::KeyboardInput { event, .. } = ev
+        {
+            let n = match event.physical_key {
+                PhysicalKey::Code(k) => Nav::of_key(k, self.mods.shift_key()),
+                PhysicalKey::Unidentified(NativeKeyCode::Android(c)) => {
+                    crate::joystick::android_button(c).and_then(Nav::of_button)
+                }
+                _ => None,
+            };
+            if let Some(n) = n {
+                let once = matches!(n, Nav::Activate | Nav::Back);
+                if event.state == ElementState::Pressed && !(once && event.repeat) {
+                    self.navs.push(n);
+                    return true;
+                }
+                return false;
+            }
+        }
         self.state.on_window_event(window, ev).repaint
     }
 
-    // One pass: the game frame, a dim layer and the menu box in the safe area.
+    fn state_now(&self) -> MenuState<'_> {
+        MenuState {
+            pad: self.controller.as_deref(),
+            touch: self.touch.is_some(),
+            cheats: &self.cheats,
+            hitboxes: super::hitbox::Hitboxes::Off,
+            status: self.status.as_deref(),
+            speed: self.speed,
+            no_saves: self.no_saves,
+            quit: self.quit_ok,
+        }
+    }
+
+    // One pass: the game frame (left of the sheet when docked), the card or settings page in the safe area.
     pub fn redraw(&mut self, window: &Window, gfx: &mut Gfx) -> Option<Action> {
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
-        let ppp = zoom(gfx.safe, (w, h));
+        let s = gfx.safe;
+        let touch_ui = cfg!(target_os = "android") || self.touch.is_some();
+        let lay = layout(s, (w, h), window.scale_factor() as f32, touch_ui);
+        let ppp = lay.ppp;
         let z = ppp / window.scale_factor() as f32;
         if self.ctx.zoom_factor() != z {
             window.request_redraw();
         }
         self.ctx.set_zoom_factor(z);
+        let key = (lay.target.to_bits(), lay.touch);
+        if self.styled != Some(key) {
+            style(&self.ctx, &lay);
+            self.styled = Some(key);
+        }
         let mut raw = self.state.take_egui_input(window);
-        let s = gfx.safe;
-        raw.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-            left: s.left as f32 / ppp,
-            right: s.right as f32 / ppp,
-            top: s.top as f32 / ppp,
-            bottom: s.bottom as f32 / ppp,
-        }));
-        let mut act = None;
-        let lang = self.model.lang();
+        raw.safe_area_insets = Some(insets(s, ppp));
         if let Some(e) = &mut self.edit {
             e.set_window((w, h), window.scale_factor(), s);
         }
-        let pad = self.controller.as_deref();
-        let cheats = &self.cheats;
-        let status = self.status.as_deref();
-        let (speed, no_saves, quit) = (self.speed, self.no_saves, self.quit_ok);
-        let (edit, touch) = (&mut self.edit, self.touch.is_some());
-        let model = &mut self.model;
-        let mut changed = false;
-        let mut open_edit = false;
-        let mut done = None;
         let hitboxes = super::hitbox::mode(gfx);
-        let mut cycle = false;
+        let m = MenuState {
+            pad: self.controller.as_deref(),
+            touch: self.touch.is_some(),
+            cheats: &self.cheats,
+            hitboxes,
+            status: self.status.as_deref(),
+            speed: self.speed,
+            no_saves: self.no_saves,
+            quit: self.quit_ok,
+        };
+        let (model, focus, edit) = (&mut self.model, &mut self.focus, &mut self.edit);
+        let before = live_values(model);
+        let mut todo: Vec<Do> = self
+            .navs
+            .drain(..)
+            .map(|n| focus.nav(n, &m, model))
+            .collect();
+        let mut done = None;
         let mut out = self.ctx.run_pass(raw, |ctx| {
             if let Some(e) = edit {
-                done = e.ui(ctx, lang, ppp);
+                done = e.ui(ctx, model.lang(), ppp);
             } else {
-                let m = MenuState {
-                    pad,
-                    touch,
-                    cheats,
-                    hitboxes,
-                    status,
-                    speed,
-                    no_saves,
-                    quit,
-                };
-                (act, open_edit, cycle, changed) = menu_ui(ctx, lang, &m, model);
+                todo.extend(menu_ui(ctx, &m, model, focus, &lay));
             }
         });
-        if changed {
+        focus.moved = false;
+        if live_values(model) != before {
             self.changed = true;
             window.request_redraw();
         }
-        if cycle {
-            super::hitbox::cycle(gfx);
+        let mut act = None;
+        for d in todo {
+            match d {
+                Do::Nothing => {}
+                Do::Resume => act = Some(Action::Resume),
+                Do::Quit => act = Some(Action::QuitToTitle),
+                Do::Screenshot => act = Some(Action::Screenshot),
+                Do::Speed(r) => act = Some(Action::Speed(r)),
+                Do::Hitboxes => {
+                    super::hitbox::cycle(gfx);
+                }
+                Do::EditLayout => {
+                    if let Some(t) = &self.touch {
+                        self.edit = Some(TouchEdit::new(t.clone()));
+                    }
+                }
+            }
             window.request_redraw();
         }
         match done {
@@ -188,10 +643,6 @@ impl PortMenu {
                 window.request_redraw();
             }
             None => {}
-        }
-        if open_edit && let Some(t) = &self.touch {
-            self.edit = Some(TouchEdit::new(t.clone()));
-            window.request_redraw();
         }
         self.state
             .handle_platform_output(window, std::mem::take(&mut out.platform_output));
@@ -211,7 +662,12 @@ impl PortMenu {
         }
         self.generation = Some(gfx.generation());
         let (renderer, pending) = (&mut self.renderer, &mut self.pending);
+        // The sheet narrows the frame's safe area for this present only; the game keeps its own.
+        if self.edit.is_none() {
+            gfx.safe = lay.picture;
+        }
         let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, &t, enc));
+        gfx.safe = s;
         if !shown {
             window.request_redraw();
         }
@@ -219,7 +675,7 @@ impl PortMenu {
     }
 }
 
-// What the menu box shows; `touch`: the overlay is on; `quit`: "Quit to title" is offered.
+// What the card shows; `touch`: the overlay is on; `quit`: "Quit to title" is offered.
 struct MenuState<'a> {
     pad: Option<&'a str>,
     touch: bool,
@@ -231,12 +687,86 @@ struct MenuState<'a> {
     quit: bool,
 }
 
-// The egui context of a menu: dark, with the CJK font (the language row names 日本語 in every language).
+// The egui context of a menu, with the CJK font (the language row names 日本語 in every language).
 fn new_ctx(s: &Settings) -> egui::Context {
     let ctx = egui::Context::default();
     ctx.set_visuals(egui::Visuals::dark());
     i18n::install_fonts(&ctx, s.font.as_deref());
     ctx
+}
+
+// The menu theme: the game's purple accent, outlined buttons, high-contrast text, targets of `lay.target` points.
+fn style(ctx: &egui::Context, lay: &Layout) {
+    use egui::{FontFamily, FontId, TextStyle};
+    ctx.all_styles_mut(|st| {
+        st.text_styles = [
+            (
+                TextStyle::Heading,
+                FontId::new(HEADING, FontFamily::Proportional),
+            ),
+            (TextStyle::Body, FontId::new(BODY, FontFamily::Proportional)),
+            (
+                TextStyle::Button,
+                FontId::new(BODY, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(SMALL, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(SMALL, FontFamily::Monospace),
+            ),
+        ]
+        .into();
+        let sp = &mut st.spacing;
+        sp.interact_size = vec2(40.0, lay.target);
+        sp.item_spacing = vec2(8.0, 6.0);
+        sp.button_padding = vec2(12.0, 6.0);
+        sp.icon_width = if lay.touch { 28.0 } else { 20.0 };
+        sp.icon_width_inner = sp.icon_width * 0.6;
+        sp.icon_spacing = 8.0;
+        sp.slider_rail_height = 8.0;
+        sp.combo_width = 160.0;
+        let v = &mut st.visuals;
+        v.dark_mode = true;
+        v.override_text_color = None;
+        v.weak_text_color = Some(TEXT_DIM);
+        v.window_fill = PANEL;
+        v.panel_fill = PANEL;
+        v.extreme_bg_color = Color32::from_rgb(12, 10, 18);
+        v.slider_trailing_fill = true;
+        v.handle_shape = egui::style::HandleShape::Circle;
+        v.selection.bg_fill = ACCENT;
+        v.selection.stroke = Stroke::new(1.5, TEXT);
+        v.error_fg_color = WARN;
+        let w = &mut v.widgets;
+        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+        w.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+        for (x, fill) in [
+            (&mut w.inactive, BUTTON),
+            (&mut w.hovered, BUTTON_HOVER),
+            (&mut w.active, BUTTON_HOVER),
+            (&mut w.open, BUTTON_HOVER),
+        ] {
+            x.bg_fill = fill;
+            x.weak_bg_fill = fill;
+            x.bg_stroke = Stroke::new(1.5, BORDER);
+            x.fg_stroke = Stroke::new(1.5, TEXT);
+            x.corner_radius = egui::CornerRadius::same(6);
+        }
+        w.hovered.bg_stroke = Stroke::new(2.0, TEXT);
+        w.active.bg_stroke = Stroke::new(2.0, TEXT);
+    });
+}
+
+fn insets(s: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
+    egui::SafeAreaInsets(egui::epaint::MarginF32 {
+        left: s.left as f32 / ppp,
+        right: s.right as f32 / ppp,
+        top: s.top as f32 / ppp,
+        bottom: s.bottom as f32 / ppp,
+    })
 }
 
 fn live_values(m: &launcher::Model) -> Vec<(&'static str, String)> {
@@ -246,132 +776,364 @@ fn live_values(m: &launcher::Model) -> Vec<(&'static str, String)> {
         .collect()
 }
 
-// The menu box, scrolled when it does not fit; also whether the layout editor was asked for, whether the hitbox
-// mode is to be cycled and whether a settings row changed.
-fn menu_ui(
-    ctx: &egui::Context,
-    lang: Lang,
-    m: &MenuState<'_>,
-    model: &mut launcher::Model,
-) -> (Option<Action>, bool, bool, bool) {
-    let MenuState {
-        pad,
-        touch,
-        cheats,
-        hitboxes,
-        status,
-        speed,
-        no_saves,
-        quit,
-    } = *m;
-    let mut act = None;
-    let mut edit = false;
-    let mut cycle = false;
-    let mut changed = false;
-    let screen = ctx.content_rect();
-    ctx.layer_painter(LayerId::new(Order::Background, Id::unique("dim")))
-        .rect_filled(screen, 0.0, Color32::from_black_alpha(150));
-    let width = (screen.width() - 48.0).clamp(240.0, 600.0);
-    egui::Area::new(Id::unique("port menu"))
-        .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style())
-                .fill(ui.visuals().window_fill.to_opaque())
-                .inner_margin(egui::Margin::same(16))
-                .show(ui, |ui| {
-                    ui.set_width(width);
-                    egui::ScrollArea::vertical()
-                        .max_height(screen.height() - 56.0)
-                        .min_scrolled_height(screen.height() - 56.0)
-                        .show(ui, |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.heading(i18n::ui(lang, "port_menu"));
-                                ui.add_space(4.0);
-                                ui.label(RichText::new(i18n::ui(lang, "paused")).weak());
-                                if let Some(note) = launcher::cheats_note(lang, cheats) {
-                                    ui.add_space(4.0);
-                                    ui.colored_label(ui.visuals().error_fg_color, note);
-                                }
-                                if no_saves {
-                                    ui.add_space(4.0);
-                                    ui.colored_label(
-                                        ui.visuals().error_fg_color,
-                                        i18n::ui(lang, "slow_nosave"),
-                                    );
-                                }
-                                ui.add_space(12.0);
-                                let resume = format!("  {}  ", i18n::ui(lang, "resume"));
-                                if ui.button(RichText::new(resume).strong()).clicked() {
-                                    act = Some(Action::Resume);
-                                }
-                                if quit {
-                                    ui.add_space(4.0);
-                                    if ui.button(i18n::ui(lang, "quit_title")).clicked() {
-                                        act = Some(Action::QuitToTitle);
-                                    }
-                                }
-                                if touch {
-                                    ui.add_space(4.0);
-                                    edit = ui.button(i18n::ui(lang, "touch_edit")).clicked();
-                                }
-                                if let Some(now) = speed {
-                                    ui.add_space(4.0);
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(i18n::ui(lang, "slow_motion"));
-                                        for rate in crate::transport::SLOW {
-                                            let text = crate::transport::rate_label(lang, rate);
-                                            if ui.selectable_label(now == rate, text).clicked()
-                                                && now != rate
-                                            {
-                                                act = Some(Action::Speed(rate));
-                                            }
-                                        }
-                                    });
-                                }
-                                ui.add_space(4.0);
-                                cycle = ui.button(hitboxes_label(lang, hitboxes)).clicked();
-                                ui.add_space(4.0);
-                                let shot =
-                                    if cfg!(any(target_os = "android", target_arch = "wasm32")) {
-                                        i18n::ui(lang, "screenshot").to_string()
-                                    } else {
-                                        format!("{} (F12)", i18n::ui(lang, "screenshot"))
-                                    };
-                                if ui.button(shot).clicked() {
-                                    act = Some(Action::Screenshot);
-                                }
-                                if let Some(s) = status {
-                                    ui.label(RichText::new(s).small());
-                                }
-                            });
-                            ui.add_space(8.0);
-                            ui.separator();
-                            changed = model.live_ui(ui, lang);
-                            ui.separator();
-                            ui.vertical_centered(|ui| {
-                                let keys = if cfg!(target_os = "android") {
-                                    i18n::ui(lang, "key_back")
-                                } else {
-                                    "F1 / Esc"
-                                };
-                                ui.label(RichText::new(keys).small().weak());
-                                ui.add_space(4.0);
-                                let name = pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
-                                ui.label(i18n::ui_fmt(lang, "controller", &[("name", name)]));
-                                ui.add_space(4.0);
-                                ui.label(RichText::new(launcher::version_line()).small().weak());
-                            });
-                        });
-                });
-        });
-    (act, edit, cycle, changed)
+// The focus ring inside `rect` (rows in a clipped scroll area).
+fn ring_inside(ui: &egui::Ui, rect: egui::Rect) {
+    ui.painter()
+        .rect_stroke(rect, 8.0, Stroke::new(3.0, FOCUS), StrokeKind::Inside);
 }
 
-// "Hitboxes: Off", from the settings row's label and words.
+// The visible focus ring.
+fn ring(ui: &egui::Ui, rect: egui::Rect) {
+    ui.painter().rect_stroke(
+        rect.expand(2.0),
+        8.0,
+        Stroke::new(3.0, FOCUS),
+        StrokeKind::Outside,
+    );
+}
+
+// The card or the settings page; what was clicked.
+fn menu_ui(
+    ctx: &egui::Context,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+) -> Vec<Do> {
+    let screen = ctx.viewport_rect();
+    let safe = ctx.content_rect();
+    let mut out = Vec::new();
+    let bg = LayerId::new(Order::Background, Id::unique("port menu bg"));
+    if focus.page == Page::Settings {
+        ctx.layer_painter(bg)
+            .rect_filled(screen, 0.0, Color32::from_black_alpha(170));
+        let w = (safe.width() - 24.0).min(560.0);
+        let h = safe.height() - 24.0;
+        egui::Area::new(Id::unique("port menu settings"))
+            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                panel_frame(ui).show(ui, |ui| {
+                    ui.set_width(w - 32.0);
+                    ui.set_height(h - 32.0);
+                    settings_ui(ui, m, model, focus, lay);
+                });
+            });
+        return out;
+    }
+    if lay.sheet {
+        let x = safe.max.x - lay.card_w;
+        ctx.layer_painter(bg).rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x, screen.min.y), screen.max),
+            0.0,
+            PANEL,
+        );
+        egui::Area::new(Id::unique("port menu sheet"))
+            .fixed_pos(egui::pos2(x + 16.0, safe.min.y + 12.0))
+            .show(ctx, |ui| {
+                ui.set_max_height(safe.height() - 24.0);
+                egui::ScrollArea::vertical()
+                    .max_height(safe.height() - 24.0)
+                    .show(ui, |ui| {
+                        out = card_ui(ui, m, model, focus, lay, lay.card_w - 32.0);
+                    });
+            });
+    } else {
+        ctx.layer_painter(bg)
+            .rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+        egui::Area::new(Id::unique("port menu card"))
+            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                panel_frame(ui).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(safe.height() - 56.0)
+                        .show(ui, |ui| {
+                            out = card_ui(ui, m, model, focus, lay, lay.card_w - 32.0);
+                        });
+                });
+            });
+    }
+    out
+}
+
+fn panel_frame(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::popup(ui.style())
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::same(16))
+}
+
+// A full-width or tile button; `primary`: accent filled.
+fn wide(ui: &mut egui::Ui, text: &str, w: f32, h: f32, primary: bool) -> egui::Response {
+    button(ui, RichText::new(text).color(TEXT), w, h, primary)
+}
+
+// A tile: small text in up to two lines, all tiles of a row the same size.
+fn tile(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = 4.0;
+        button(ui, RichText::new(text).color(TEXT).small(), w, h, false)
+    })
+    .inner
+}
+
+// A button of exactly w×h points at least.
+fn button(ui: &mut egui::Ui, text: RichText, w: f32, h: f32, primary: bool) -> egui::Response {
+    let mut b = egui::Button::new(text).wrap().min_size(vec2(w, h));
+    if primary {
+        b = b.fill(ACCENT).stroke(Stroke::new(2.0, TEXT));
+    }
+    ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
+}
+
+fn card_ui(
+    ui: &mut egui::Ui,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+    w: f32,
+) -> Vec<Do> {
+    let lang = model.lang();
+    let rows = card_rows(m);
+    focus.clamp(&rows);
+    let mut out = Vec::new();
+    let t = lay.target;
+    let tile_h = t.max(50.0);
+    ui.set_width(w);
+    ui.spacing_mut().item_spacing.y = if lay.touch { 6.0 } else { 8.0 };
+    ui.vertical_centered(|ui| {
+        ui.heading(
+            RichText::new(i18n::ui(lang, "paused_title"))
+                .color(TEXT)
+                .strong(),
+        );
+    });
+    let mut notes: Vec<String> = launcher::cheats_note(lang, m.cheats).into_iter().collect();
+    if m.no_saves {
+        notes.push(i18n::ui(lang, "slow_nosave").into());
+    }
+    for n in notes {
+        ui.label(RichText::new(format!("⚠ {n}")).color(WARN).small());
+    }
+    for (r, row) in rows.iter().enumerate() {
+        let n = row.len() as f32;
+        let tile_w = (w - 8.0 * (n - 1.0)) / n;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for (c, &it) in row.iter().enumerate() {
+                let resp = match it {
+                    Item::Resume => wide(ui, i18n::ui(lang, "resume"), w, t, true),
+                    Item::Quit => {
+                        let text = if focus.confirm {
+                            i18n::ui(lang, "quit_confirm")
+                        } else {
+                            i18n::ui(lang, "quit_title")
+                        };
+                        let r = wide(ui, text, w, t, false);
+                        if focus.confirm {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                6.0,
+                                Stroke::new(2.0, WARN),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        r
+                    }
+                    Item::Volume => {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                vec2(w * 0.34, t),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_min_size(vec2(w * 0.34, t));
+                                    ui.add(egui::Label::new(i18n::ui(lang, "volume")).wrap());
+                                },
+                            );
+                            ui.spacing_mut().slider_width = (w * 0.66 - 72.0).max(60.0);
+                            if has_volume(model) {
+                                model.value_widget_ui(ui, VOLUME, lang);
+                            }
+                        })
+                        .response
+                    }
+                    Item::Speed => {
+                        let now = m.speed.unwrap_or((1, 1));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.set_min_height(t);
+                            ui.label(i18n::ui(lang, "slow_motion"));
+                            for rate in crate::transport::SLOW {
+                                let text = crate::transport::rate_label(lang, rate);
+                                let b = egui::Button::selectable(now == rate, text)
+                                    .min_size(vec2(t * 1.2, t));
+                                if ui.add(b).clicked() && now != rate {
+                                    out.push(Do::Speed(rate));
+                                }
+                            }
+                        })
+                        .response
+                    }
+                    Item::Hitboxes => tile(ui, &hitboxes_label(lang, m.hitboxes), tile_w, tile_h),
+                    Item::Screenshot => {
+                        let text = if cfg!(any(target_os = "android", target_arch = "wasm32")) {
+                            i18n::ui(lang, "screenshot").to_string()
+                        } else {
+                            format!("{} (F12)", i18n::ui(lang, "screenshot"))
+                        };
+                        tile(ui, &text, tile_w, tile_h)
+                    }
+                    Item::TouchLayout => {
+                        tile(ui, i18n::ui(lang, "touch_layout_short"), tile_w, tile_h)
+                    }
+                    Item::Settings => wide(ui, i18n::ui(lang, "settings_page"), w, t, false),
+                };
+                if resp.clicked() {
+                    focus.card = (r, c);
+                    out.push(focus.activate(it, &rows));
+                } else if resp.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
+                    focus.card = (r, c);
+                    focus.confirm &= it == Item::Quit;
+                }
+                if focus.card == (r, c) {
+                    ring(ui, resp.rect);
+                    if focus.moved {
+                        resp.scroll_to_me(None);
+                    }
+                }
+            }
+        });
+    }
+    if let Some(s) = m.status {
+        ui.label(RichText::new(s).small().color(TEXT_DIM));
+    }
+    let name = m.pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
+    let mut foot = i18n::ui_fmt(lang, "controller", &[("name", name)]);
+    let keys = if cfg!(target_os = "android") {
+        i18n::ui(lang, "key_back")
+    } else {
+        "F1 / Esc"
+    };
+    foot.push_str(&format!(" · {keys}"));
+    ui.label(RichText::new(foot).small().color(TEXT_DIM));
+    if !lay.touch || m.pad.is_some() {
+        ui.label(
+            RichText::new(i18n::ui(lang, "nav_hint"))
+                .small()
+                .color(TEXT_DIM),
+        );
+    }
+    out
+}
+
+// The settings page: Back, the tabs, the rows of one tab, then help for the hovered or focused row.
+fn settings_ui(
+    ui: &mut egui::Ui,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+) {
+    let lang = model.lang();
+    let t = lay.target;
+    let tabs = model.live_tabs();
+    let rows = card_rows(m);
+    focus.tab = focus.tab.min(tabs.len().saturating_sub(1));
+    ui.horizontal(|ui| {
+        let back = format!("‹ {}", i18n::ui(lang, "back"));
+        if ui
+            .add(egui::Button::new(back).min_size(vec2(t * 1.5, t)))
+            .clicked()
+        {
+            focus.back(&rows);
+        }
+        ui.add_space(8.0);
+        egui::ScrollArea::horizontal()
+            .id_salt("tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, &g) in tabs.iter().enumerate() {
+                        let b =
+                            egui::Button::selectable(i == focus.tab, i18n::group_title(lang, g))
+                                .min_size(vec2(t * 1.5, t));
+                        let r = ui.add(b);
+                        if r.clicked() {
+                            focus.tab = i;
+                            focus.row = focus.row.min(1);
+                        }
+                        if i == focus.tab && focus.moved {
+                            r.scroll_to_me(None);
+                        }
+                        if focus.row == 0 && i == focus.tab {
+                            ring_inside(ui, r.rect);
+                        }
+                    }
+                });
+            });
+    });
+    ui.separator();
+    let Some(&g) = tabs.get(focus.tab) else {
+        return;
+    };
+    let keys = model.live_rows(g);
+    focus.row = focus.row.min(keys.len());
+    // The footer's height as measured last pass (help lines vary).
+    let footer_id = egui::Id::unique("port menu footer");
+    let footer = ui
+        .data(|d| d.get_temp::<f32>(footer_id))
+        .unwrap_or(SMALL * 1.4 * 3.0 + 16.0);
+    let label_w = (ui.available_width() * 0.42).min(240.0);
+    ui.spacing_mut().slider_width = (ui.available_width() - label_w - 96.0).clamp(80.0, 260.0);
+    let mut hovered = None;
+    egui::ScrollArea::vertical()
+        .id_salt(g.id())
+        .max_height((ui.available_height() - footer).max(t))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (k, key) in keys.iter().enumerate() {
+                let r = model.menu_row_ui(ui, key, lang, label_w);
+                let rect = egui::Rect::from_min_max(
+                    r.rect.min,
+                    egui::pos2(ui.max_rect().max.x, r.rect.max.y),
+                );
+                if r.contains_pointer() {
+                    hovered = Some(*key);
+                    if ui.input(|i| i.pointer.any_pressed()) {
+                        focus.row = k + 1;
+                    }
+                }
+                if focus.row == k + 1 {
+                    ring_inside(ui, rect);
+                    if focus.moved {
+                        r.scroll_to_me(None);
+                    }
+                }
+            }
+        });
+    let top = ui.cursor().min.y;
+    ui.separator();
+    let help = hovered.or(focus.row.checked_sub(1).and_then(|i| keys.get(i).copied()));
+    if let Some(e) = help.and_then(crate::settings::find) {
+        ui.add(egui::Label::new(RichText::new(i18n::help(lang, e)).small().color(TEXT_DIM)).wrap());
+    }
+    let mut foot = launcher::version_line();
+    if !lay.touch || m.pad.is_some() {
+        foot = format!(
+            "{} · {} · {foot}",
+            i18n::ui(lang, "nav_hint"),
+            i18n::ui(lang, "tabs_hint")
+        );
+    }
+    ui.label(RichText::new(foot).small().color(TEXT_DIM));
+    let used = ui.cursor().min.y - top;
+    ui.data_mut(|d| d.insert_temp(footer_id, used));
+}
+
+// "Hitboxes" over "Off", the word from the settings row.
 fn hitboxes_label(lang: Lang, m: super::hitbox::Hitboxes) -> String {
     let e = crate::settings::find("hitboxes").expect("hitboxes row");
     let word = i18n::word(lang, e, m.id()).unwrap_or(m.id());
-    format!("{}: {word}", i18n::label(lang, e))
+    format!("{}\n{word}", i18n::ui(lang, "hitboxes_short"))
 }
 
 fn paint(
@@ -423,20 +1185,41 @@ fn paint(
     }
 }
 
-// Passes of `render_image`, 0.1 s apart: the menu box's fade-in has ended by the last.
+// Passes of `render_image`, 0.1 s apart: the layout and fade-ins have settled by the last.
 #[cfg(not(target_arch = "wasm32"))]
 const PASSES: u32 = 8;
 
-// Tools: the menu over `frame` (a w×h picture of the game as the window shows it) on a headless device, after a few
-// passes so the layout settles; `quit` / `touch` as the app would set them.
+// What a `render_image` shows besides the settings.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default)]
+pub struct Shot {
+    pub quit: bool,
+    pub touch: bool,
+    // The window's scale factor (dp → px).
+    pub density: f32,
+    pub pad: Option<String>,
+    pub speed: Option<(u32, u32)>,
+    pub no_saves: bool,
+    pub status: Option<String>,
+    // Key presses before the shot (e.g. into the settings page).
+    pub navs: Vec<Nav>,
+}
+
+// Tools: the safe area to capture the game frame in, so it sits where the menu's sheet leaves it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn picture_safe(safe: SafeArea, size: (u32, u32), shot: &Shot) -> SafeArea {
+    layout(safe, size, shot.density.max(1.0), shot.touch).picture
+}
+
+// Tools: the menu over `frame` (a w×h picture of the game as the menu shows it, see `picture_safe`) on a headless
+// device, after a few passes so the layout settles.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_image(
     gfx: &Gfx,
     s: &Settings,
     frame: &image::RgbaImage,
     safe: SafeArea,
-    quit: bool,
-    touch: bool,
+    shot: &Shot,
 ) -> image::RgbaImage {
     let (w, h) = frame.dimensions();
     let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
@@ -477,21 +1260,26 @@ pub fn render_image(
     );
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let ctx = new_ctx(s);
-    let mut model = launcher::Model::port_menu(s, touch);
-    let lang = model.lang();
-    let ppp = zoom(safe, (w, h));
+    let mut model = launcher::Model::port_menu(s, shot.touch);
+    let lay = layout(safe, (w, h), shot.density.max(1.0), shot.touch);
+    style(&ctx, &lay);
+    let ppp = lay.ppp;
     let (mut renderer, mut pending) = (None, egui::TexturesDelta::default());
     let cheats = s.active_cheats();
     let m = MenuState {
-        pad: None,
-        touch,
+        pad: shot.pad.as_deref(),
+        touch: shot.touch,
         cheats: &cheats,
         hitboxes: s.hitboxes,
-        status: None,
-        speed: None,
-        no_saves: false,
-        quit,
+        status: shot.status.as_deref(),
+        speed: shot.speed,
+        no_saves: shot.no_saves,
+        quit: shot.quit,
     };
+    let mut focus = Focus::default();
+    for &n in &shot.navs {
+        focus.nav(n, &m, &mut model);
+    }
     let target = OverlayTarget {
         device: &gfx.device,
         queue: &gfx.queue,
@@ -507,12 +1295,7 @@ pub fn render_image(
                 egui::vec2(w as f32 / ppp, h as f32 / ppp),
             )),
             time: Some(f64::from(i) / 10.0),
-            safe_area_insets: Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-                left: safe.left as f32 / ppp,
-                right: safe.right as f32 / ppp,
-                top: safe.top as f32 / ppp,
-                bottom: safe.bottom as f32 / ppp,
-            })),
+            safe_area_insets: Some(insets(safe, ppp)),
             ..Default::default()
         };
         raw.viewports
@@ -520,8 +1303,9 @@ pub fn render_image(
             .or_default()
             .native_pixels_per_point = Some(ppp);
         let out = ctx.run_pass(raw, |ctx| {
-            menu_ui(ctx, lang, &m, &mut model);
+            menu_ui(ctx, &m, &mut model, &mut focus, &lay);
         });
+        focus.moved = false;
         pending.append(out.textures_delta);
         if i + 1 < PASSES {
             continue;
@@ -541,4 +1325,255 @@ pub fn render_image(
         return gfx.read_texture(enc, &tex);
     }
     unreachable!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(quit: bool, touch: bool, speed: Option<(u32, u32)>) -> MenuState<'static> {
+        MenuState {
+            pad: None,
+            touch,
+            cheats: &[],
+            hitboxes: super::super::hitbox::Hitboxes::Off,
+            status: None,
+            speed,
+            no_saves: false,
+            quit,
+        }
+    }
+
+    fn model(touch: bool) -> launcher::Model {
+        launcher::Model::port_menu(&Settings::default(), touch)
+    }
+
+    fn run(f: &mut Focus, m: &MenuState<'_>, model: &mut launcher::Model, navs: &[Nav]) -> Vec<Do> {
+        navs.iter().map(|&n| f.nav(n, m, model)).collect()
+    }
+
+    #[test]
+    fn keys_and_buttons() {
+        assert_eq!(Nav::of_key(KeyCode::KeyZ, false), Some(Nav::Activate));
+        assert_eq!(Nav::of_key(KeyCode::Enter, false), Some(Nav::Activate));
+        assert_eq!(Nav::of_key(KeyCode::KeyX, false), Some(Nav::Back));
+        assert_eq!(Nav::of_key(KeyCode::Tab, true), Some(Nav::Up));
+        assert_eq!(Nav::of_key(KeyCode::KeyE, false), Some(Nav::NextTab));
+        assert_eq!(Nav::of_key(KeyCode::Escape, false), None);
+        assert_eq!(Nav::of_key(KeyCode::F1, false), None);
+        assert_eq!(Nav::of_button(0), Some(Nav::Activate));
+        assert_eq!(Nav::of_button(1), Some(Nav::Back));
+        assert_eq!(Nav::of_button(13), Some(Nav::Down));
+        assert_eq!(Nav::of_button(crate::joystick::MENU_BUTTON), None);
+        assert_eq!(Nav::of_axes([0, 0], [1000, 0]), [Nav::Right]);
+        assert_eq!(Nav::of_axes([1000, 0], [1000, 0]), []);
+        assert_eq!(Nav::of_axes([0, 0], [0, -800]), [Nav::Up]);
+    }
+
+    // Resume has the default focus; Z on it resumes, and X on the plain card closes the menu.
+    #[test]
+    fn resume() {
+        let (m, mut model) = (state(true, false, None), model(false));
+        let mut f = Focus::default();
+        assert_eq!(f.clamp(&card_rows(&m)), Item::Resume);
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Resume]);
+        let mut f = Focus::default();
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
+    }
+
+    // Quit to title asks first: the second press quits; moving away or Back cancels the question.
+    #[test]
+    fn quit_confirm() {
+        let (m, mut model) = (state(true, false, None), model(false));
+        let mut f = Focus::default();
+        let d = run(&mut f, &m, &mut model, &[Nav::Down, Nav::Activate]);
+        assert_eq!(d, [Do::Nothing, Do::Nothing]);
+        assert!(f.confirm);
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Quit]);
+        let mut f = Focus::default();
+        run(
+            &mut f,
+            &m,
+            &mut model,
+            &[Nav::Down, Nav::Activate, Nav::Up, Nav::Down],
+        );
+        assert!(!f.confirm);
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Nothing]);
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Nothing]);
+        assert!(!f.confirm);
+        assert_eq!(f.page, Page::Card);
+        let rows = card_rows(&m);
+        let mut f = Focus::default();
+        assert_eq!(f.activate(Item::Quit, &rows), Do::Nothing);
+        assert_eq!(f.activate(Item::Quit, &rows), Do::Quit);
+        assert!(
+            !card_rows(&state(false, false, None))
+                .concat()
+                .contains(&Item::Quit)
+        );
+    }
+
+    // The card's focus order, the tiles sharing a row, and Settings › / Back.
+    #[test]
+    fn focus_order_and_settings() {
+        let m = state(true, true, Some((1, 1)));
+        let mut model = model(true);
+        let rows = card_rows(&m);
+        assert_eq!(
+            rows,
+            [
+                vec![Item::Resume],
+                vec![Item::Quit],
+                vec![Item::Volume],
+                vec![Item::Speed],
+                vec![Item::Hitboxes, Item::Screenshot, Item::TouchLayout],
+                vec![Item::Settings],
+            ]
+        );
+        let mut f = Focus::default();
+        let mut seen = vec![f.clamp(&rows)];
+        for _ in 0..6 {
+            f.nav(Nav::Down, &m, &mut model);
+            seen.push(f.clamp(&rows));
+        }
+        assert_eq!(
+            seen,
+            [
+                Item::Resume,
+                Item::Quit,
+                Item::Volume,
+                Item::Speed,
+                Item::Hitboxes,
+                Item::Settings,
+                Item::Settings
+            ]
+        );
+        run(
+            &mut f,
+            &m,
+            &mut model,
+            &[Nav::Up, Nav::Right, Nav::Right, Nav::Right],
+        );
+        assert_eq!(f.clamp(&rows), Item::TouchLayout);
+        assert_eq!(
+            run(&mut f, &m, &mut model, &[Nav::Activate]),
+            [Do::EditLayout]
+        );
+        run(&mut f, &m, &mut model, &[Nav::Up]);
+        assert_eq!(f.clamp(&rows), Item::Speed);
+        assert_eq!(
+            run(&mut f, &m, &mut model, &[Nav::Right]),
+            [Do::Speed((3, 4))]
+        );
+        let v = model.value_text(VOLUME);
+        run(&mut f, &m, &mut model, &[Nav::Up, Nav::Left]);
+        assert_eq!(f.clamp(&rows), Item::Volume);
+        assert_ne!(model.value_text(VOLUME), v);
+        run(&mut f, &m, &mut model, &[Nav::Down, Nav::Down, Nav::Down]);
+        assert_eq!(f.clamp(&rows), Item::Settings);
+        run(&mut f, &m, &mut model, &[Nav::Activate]);
+        assert_eq!((f.page, f.tab, f.row), (Page::Settings, 0, 1));
+        let tabs = model.live_tabs();
+        assert_eq!(tabs[0], crate::settings::Group::Sound);
+        assert_eq!(model.live_rows(tabs[0])[0], VOLUME);
+        // Tabs wrap; the tab bar takes ← / →; a row takes ← / → and Z.
+        run(&mut f, &m, &mut model, &[Nav::PrevTab]);
+        assert_eq!(f.tab, tabs.len() - 1);
+        run(&mut f, &m, &mut model, &[Nav::NextTab, Nav::Up, Nav::Right]);
+        assert_eq!((f.tab, f.row), (1, 0));
+        run(&mut f, &m, &mut model, &[Nav::Left, Nav::Down]);
+        assert_eq!((f.tab, f.row), (0, 1));
+        let before = model.value_text(VOLUME);
+        run(&mut f, &m, &mut model, &[Nav::Left]);
+        assert_ne!(model.value_text(VOLUME), before);
+        let keys = model.live_rows(tabs[0]);
+        let b = keys.iter().position(|&k| k == "mute_unfocused").unwrap();
+        let mut g = Focus {
+            page: Page::Settings,
+            row: b + 1,
+            ..Focus::default()
+        };
+        let was = model.value_text("mute_unfocused");
+        run(&mut g, &m, &mut model, &[Nav::Activate]);
+        assert_ne!(model.value_text("mute_unfocused"), was);
+        // Back returns to the card with Settings › focused; X there closes the menu.
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Nothing]);
+        assert_eq!((f.page, f.clamp(&rows)), (Page::Card, Item::Settings));
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
+    }
+
+    // Phones: ppp from the density, so 48 pt targets are ≥ 48 dp and text ≥ 14 sp; the sheet docks where the
+    // letterbox leaves room, the centred card elsewhere.
+    #[test]
+    fn density_and_sheet() {
+        let phone_safe = SafeArea {
+            left: 118,
+            ..SafeArea::default()
+        };
+        let phone = layout(phone_safe, (2400, 1080), 2.625, true);
+        assert!(phone.target * phone.ppp >= 48.0 * 2.625);
+        assert!(SMALL * phone.ppp >= 14.0 * 2.625);
+        assert!(phone.sheet);
+        assert!(phone.card_w >= 300.0);
+        let [_, _, pw, ph] = phone.picture.rect(2400, 1080);
+        assert!((pw / 640.0).min(ph / 480.0) >= SHEET_MIN_PICTURE * 2.25);
+        let flat = layout(SafeArea::default(), (2400, 1080), 2.625, true);
+        assert_eq!(flat.picture.right, 960);
+        assert!((flat.card_w - 960.0 / 2.625).abs() < 1.0);
+        let portrait = layout(SafeArea::default(), (1080, 2400), 2.625, true);
+        assert!(!portrait.sheet && portrait.picture == SafeArea::default());
+        assert!(portrait.target * portrait.ppp >= 48.0 * 2.625);
+        let tablet = layout(SafeArea::default(), (2560, 1600), 2.0, true);
+        assert!(tablet.target * tablet.ppp >= 48.0 * 2.0);
+        for (size, sheet) in [
+            ((1280, 960), false),
+            ((800, 600), false),
+            ((640, 480), false),
+            ((1920, 1080), true),
+            ((2560, 1440), true),
+        ] {
+            let l = layout(SafeArea::default(), size, 1.0, false);
+            assert_eq!(l.sheet, sheet, "{size:?}");
+            assert_eq!(l.ppp, (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0));
+            assert!(l.card_w * l.ppp <= size.0 as f32);
+        }
+        assert_eq!(
+            layout(SafeArea::default(), (1280, 960), 2.0, false).ppp,
+            2.0
+        );
+    }
+
+    #[expect(clippy::disallowed_methods, reason = "test-only sRGB curve")]
+    fn luminance(c: Color32) -> f32 {
+        let f = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    // WCAG: text 4.5:1 on the panel and buttons (the red note sits on the panel only), outlines and the focus ring 3:1 against the panel.
+    #[test]
+    fn theme_contrast() {
+        for bg in [PANEL, BUTTON, BUTTON_HOVER] {
+            for fg in [TEXT, TEXT_DIM] {
+                assert!(contrast(fg, bg) >= 4.5, "{fg:?} on {bg:?}");
+            }
+        }
+        assert!(contrast(WARN, PANEL) >= 4.5);
+        assert!(contrast(TEXT, ACCENT) >= 4.5);
+        for c in [BORDER, FOCUS] {
+            assert!(contrast(c, PANEL) >= 3.0, "{c:?}");
+        }
+        assert!(contrast(FOCUS, ACCENT) >= 3.0 && contrast(FOCUS, BUTTON) >= 3.0);
+    }
 }

@@ -1,11 +1,27 @@
 //! Renders the in-game port menu over a headless game frame to a PNG (TH08_DIR: the game folder).
 
+use th08::platform::portmenu::{Nav, Shot, picture_safe, render_image};
+
+// Switches of this tool, removed before the th08 switches are parsed.
+const OWN: [&str; 9] = [
+    "--frames=",
+    "--safe=",
+    "--touch",
+    "--density=",
+    "--pad=",
+    "--speed=",
+    "--no-saves",
+    "--status=",
+    "--nav=",
+];
+
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     anyhow::ensure!(
         !args.is_empty(),
-        "usage: portmenushot OUT.png [WxH] [--frames=N] [--safe=L,T,R,B] [--touch] [th08 switches]..."
+        "usage: portmenushot OUT.png [WxH] [--frames=N] [--safe=L,T,R,B] [--touch] [--density=F] [--pad=NAME] \
+         [--speed=N/D] [--no-saves] [--status=TEXT] [--settings=TAB] [--nav=down,z,…] [th08 switches]..."
     );
     let out = args.remove(0);
     let size = args
@@ -33,8 +49,51 @@ fn main() -> anyhow::Result<()> {
             }
         }
     };
-    let touch = args.iter().any(|a| a == "--touch");
-    args.retain(|a| !a.starts_with("--frames=") && !a.starts_with("--safe=") && a != "--touch");
+    let opt = |name: &str| {
+        args.iter()
+            .find_map(|a| a.strip_prefix(name))
+            .map(str::to_string)
+    };
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    let mut navs = Vec::new();
+    if let Some(tab) = opt("--settings=") {
+        navs.extend([Nav::Down; 8]);
+        navs.push(Nav::Activate);
+        navs.extend(std::iter::repeat_n(Nav::NextTab, tab.parse()?));
+    }
+    for n in opt("--nav=").iter().flat_map(|v| v.split(',')) {
+        navs.push(match n {
+            "up" => Nav::Up,
+            "down" => Nav::Down,
+            "left" => Nav::Left,
+            "right" => Nav::Right,
+            "z" => Nav::Activate,
+            "x" => Nav::Back,
+            "q" => Nav::PrevTab,
+            "e" => Nav::NextTab,
+            _ => anyhow::bail!("--nav={n}: expected up, down, left, right, z, x, q, e"),
+        });
+    }
+    let speed = match opt("--speed=") {
+        None => None,
+        Some(v) => {
+            let (a, b) = v
+                .split_once('/')
+                .ok_or_else(|| anyhow::anyhow!("--speed={v}: N/D"))?;
+            Some((a.parse()?, b.parse()?))
+        }
+    };
+    let mut shot = Shot {
+        touch: flag("--touch"),
+        density: opt("--density=").map_or(Ok(1.0), |v| v.parse())?,
+        pad: opt("--pad="),
+        speed,
+        no_saves: flag("--no-saves"),
+        status: opt("--status="),
+        navs,
+        ..Shot::default()
+    };
+    args.retain(|a| !OWN.iter().any(|o| a.starts_with(o)) && !a.starts_with("--settings="));
     let s = th08::settings::Settings::from_args(th08::launcher::desktop_dirs().tool(), args)
         .unwrap_or_else(|e| e.exit());
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
@@ -55,14 +114,17 @@ fn main() -> anyhow::Result<()> {
     }
     ctx.calc();
     ctx.draw();
-    let quit = th08::platform::quittitle::available(&ctx.w);
+    shot.quit = th08::platform::quittitle::available(&ctx.w);
+    let quit = shot.quit;
     let g: &mut th08_render::gfx::Gfx = ctx
         .renderer
         .as_any_mut()
         .downcast_mut()
         .expect("headless Gfx");
+    g.safe = picture_safe(safe, (w, h), &shot);
     let frame = g.capture(&mut ctx.rec, Some((w, h)));
-    th08::platform::portmenu::render_image(g, &s, &frame, safe, quit, touch)
+    g.safe = safe;
+    render_image(g, &s, &frame, safe, &shot)
         .save(&out)
         .map_err(|e| anyhow::anyhow!("{out}: {e}"))?;
     eprintln!(

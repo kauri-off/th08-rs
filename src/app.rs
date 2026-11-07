@@ -432,14 +432,21 @@ impl ApplicationHandler<UserEvent> for App {
             Shell::PortMenu(_, m) => (false, m.repaint_at),
             Shell::Loading | Shell::Running(_) => return,
         };
-        // The game does not poll in the port menu: gilrs is pumped here for its Select (resume).
-        if let Shell::PortMenu(r, _) = &mut self.shell
+        // The game does not poll in the port menu: gilrs is pumped here for Select (resume) and menu navigation.
+        if let Shell::PortMenu(r, menu) = &mut self.shell
             && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
             && h.joystick.needs_pump()
         {
             h.joystick.pump();
-            if h.joystick.take_menu() {
+            if h.joystick.take_menu() && !menu.editing() {
                 return self.resume_game(el);
+            }
+            let mut redraw = false;
+            for b in h.joystick.take_presses() {
+                redraw |= menu.pad_button(b);
+            }
+            if redraw {
+                self.window().request_redraw();
             }
             let t = Instant::now() + PAD_PUMP;
             let t = repaint_at.map_or(t, |r| r.min(t));
@@ -510,6 +517,7 @@ impl ApplicationHandler<UserEvent> for App {
                 {
                     h.joystick.events.hat(x, y);
                 }
+                self.menu_pad_axes();
                 if let Some((x, y)) = self.sticks.classify(
                     t.device_id,
                     t.phase,
@@ -519,6 +527,7 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(h) = self.host() {
                         h.joystick.events.stick(x, y);
                     }
+                    self.menu_pad_axes();
                     return;
                 }
             }
@@ -1061,6 +1070,9 @@ impl App {
                 .host_as::<crate::platform::AppHost>()
                 .map_or_else(|| r.settings.touch.clone(), |h| h.input.touch.cfg.clone())
         });
+        if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
+            h.joystick.take_presses();
+        }
         let mut menu = crate::platform::portmenu::PortMenu::new(self.window(), &r.settings, touch);
         menu.quit_ok = r.quit.is_none() && crate::platform::quittitle::available(&r.ctx.w);
         menu.cheats = r.settings.active_cheats();
@@ -1069,6 +1081,17 @@ impl App {
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
         self.window().request_redraw();
+    }
+
+    // The event-fed pad's stick / hat moves the port menu's focus (Android).
+    fn menu_pad_axes(&mut self) {
+        let window = self.window().clone();
+        if let Shell::PortMenu(r, menu) = &mut self.shell
+            && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
+            && menu.pad_axes(h.joystick.events.state.axis)
+        {
+            window.request_redraw();
+        }
     }
 
     // Resume: the menu's GPU objects go, the pacer deadline restarts at now (the time in the menu is not caught up).
@@ -1161,6 +1184,17 @@ impl App {
                 if let Some(a) = a {
                     self.act(el, &a);
                 }
+            }
+            // F1 / pad Select close the menu (the layout editor first); Esc / Back go one level back.
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && (event.physical_key == PhysicalKey::Code(KeyCode::F1)
+                        || pad_button(&event) == Some(crate::joystick::MENU_BUTTON))
+                    && !screen.editing() =>
+            {
+                log::info!("port menu: close key {:?}", event.physical_key);
+                self.resume_game(el);
             }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed

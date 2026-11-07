@@ -347,6 +347,38 @@ impl Row {
         self.value = v;
     }
 
+    // The value after ← / → (`wrap`: Z / A, which cycles and leaves numbers alone); true when it changed.
+    fn apply(&mut self, dir: i32, wrap: bool) -> bool {
+        let v = match (&self.value, self.e.kind) {
+            (Value::Bool(b), _) => Value::Bool(if wrap { !b } else { dir > 0 }),
+            (Value::Int(Some(n)), Kind::Int { min, max }) if !wrap => {
+                let step = if max - min <= 16 { 1 } else { 5 };
+                Value::Int(Some((n + i64::from(dir) * step).clamp(min, max)))
+            }
+            (Value::Choice(c), Kind::Enum(choices)) => {
+                let all: Vec<&str> = (self.e.default.is_empty().then_some(""))
+                    .into_iter()
+                    .chain(choices.iter().copied())
+                    .collect();
+                let at = all.iter().position(|x| x == c).unwrap_or(0);
+                let n = all.len();
+                let to = match (dir > 0, wrap) {
+                    (true, true) => (at + 1) % n,
+                    (false, true) => (at + n - 1) % n,
+                    (true, false) => (at + 1).min(n - 1),
+                    (false, false) => at.saturating_sub(1),
+                };
+                Value::Choice(all[to].to_string())
+            }
+            _ => return false,
+        };
+        let changed = v != self.value;
+        if changed {
+            self.set(v);
+        }
+        changed
+    }
+
     fn error(&self) -> Option<String> {
         (!self.value.is_unset()).then(|| self.e.check(&self.value.text()).err())?
     }
@@ -485,13 +517,71 @@ impl Model {
         m
     }
 
-    // The port menu's settings sheet: the shown live groups; true when a row changed this pass.
-    pub fn live_ui(&mut self, ui: &mut egui::Ui, lang: Lang) -> bool {
-        let before: Vec<Value> = self.rows.iter().map(|r| r.value.clone()).collect();
-        for g in Group::ALL {
-            self.group_ui(ui, g, lang);
-        }
-        self.rows.iter().zip(&before).any(|(r, b)| r.value != *b)
+    // The port menu's settings tabs: the groups with shown rows, Sound first.
+    pub fn live_tabs(&self) -> Vec<Group> {
+        const FIRST: [Group; 5] = [
+            Group::Sound,
+            Group::Display,
+            Group::Accessibility,
+            Group::Touch,
+            Group::Language,
+        ];
+        FIRST
+            .iter()
+            .chain(Group::ALL.iter().filter(|g| !FIRST.contains(g)))
+            .copied()
+            .filter(|&g| !self.live_rows(g).is_empty())
+            .collect()
+    }
+
+    // Keys of the shown rows of group `g`, in table order.
+    pub fn live_rows(&self, g: Group) -> Vec<&'static str> {
+        (0..self.rows.len())
+            .filter(|&i| self.rows[i].e.group == g && self.shown(i))
+            .map(|i| self.rows[i].e.key)
+            .collect()
+    }
+
+    // ← / → on a row (`dir` −1 / 1): true when the value changed.
+    pub fn step(&mut self, key: &str, dir: i32) -> bool {
+        self.row_mut(key).apply(dir, false)
+    }
+
+    // Z / A on a row: a box toggles, a choice moves to the next one (wrapping), a number stays.
+    pub fn activate(&mut self, key: &str) -> bool {
+        self.row_mut(key).apply(1, true)
+    }
+
+    // A port menu row: label and value widget, no help line; the response covers the row.
+    pub fn menu_row_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        lang: Lang,
+        label_w: f32,
+    ) -> egui::Response {
+        let r = self.row_mut(key);
+        let h = ui.spacing().interact_size.y;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(label_w, h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(label_w, h));
+                    ui.add(egui::Label::new(i18n::label(lang, r.e)).wrap());
+                },
+            );
+            value_ui(ui, r, lang, &[], true);
+        })
+        .response
+    }
+
+    // A port menu value widget alone (the card's volume slider).
+    pub fn value_widget_ui(&mut self, ui: &mut egui::Ui, key: &str, lang: Lang) -> egui::Response {
+        let r = self.row_mut(key);
+        ui.horizontal(|ui| value_ui(ui, r, lang, &[], true))
+            .response
     }
 
     // Keys of the rows the port menu shows.
@@ -1687,7 +1777,7 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(Strin
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            value_ui(ui, r, lang, extra);
+            value_ui(ui, r, lang, extra, false);
             if dev {
                 origin_label(ui, r, lang);
             }
@@ -1701,7 +1791,8 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(Strin
 
 // Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
 // `extra` = choices after the table's (value, shown name): the installed pack languages for `game_text`.
-fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String)]) {
+// `menu`: the port menu, where every number is a slider (no small drag targets on touch).
+fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String)], menu: bool) {
     let unsettable = r.e.default.is_empty();
     let mut v = r.value.clone();
     match (&mut v, r.e.kind) {
@@ -1716,7 +1807,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
             if let Some(n) = n {
                 let mut f = *n as f64;
                 let range = min as f64..=max as f64;
-                let changed = if max - min <= 16 {
+                let changed = if menu || max - min <= 16 {
                     ui.add(
                         egui::Slider::new(&mut f, range)
                             .step_by(1.0)
