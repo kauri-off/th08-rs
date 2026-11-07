@@ -25,6 +25,12 @@ pub(super) enum Target {
     Row(&'static str),
     Developer,
     Reset,
+    #[cfg(not(target_os = "android"))]
+    SavesExport,
+    #[cfg(not(target_os = "android"))]
+    SavesImport,
+    #[cfg(not(target_os = "android"))]
+    SavesCfg,
 }
 
 // Keyboard focus, the targets of the last pass in order, the reset question, the title art.
@@ -211,8 +217,28 @@ impl Model {
                 self.change_folder();
                 None
             }
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            Target::Row(key) if is_path(self.row(key).e) => {
+                self.change_path(key);
+                None
+            }
             Target::Row(key) => {
                 self.row_mut(key).apply(1, true);
+                None
+            }
+            #[cfg(not(target_os = "android"))]
+            Target::SavesExport => {
+                self.saves.status = self.export_saves(self.lang());
+                None
+            }
+            #[cfg(not(target_os = "android"))]
+            Target::SavesImport => {
+                self.saves.status = self.pick_import(self.lang());
+                None
+            }
+            #[cfg(not(target_os = "android"))]
+            Target::SavesCfg => {
+                self.saves.port_cfg = !self.saves.port_cfg;
                 None
             }
             Target::Developer => {
@@ -242,6 +268,14 @@ impl Model {
         }
     }
 
+    // "Change…" on a path / file row: its dialog.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn change_path(&mut self, key: &'static str) {
+        if let Some(v) = super::pick_path(self.row(key).e, self.lang()) {
+            self.row_mut(key).set(super::Value::Path(v));
+        }
+    }
+
     fn help_of(&self, t: Target, lang: Lang) -> String {
         let text = match t {
             Target::Play if !self.folder_ok() => i18n::ui(lang, "select_folder_first"),
@@ -250,6 +284,10 @@ impl Model {
             Target::Row(k) => i18n::help(lang, self.row(k).e),
             Target::Developer => i18n::ui(lang, "developer_hint"),
             Target::Reset => i18n::ui(lang, "reset"),
+            #[cfg(not(target_os = "android"))]
+            Target::SavesExport | Target::SavesImport => i18n::ui(lang, "saves_hint"),
+            #[cfg(not(target_os = "android"))]
+            Target::SavesCfg => i18n::ui(lang, "saves_port_cfg_hint"),
         };
         let mut c = text.chars();
         c.next()
@@ -581,7 +619,7 @@ impl Model {
                     self.group_rows(ui, g, x, w, lang);
                     #[cfg(not(target_os = "android"))]
                     if g == Group::GameData {
-                        padded(ui, left, w, |ui| self.saves_ui(ui, lang));
+                        self.saves_rows(ui, x, w, lang);
                     }
                 }
                 self.more_rows(ui, x, w, lang);
@@ -642,6 +680,11 @@ impl Model {
         extra: &[(String, String)],
     ) {
         let key = self.rows[i].e.key;
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        if is_path(self.rows[i].e) {
+            self.path_row(ui, i, x, w, lang);
+            return;
+        }
         let ctl = row_ctl(&self.rows[i], lang, extra);
         let full = ui.max_rect();
         let (r, _) = ui.allocate_exact_size(vec2(full.width(), ROW_H), Sense::hover());
@@ -726,6 +769,169 @@ impl Model {
         }
     }
 
+    // A folder / file setting: its label, the path (or what empty means) and "Change…"; "Default" clears a set path.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    fn path_row(&mut self, ui: &mut Ui, i: usize, x: f32, w: f32, lang: Lang) {
+        let e = self.rows[i].e;
+        let t = Target::Row(e.key);
+        let full = ui.max_rect();
+        let (r, _) = ui.allocate_exact_size(vec2(full.width(), ROW_H), Sense::hover());
+        let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+        let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
+        let p = ui.painter().clone();
+        let resp = self.target(ui, &p, band, t);
+        let focused = self.nav.focus == Some(t);
+        let color = if focused { theme::TEXT_HI } else { theme::TEXT };
+        let label_w = LABEL_W.min(w * 0.42);
+        text_in(
+            &p,
+            Rect::from_min_size(row.min, vec2(label_w - 12.0, ROW_H)),
+            i18n::label(lang, e),
+            theme::serif(ROW),
+            color,
+            focused,
+        );
+        let path = self.rows[i].value.text();
+        let set = !path.is_empty();
+        let word = |p: &Painter, text: &str, c| {
+            p.layout_no_wrap(
+                theme::latin_ellipsis(text).into_owned(),
+                theme::serif(ROW),
+                c,
+            )
+        };
+        let change = word(&p, i18n::ui(lang, "change"), color);
+        let cr = Rect::from_min_size(
+            pos2(
+                row.max.x - change.size().x,
+                row.center().y - change.size().y / 2.0,
+            ),
+            change.size(),
+        );
+        theme::outlined(&p, cr.min, change, color, false);
+        let mut right = cr.min.x - 16.0;
+        let mut clear = None;
+        if set {
+            let g = word(&p, i18n::ui(lang, "use_default"), theme::DIM);
+            let dr = Rect::from_min_size(pos2(right - g.size().x, cr.min.y), g.size());
+            theme::outlined(&p, dr.min, g, theme::DIM, false);
+            right = dr.min.x - 16.0;
+            clear = Some(dr);
+        }
+        let px = row.min.x + label_w;
+        let shown = if set {
+            tilde(&path)
+        } else {
+            i18n::word(lang, e, "")
+                .unwrap_or_else(|| i18n::ui(lang, "not_set"))
+                .to_string()
+        };
+        let pg = p.layout_no_wrap(
+            fit_path(&p, &shown, (right - px).max(20.0)),
+            theme::sans(SMALL),
+            theme::HELP_HI,
+        );
+        theme::shadowed(
+            &p,
+            pos2(px, row.center().y - pg.size().y / 2.0),
+            pg,
+            theme::HELP_HI,
+        );
+        if let Some(err) = self.rows[i].error() {
+            let g = p.layout_no_wrap(err, theme::sans(SMALL - 1.0), theme::DANGER);
+            theme::shadowed(&p, pos2(px, row.max.y - g.size().y), g, theme::DANGER);
+        }
+        if let Some(dr) = clear
+            && ui
+                .interact(
+                    dr.expand(8.0),
+                    Id::unique(("path default", e.key)),
+                    Sense::click(),
+                )
+                .clicked()
+        {
+            self.nav.focus = Some(t);
+            self.rows[i].set(super::Value::Path(String::new()));
+        } else if resp.clicked() {
+            self.nav.focus = Some(t);
+            self.change_path(e.key);
+        }
+    }
+
+    // Saves: export / import and whether an import takes the settings too, as rows under their caption.
+    #[cfg(not(target_os = "android"))]
+    fn saves_rows(&mut self, ui: &mut Ui, x: f32, w: f32, lang: Lang) {
+        self.poll_saves(ui, lang);
+        caption(ui, x, w, i18n::ui(lang, "saves_title"));
+        let full = ui.max_rect();
+        let label_w = LABEL_W.min(w * 0.42);
+        for t in [Target::SavesExport, Target::SavesImport, Target::SavesCfg] {
+            let (r, _) = ui.allocate_exact_size(vec2(full.width(), ROW_H), Sense::hover());
+            let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+            let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
+            let p = ui.painter().clone();
+            let resp = self.target(ui, &p, band, t);
+            let focused = self.nav.focus == Some(t);
+            let color = if focused { theme::TEXT_HI } else { theme::TEXT };
+            let (text, lw) = match t {
+                Target::SavesExport => (i18n::ui(lang, "saves_export"), w),
+                Target::SavesImport => (i18n::ui(lang, "saves_import"), w),
+                _ => (i18n::ui(lang, "saves_port_cfg"), label_w - 12.0),
+            };
+            text_in(
+                &p,
+                Rect::from_min_size(row.min, vec2(lw, ROW_H)),
+                text,
+                theme::serif(ROW),
+                color,
+                focused,
+            );
+            if t == Target::SavesCfg {
+                let ctl = Ctl::Choices {
+                    words: vec![
+                        i18n::ui(lang, "word_off").into(),
+                        i18n::ui(lang, "word_on").into(),
+                    ],
+                    sel: Some(usize::from(self.saves.port_cfg)),
+                };
+                let cr = Rect::from_min_max(pos2(row.min.x + label_w, row.min.y), row.max);
+                let st = CtlStyle {
+                    size: ROW,
+                    num: ROW,
+                    cells: false,
+                    right: false,
+                    indent: 0.0,
+                    track: 0.0,
+                    numw: 0.0,
+                    gap: ROW * 1.1,
+                    cell_w: 0.0,
+                };
+                if let Some(theme::CtlOut::Pick(i)) =
+                    theme::value_ctl(ui, &p, Id::unique("saves cfg"), cr, &ctl, focused, &st)
+                {
+                    self.nav.focus = Some(t);
+                    self.saves.port_cfg = i == 1;
+                    continue;
+                }
+            }
+            if resp.clicked() {
+                self.nav.focus = Some(t);
+                self.activate_target();
+            }
+        }
+        let status = match &self.saves.status {
+            Some(Ok(m)) => Some((m.clone(), theme::NOTE)),
+            Some(Err(e)) => Some((e.clone(), theme::DANGER)),
+            None => None,
+        };
+        if let Some((m, c)) = status {
+            let left = x - ui.max_rect().min.x;
+            padded(ui, left, w, |ui| {
+                ui.colored_label(c, m);
+            });
+        }
+    }
+
     // Developer view and "Reset to defaults…".
     fn more_rows(&mut self, ui: &mut Ui, x: f32, w: f32, lang: Lang) {
         caption(ui, x, w, i18n::ui(lang, "more_title"));
@@ -805,6 +1011,15 @@ impl Model {
             });
         }
     }
+}
+
+// A folder / file setting (painted with "Change…" on desktop).
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+fn is_path(e: &crate::settings::Entry) -> bool {
+    matches!(
+        e.kind,
+        crate::settings::Kind::Path | crate::settings::Kind::File
+    )
 }
 
 // Serif text in `r`, left and vertically centred; "…" after Latin / Cyrillic as three periods.

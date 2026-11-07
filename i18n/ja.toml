@@ -90,6 +90,7 @@ hint_quit = "終了"
 launcher_title = "東方永夜抄"
 launcher_caption = "Imperishable Night · {version}"
 change = "変更…"
+use_default = "初期設定"
 more_title = "その他"
 touch_layout = "タッチ配置"
 version = "ver {version}"
@@ -692,7 +693,7 @@ summary = "スコアとリプレイの保存先"
 help = "score.dat とリプレイの保存先（初期値: 移植版の設定フォルダ）"
 
 [entry.save_dir.words]
-"" = "初期設定"
+"" = "移植版の設定フォルダー（初期設定）"
 
 [entry.stats]
 label = "プレイ統計"

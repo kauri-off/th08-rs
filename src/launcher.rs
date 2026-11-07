@@ -26,6 +26,13 @@ pub fn version_line() -> String {
     }
 }
 
+// The release part of the version ("0.1.5" of "v0.1.5-12-gabc (debug)"): the port menu's status line.
+pub fn short_version() -> &'static str {
+    let v = env!("TH08_VERSION");
+    let v = v.strip_prefix('v').unwrap_or(v);
+    v.split(['-', '+', ' ']).next().unwrap_or(v)
+}
+
 // A game folder holds th08.dat or its repacked th08.pak (any letter case).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_game_dir(dir: &Path) -> bool {
@@ -1101,8 +1108,9 @@ impl Model {
 
     // Export / Import of score.dat, th08.cfg, replays and the player rows of port.cfg (saves.rs); shown on the settings
     // screen only, so never while the game runs.
+    // `poll_saves` takes the web import picker's zip once it arrives.
     #[cfg(not(target_os = "android"))]
-    fn saves_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+    fn poll_saves(&mut self, ui: &egui::Ui, lang: Lang) {
         #[cfg(target_arch = "wasm32")]
         if let Some(r) = self.saves.picker.take() {
             self.saves.status = Some(r.and_then(|d| self.import_saves(&d, lang)));
@@ -1112,30 +1120,8 @@ impl Model {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
-        egui::CollapsingHeader::new(egui::RichText::new(i18n::ui(lang, "saves_title")).strong())
-            .id_salt("saves")
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new(i18n::ui(lang, "saves_hint")).weak());
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(i18n::ui(lang, "saves_export")).clicked() {
-                        self.saves.status = self.export_saves(lang);
-                    }
-                    if ui.button(i18n::ui(lang, "saves_import")).clicked() {
-                        self.saves.status = self.pick_import(lang);
-                    }
-                    ui.checkbox(&mut self.saves.port_cfg, i18n::ui(lang, "saves_port_cfg"))
-                        .on_hover_text(i18n::ui(lang, "saves_port_cfg_hint"));
-                });
-                match &self.saves.status {
-                    Some(Ok(m)) => {
-                        ui.label(m);
-                    }
-                    Some(Err(e)) => {
-                        ui.colored_label(ui.visuals().error_fg_color, e);
-                    }
-                    None => {}
-                }
-            });
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (ui, lang);
     }
 
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -1207,7 +1193,7 @@ impl Model {
         Some(data.map_err(fail).and_then(|d| self.import_saves(&d, lang)))
     }
 
-    // The zip arrives later through the picker (polled in `saves_ui`).
+    // The zip arrives later through the picker (polled in `poll_saves`).
     #[cfg(target_arch = "wasm32")]
     fn pick_import(&mut self, lang: Lang) -> Option<Result<String, String>> {
         self.saves
@@ -1705,18 +1691,10 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
                     .desired_width(220.0),
             );
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-            if ui.button(i18n::ui(lang, "browse")).clicked() {
-                let d = rfd::FileDialog::new().set_title(i18n::help(lang, r.e));
-                let picked = if r.e.key == "soundfont" {
-                    d.add_filter("SoundFont", &["sf2"]).pick_file()
-                } else if r.e.kind == Kind::File {
-                    d.add_filter("fonts", &["ttf", "otf", "ttc"]).pick_file()
-                } else {
-                    d.pick_folder()
-                };
-                if let Some(p) = picked {
-                    *s = p.to_string_lossy().into_owned();
-                }
+            if ui.button(i18n::ui(lang, "browse")).clicked()
+                && let Some(p) = pick_path(r.e, lang)
+            {
+                *s = p;
             }
         }
         _ => unreachable!("Value::parse follows the entry kind"),
@@ -1724,6 +1702,20 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
     if v != r.value {
         r.set(v);
     }
+}
+
+// The file / folder dialog of a path or file setting.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+fn pick_path(e: &Entry, lang: Lang) -> Option<String> {
+    let d = rfd::FileDialog::new().set_title(i18n::help(lang, e));
+    let picked = if e.key == "soundfont" {
+        d.add_filter("SoundFont", &["sf2"]).pick_file()
+    } else if e.kind == Kind::File {
+        d.add_filter("fonts", &["ttf", "otf", "ttc"]).pick_file()
+    } else {
+        d.pick_folder()
+    };
+    picked.map(|p| p.to_string_lossy().into_owned())
 }
 
 // "set by TH08_STAGE" / "set by --stage" for values from the environment or command line, "changed" after an edit.

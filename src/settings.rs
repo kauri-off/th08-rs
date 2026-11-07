@@ -1513,7 +1513,7 @@ pub const ENTRIES: &[Entry] = &[
         label: "Save folder",
         summary: "Where scores and replays are saved",
         unit: "",
-        words: &[("", "Default")],
+        words: &[("", "Port config folder (default)")],
         audience: Audience::Player,
         platforms: Platforms::DESKTOP,
         persist: true,

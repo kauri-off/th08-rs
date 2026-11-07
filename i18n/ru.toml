@@ -90,6 +90,7 @@ hint_quit = "выход"
 launcher_title = "Imperishable Night"
 launcher_caption = "Порт Touhou 8 · {version}"
 change = "Изменить…"
+use_default = "По умолчанию"
 more_title = "Ещё"
 touch_layout = "Сенсорные кнопки"
 version = "версия {version}"
@@ -692,7 +693,7 @@ summary = "Куда сохраняются рекорды и реплеи"
 help = "куда сохраняются score.dat и реплеи (по умолчанию: папка настроек порта)"
 
 [entry.save_dir.words]
-"" = "По умолчанию"
+"" = "Папка настроек порта (по умолчанию)"
 
 [entry.stats]
 label = "Статистика игры"

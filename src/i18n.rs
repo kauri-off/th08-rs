@@ -231,6 +231,7 @@ pub const UI: &[(&str, &str)] = &[
     ("launcher_title", "Imperishable Night"),
     ("launcher_caption", "Touhou 8 port · {version}"),
     ("change", "Change…"),
+    ("use_default", "Default"),
     ("more_title", "More"),
     ("touch_layout", "Touch layout"),
     ("version", "ver {version}"),
