@@ -1,12 +1,13 @@
-//! Port menu (F1 / Android Back / pad Select / resume from the background): a pause card, docked in the letterbox when it fits, and a tabbed settings page, drawn with egui over the held game's last frame.
+//! Port menu (F1 / Android Back / pad Select / resume from the background): the pause card in the right pillar (16:9), over the playfield (4:3) or in the phone's side bars, and the tabbed settings page, painted with egui over the held game's last frame.
 
+use super::hitbox::Hitboxes;
 use super::touch::{TouchConfig, TouchLayout};
 use super::touchedit::{EditOut, TouchEdit};
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};
 use crate::settings::Settings;
-use crate::theme::{self, Kind};
-use egui::{Align2, Id, LayerId, Order, RichText, Stroke, vec2};
+use crate::theme::{self, Ctl, CtlOut, CtlStyle, Edge};
+use egui::{Id, LayerId, Order, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
 use winit::event::{ElementState, WindowEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
@@ -79,59 +80,108 @@ impl Nav {
 // Stick / hat deflection that moves the focus once.
 const STICK_NAV: i32 = 600;
 
-// Where and how big the menu is for one window.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Layout {
-    // Window px per egui point.
-    pub ppp: f32,
-    // Minimum target height, points (48 = 48 dp on touch screens).
-    pub target: f32,
-    // Card width, points.
-    pub card_w: f32,
-    // The card is docked as a sheet at the right edge, beside the picture.
-    pub sheet: bool,
-    // The safe area the held frame is drawn in: narrowed by the sheet.
-    pub picture: SafeArea,
-    pub touch: bool,
+// Where the card goes: the right pillar beside the moved picture, a column over the 4:3 playfield, or the side
+// bars of a wide touch screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Pillar,
+    Column,
+    Split,
 }
 
-// The picture may shrink to this share of its full size to make room for the sheet.
+// Where and how big the menu is for one window. A point is one pixel of the mock-up at its reference size
+// (1920×1080 pillar and phone, 1280×960 column), so the menu scales with the game picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layout {
+    // Window px per point.
+    pub ppp: f32,
+    pub shape: Shape,
+    // The safe area the held frame is drawn in: narrowed by the pillar.
+    pub picture: SafeArea,
+    // The game frame in window px: x, y, w, h.
+    pub frame: [f32; 4],
+    // The window's scale factor (Android: dp → px).
+    pub density: f32,
+    pub touch: bool,
+    // The layout editor's px per point (`theme::ppp`).
+    pub edit_ppp: f32,
+}
+
+// Pillar width at the reference size, points.
+const PILLAR: f32 = 480.0;
+// The picture may shrink to this share of its full size to make room for the pillar.
 const SHEET_MIN_PICTURE: f32 = 0.8;
+// Touch: 120 points are at least 48 dp.
+const TOUCH_PX_PER_DP: f32 = 2.5;
+
+// `Gfx::frame_rect` for a safe area.
+fn frame_in(safe: SafeArea, (w, h): (u32, u32), integer: bool) -> [f32; 4] {
+    let [x, y, sw, sh] = safe.rect(w, h);
+    let mut s = (sw / 640.0).min(sh / 480.0);
+    if integer && s >= 1.0 {
+        s = s.floor();
+    }
+    let (vw, vh) = ((640.0 * s).round(), (480.0 * s).round());
+    [
+        x + ((sw - vw) / 2.0).floor(),
+        y + ((sh - vh) / 2.0).floor(),
+        vw,
+        vh,
+    ]
+}
 
 #[expect(
     clippy::cast_sign_loss,
-    reason = "the sheet width is between the card width and the safe width"
+    reason = "the pillar is narrower than the safe width"
 )]
-// `density`: the window's scale factor (Android: dp → px); `touch`: a touch screen is the main input.
-pub fn layout(safe: SafeArea, (w, h): (u32, u32), density: f32, touch: bool) -> Layout {
+// `density`: the window's scale factor; `touch`: a touch screen is the main input; `integer`: integer scaling.
+pub fn layout(
+    safe: SafeArea,
+    (w, h): (u32, u32),
+    density: f32,
+    touch: bool,
+    integer: bool,
+) -> Layout {
     let [_, _, sw, sh] = safe.rect(w, h);
     let fit = |width: f32| (width / 640.0).min(sh / 480.0);
-    let ppp = theme::ppp(sw, sh, density, touch);
-    let target = theme::Density::new(touch).target;
-    let min_card = if touch { 300.0 } else { 280.0 };
-    let rest = sw - min_card * ppp;
-    let sheet = rest > 0.0 && fit(rest) >= SHEET_MIN_PICTURE * fit(sw) && sh / ppp >= 320.0;
-    if !sheet {
-        return Layout {
-            ppp,
-            target,
-            card_w: (min_card + 40.0).min(sw / ppp - 24.0),
-            sheet,
-            picture: safe,
-            touch,
-        };
-    }
-    let free = (sw - (640.0 * fit(rest)).floor()).min(400.0 * ppp).floor();
-    Layout {
+    let f = fit(sw);
+    let floor = if touch {
+        density / TOUCH_PX_PER_DP
+    } else {
+        density * 0.6
+    };
+    let edit_ppp = theme::ppp(sw, sh, density, touch);
+    let mk = |shape, ppp: f32, picture| Layout {
         ppp,
-        target,
-        card_w: free / ppp,
-        sheet,
-        picture: SafeArea {
-            right: safe.right + free as u32,
-            ..safe
-        },
+        shape,
+        picture,
+        frame: frame_in(picture, (w, h), integer),
+        density,
         touch,
+        edit_ppp,
+    };
+    if sw > sh {
+        let u = (f / 2.25).max(floor);
+        if touch && (sw - 640.0 * f) / 2.0 >= 360.0 * u {
+            return mk(Shape::Split, u, safe);
+        }
+        let rest = sw - PILLAR * u;
+        if rest > 0.0 && fit(rest) >= SHEET_MIN_PICTURE * f && sh / u >= 600.0 {
+            let free = (sw - (640.0 * fit(rest)).floor()).max(PILLAR * u).floor();
+            let picture = SafeArea {
+                right: safe.right + free as u32,
+                ..safe
+            };
+            return mk(Shape::Pillar, (fit(rest) / 2.25).max(floor), picture);
+        }
+    }
+    mk(Shape::Column, (f / 2.0).max(floor), safe)
+}
+
+impl Layout {
+    // A font size of `mock` points, at least `min_dp` dp (touch) / OS points (desktop).
+    fn font(&self, mock: f32, min_dp: f32) -> f32 {
+        mock.max(min_dp * self.density / self.ppp)
     }
 }
 
@@ -139,32 +189,54 @@ pub fn layout(safe: SafeArea, (w, h): (u32, u32), density: f32, touch: bool) -> 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Item {
     Resume,
-    Quit,
+    Hitboxes,
     Volume,
     Speed,
-    Hitboxes,
     Screenshot,
     TouchLayout,
     Settings,
+    Retry,
+    Quit,
 }
 
-// The card's rows in focus order; the tiles share one row (← / → between them).
-fn card_rows(m: &MenuState<'_>) -> Vec<Vec<Item>> {
-    let mut rows = vec![vec![Item::Resume]];
-    if m.quit {
-        rows.push(vec![Item::Quit]);
+impl Item {
+    fn danger(self) -> bool {
+        matches!(self, Self::Retry | Self::Quit)
     }
-    rows.push(vec![Item::Volume]);
-    if m.speed.is_some() {
-        rows.push(vec![Item::Speed]);
+}
+
+// The card's targets in focus order: the column / pillar top to bottom; the phone's left bar, then its quick settings.
+fn card_items(m: &MenuState<'_>, split: bool) -> Vec<Item> {
+    let quick = {
+        let mut v = vec![Item::Volume, Item::Hitboxes];
+        if m.speed.is_some() {
+            v.push(Item::Speed);
+        }
+        v.push(Item::Screenshot);
+        if m.touch {
+            v.push(Item::TouchLayout);
+        }
+        v
+    };
+    let run: &[Item] = if m.quit {
+        &[Item::Retry, Item::Quit]
+    } else {
+        &[]
+    };
+    if split {
+        [vec![Item::Resume, Item::Settings], run.to_vec(), quick].concat()
+    } else {
+        let mut mid = vec![Item::Hitboxes, Item::Volume];
+        if m.speed.is_some() {
+            mid.push(Item::Speed);
+        }
+        mid.push(Item::Screenshot);
+        if m.touch {
+            mid.push(Item::TouchLayout);
+        }
+        mid.push(Item::Settings);
+        [vec![Item::Resume], mid, run.to_vec()].concat()
     }
-    let mut tiles = vec![Item::Hitboxes, Item::Screenshot];
-    if m.touch {
-        tiles.push(Item::TouchLayout);
-    }
-    rows.push(tiles);
-    rows.push(vec![Item::Settings]);
-    rows
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,60 +245,76 @@ enum Page {
     Settings,
 }
 
+// A run action waiting for its in-place confirm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    Retry,
+    Quit,
+}
+
 // What a press or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Do {
     Nothing,
     Resume,
     Quit,
+    Retry,
     Screenshot,
     Speed((u32, u32)),
-    Hitboxes,
+    Hitboxes(Hitboxes),
     EditLayout,
 }
 
 const VOLUME: &str = "volume_master";
 
-// Focus: the card's (row, column); on the settings page the tab and the row (0 = the tab bar).
+// Focus: the card item; on the settings page the tab and the row (0 = the tab bar, keys + 1 = "Reset this page").
 #[derive(Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "independent focus flags")]
 struct Focus {
     page: Page,
-    card: (usize, usize),
+    item: Item,
+    // Retry / Quit asked; `yes` = the confirm's action row is focused (else "Keep playing").
+    ask: Option<Ask>,
+    yes: bool,
     tab: usize,
     row: usize,
-    // "Quit to title" was pressed once; the next press quits.
-    confirm: bool,
+    // "Reset this page" was pressed once; the next press resets.
+    reset: bool,
     // Moved by a key this pass: the focused row is scrolled into view.
     moved: bool,
+    // Settings rows scrolled by this many points.
+    scroll: f32,
+    split: bool,
 }
 
 impl Default for Focus {
     fn default() -> Self {
         Self {
             page: Page::Card,
-            card: (0, 0),
+            item: Item::Resume,
+            ask: None,
+            yes: false,
             tab: 0,
             row: 1,
-            confirm: false,
+            reset: false,
             moved: false,
+            scroll: 0.0,
+            split: false,
         }
     }
 }
 
 impl Focus {
-    fn clamp(&mut self, rows: &[Vec<Item>]) -> Item {
-        let r = self.card.0.min(rows.len() - 1);
-        let c = self.card.1.min(rows[r].len() - 1);
-        self.card = (r, c);
-        rows[r][c]
+    fn items(&self, m: &MenuState<'_>) -> Vec<Item> {
+        card_items(m, self.split)
     }
 
-    fn focus_item(&mut self, rows: &[Vec<Item>], it: Item) {
-        for (r, row) in rows.iter().enumerate() {
-            if let Some(c) = row.iter().position(|&x| x == it) {
-                self.card = (r, c);
-            }
+    // The focused item, moved to Resume when it is not on the card.
+    fn clamp(&mut self, items: &[Item]) -> Item {
+        if !items.contains(&self.item) {
+            self.item = Item::Resume;
         }
+        self.item
     }
 
     fn nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
@@ -234,75 +322,118 @@ impl Focus {
         match self.page {
             Page::Card => self.card_nav(n, m, model),
             Page::Settings => {
-                self.settings_nav(n, m, model);
+                self.settings_nav(n, model);
                 Do::Nothing
             }
         }
     }
 
     fn card_nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
-        let rows = card_rows(m);
-        let it = self.clamp(&rows);
-        let (r, c) = self.card;
-        if n != Nav::Activate && n != Nav::Back {
-            self.confirm = false;
+        if self.ask.is_some() {
+            match n {
+                Nav::Up | Nav::Down => self.yes = !self.yes,
+                Nav::Activate => return self.confirm(),
+                Nav::Back => self.cancel(),
+                _ => {}
+            }
+            return Do::Nothing;
         }
+        let items = self.items(m);
+        let it = self.clamp(&items);
+        let at = items.iter().position(|&x| x == it).unwrap_or(0);
         match n {
-            Nav::Up => self.card = (r.saturating_sub(1), c),
-            Nav::Down => self.card = ((r + 1).min(rows.len() - 1), c),
+            Nav::Up => self.item = items[at.saturating_sub(1)],
+            Nav::Down => self.item = items[(at + 1).min(items.len() - 1)],
             Nav::Left | Nav::Right => {
                 let dir = if n == Nav::Left { -1 } else { 1 };
-                if rows[r].len() > 1 {
-                    self.card.1 = c.saturating_add_signed(dir).min(rows[r].len() - 1);
-                } else if it == Item::Volume && has_volume(model) {
-                    model.step(VOLUME, dir as i32);
-                } else if it == Item::Speed
-                    && let Some(now) = m.speed
-                {
+                return self.step(it, dir, m, model);
+            }
+            Nav::Activate => return self.activate(it, m),
+            Nav::Back => return Do::Resume,
+            Nav::PrevTab | Nav::NextTab => {}
+        }
+        Do::Nothing
+    }
+
+    // ← / → on a value item.
+    fn step(&self, it: Item, dir: i32, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+        match it {
+            Item::Volume if has_volume(model) => {
+                model.step(VOLUME, dir);
+            }
+            Item::Hitboxes => {
+                let at = m.hitboxes as usize;
+                let to = at.saturating_add_signed(dir as isize).min(2);
+                if to != at {
+                    return Do::Hitboxes(hitbox_mode(to));
+                }
+            }
+            Item::Speed => {
+                if let Some(now) = m.speed {
                     let rates = crate::transport::SLOW;
                     let at = rates.iter().position(|&x| x == now).unwrap_or(0);
-                    let to = at.saturating_add_signed(dir).min(rates.len() - 1);
+                    let to = at.saturating_add_signed(dir as isize).min(rates.len() - 1);
                     if to != at {
                         return Do::Speed(rates[to]);
                     }
                 }
             }
-            Nav::Activate => return self.activate(it, &rows),
-            Nav::Back => {
-                if !self.back(&rows) {
-                    return Do::Resume;
-                }
-            }
-            Nav::PrevTab | Nav::NextTab => {}
-        }
-        if self.card.0 != r {
-            self.card = (self.card.0, self.card.1.min(rows[self.card.0].len() - 1));
+            _ => {}
         }
         Do::Nothing
     }
 
-    fn settings_nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) {
+    // Z on the question's focused row: the action, or "Keep playing" back to the item.
+    fn confirm(&mut self) -> Do {
+        match self.ask {
+            Some(a) if self.yes => {
+                self.ask = None;
+                self.yes = false;
+                match a {
+                    Ask::Retry => Do::Retry,
+                    Ask::Quit => Do::Quit,
+                }
+            }
+            _ => {
+                self.cancel();
+                Do::Nothing
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        if let Some(a) = self.ask.take() {
+            self.item = match a {
+                Ask::Retry => Item::Retry,
+                Ask::Quit => Item::Quit,
+            };
+        }
+        self.yes = false;
+    }
+
+    fn settings_nav(&mut self, n: Nav, model: &mut launcher::Model) {
         let tabs = model.live_tabs();
         if tabs.is_empty() {
             if n == Nav::Back {
-                self.back(&card_rows(m));
+                self.back();
             }
             return;
         }
         self.tab = self.tab.min(tabs.len() - 1);
         let keys = model.live_rows(tabs[self.tab]);
-        self.row = self.row.min(keys.len());
+        let last_row = keys.len() + 1;
+        self.row = self.row.min(last_row);
         let last = tabs.len() - 1;
+        if !matches!(n, Nav::Activate) {
+            self.reset = false;
+        }
         match n {
             Nav::Up => self.row = self.row.saturating_sub(1),
-            Nav::Down => self.row = (self.row + 1).min(keys.len()),
+            Nav::Down => self.row = (self.row + 1).min(last_row),
             Nav::Left if self.row == 0 => self.tab = self.tab.saturating_sub(1),
             Nav::Right if self.row == 0 => self.tab = (self.tab + 1).min(last),
-            Nav::Left => {
-                model.step(keys[self.row - 1], -1);
-            }
-            Nav::Right => {
-                model.step(keys[self.row - 1], 1);
+            Nav::Left | Nav::Right if self.row <= keys.len() => {
+                model.step(keys[self.row - 1], if n == Nav::Left { -1 } else { 1 });
             }
             Nav::PrevTab | Nav::NextTab => {
                 self.tab = if n == Nav::PrevTab {
@@ -313,49 +444,76 @@ impl Focus {
                     self.tab + 1
                 };
                 self.row = self.row.min(1);
+                self.scroll = 0.0;
+            }
+            Nav::Activate if self.row == last_row => {
+                if std::mem::take(&mut self.reset) {
+                    model.reset_rows(&keys);
+                } else {
+                    self.reset = true;
+                }
             }
             Nav::Activate if self.row > 0 => {
                 model.activate(keys[self.row - 1]);
             }
-            Nav::Activate => {}
+            Nav::Left | Nav::Right | Nav::Activate => {}
             Nav::Back => {
-                self.back(&card_rows(m));
+                self.back();
             }
         }
     }
 
-    // A press or click of a card target.
-    fn activate(&mut self, it: Item, rows: &[Vec<Item>]) -> Do {
-        self.focus_item(rows, it);
-        let confirm = std::mem::take(&mut self.confirm);
+    // A press or click of a card item.
+    fn activate(&mut self, it: Item, m: &MenuState<'_>) -> Do {
+        self.item = it;
         match it {
             Item::Resume => Do::Resume,
-            Item::Quit if confirm => Do::Quit,
+            Item::Retry => {
+                self.ask = Some(Ask::Retry);
+                self.yes = false;
+                Do::Nothing
+            }
             Item::Quit => {
-                self.confirm = true;
+                self.ask = Some(Ask::Quit);
+                self.yes = false;
                 Do::Nothing
             }
             Item::Volume | Item::Speed => Do::Nothing,
-            Item::Hitboxes => Do::Hitboxes,
+            Item::Hitboxes => Do::Hitboxes(m.hitboxes.next()),
             Item::Screenshot => Do::Screenshot,
             Item::TouchLayout => Do::EditLayout,
             Item::Settings => {
                 self.page = Page::Settings;
                 self.tab = 0;
                 self.row = 1;
+                self.scroll = 0.0;
+                self.reset = false;
                 Do::Nothing
             }
         }
     }
 
     // One level back; false on the plain card (the menu closes).
-    fn back(&mut self, rows: &[Vec<Item>]) -> bool {
+    fn back(&mut self) -> bool {
         if self.page == Page::Settings {
             self.page = Page::Card;
-            self.focus_item(rows, Item::Settings);
+            self.item = Item::Settings;
+            self.reset = false;
             return true;
         }
-        std::mem::take(&mut self.confirm)
+        if self.ask.is_some() {
+            self.cancel();
+            return true;
+        }
+        false
+    }
+}
+
+fn hitbox_mode(i: usize) -> Hitboxes {
+    match i {
+        0 => Hitboxes::Off,
+        1 => Hitboxes::Player,
+        _ => Hitboxes::All,
     }
 }
 
@@ -376,12 +534,12 @@ pub struct PortMenu {
     model: launcher::Model,
     // A row changed since the last `take_changed`.
     changed: bool,
-    // "Quit to title" is offered (`quittitle::available`).
+    // "Give up and retry" / "Quit to title" are offered (`quittitle::available`).
     pub quit_ok: bool,
     opened: (Lang, bool),
     // `Gfx::generation` of the first paint; a change means the renderer is dead (device rebuilt).
     generation: Option<u32>,
-    // The active gamepad's name for the controller line (set by the app before each redraw).
+    // The active gamepad's name for the device line (set by the app before each redraw).
     pub controller: Option<String>,
     // Active Cheats rows (`Settings::active_cheats`), shown as a no-saves note.
     pub cheats: Vec<&'static str>,
@@ -391,6 +549,8 @@ pub struct PortMenu {
     pub speed: Option<(u32, u32)>,
     // Slow motion was used: score.dat and replays are not saved.
     pub no_saves: bool,
+    // The paused stage and difficulty (`stage_line`), the heading's caption.
+    pub stage: Option<(String, String)>,
     // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
@@ -400,8 +560,6 @@ pub struct PortMenu {
     navs: Vec<Nav>,
     mods: winit::keyboard::ModifiersState,
     axes: [i32; 2],
-    // The style was set for this (target, touch).
-    styled: Option<(u32, bool)>,
 }
 
 impl PortMenu {
@@ -432,6 +590,7 @@ impl PortMenu {
             status: None,
             speed: None,
             no_saves: false,
+            stage: None,
             touch,
             edit: None,
             saved: None,
@@ -439,22 +598,16 @@ impl PortMenu {
             navs: Vec::new(),
             mods: winit::keyboard::ModifiersState::empty(),
             axes: [0; 2],
-            styled: None,
         }
     }
 
-    // Esc / Android Back: closes the layout editor, an open list or the settings page, or cancels the quit
-    // question; false when the menu itself should close.
+    // Esc / Android Back: closes the layout editor, the settings page or the Retry / Quit question; false when
+    // the menu itself should close.
     pub fn back(&mut self) -> bool {
         if self.edit.take().is_some() {
             return true;
         }
-        if egui::Popup::is_any_open(&self.ctx) {
-            egui::Popup::close_all(&self.ctx);
-            return true;
-        }
-        let rows = card_rows(&self.state_now());
-        self.focus.back(&rows)
+        self.focus.back()
     }
 
     // The layout editor is open (F1 / Select then close it first).
@@ -499,8 +652,7 @@ impl PortMenu {
         self.saved.take()
     }
 
-    // Returns whether the window needs a redraw. Menu keys move the focus and never reach egui (no hidden egui
-    // focus that Enter could toggle).
+    // Returns whether the window needs a redraw. Menu keys move the focus and never reach egui.
     pub fn on_event(&mut self, window: &Window, ev: &WindowEvent) -> bool {
         if let WindowEvent::ModifiersChanged(m) = ev {
             self.mods = m.state();
@@ -527,38 +679,30 @@ impl PortMenu {
         self.state.on_window_event(window, ev).repaint
     }
 
-    fn state_now(&self) -> MenuState<'_> {
-        MenuState {
-            pad: self.controller.as_deref(),
-            touch: self.touch.is_some(),
-            cheats: &self.cheats,
-            hitboxes: super::hitbox::Hitboxes::Off,
-            status: self.status.as_deref(),
-            speed: self.speed,
-            no_saves: self.no_saves,
-            quit: self.quit_ok,
-        }
-    }
-
-    // One pass: the game frame (left of the sheet when docked), the card or settings page in the safe area.
+    // One pass: the game frame (left of the pillar when docked), the card or settings page.
     pub fn redraw(&mut self, window: &Window, gfx: &mut Gfx) -> Option<Action> {
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
         let s = gfx.safe;
         let touch_ui = cfg!(target_os = "android") || self.touch.is_some();
-        let lay = layout(s, (w, h), window.scale_factor() as f32, touch_ui);
-        let ppp = lay.ppp;
+        let lay = layout(
+            s,
+            (w, h),
+            window.scale_factor() as f32,
+            touch_ui,
+            gfx.blit_options.integer,
+        );
+        let ppp = if self.edit.is_some() {
+            lay.edit_ppp
+        } else {
+            lay.ppp
+        };
         let z = ppp / window.scale_factor() as f32;
         if self.ctx.zoom_factor() != z {
             window.request_redraw();
         }
         self.ctx.set_zoom_factor(z);
-        let key = (lay.target.to_bits(), lay.touch);
-        if self.styled != Some(key) {
-            style(&self.ctx, &lay);
-            self.styled = Some(key);
-        }
         let mut raw = self.state.take_egui_input(window);
         raw.safe_area_insets = Some(insets(s, ppp));
         if let Some(e) = &mut self.edit {
@@ -574,8 +718,10 @@ impl PortMenu {
             speed: self.speed,
             no_saves: self.no_saves,
             quit: self.quit_ok,
+            stage: self.stage.as_ref(),
         };
         let (model, focus, edit) = (&mut self.model, &mut self.focus, &mut self.edit);
+        focus.split = lay.shape == Shape::Split;
         let before = live_values(model);
         let mut todo: Vec<Do> = self
             .navs
@@ -585,7 +731,7 @@ impl PortMenu {
         let mut done = None;
         let mut out = self.ctx.run_pass(raw, |ctx| {
             if let Some(e) = edit {
-                done = e.ui(ctx, model.lang(), ppp);
+                done = e.ui(ctx, model.lang(), lay.edit_ppp);
             } else {
                 todo.extend(menu_ui(ctx, &m, model, focus, &lay));
             }
@@ -598,14 +744,13 @@ impl PortMenu {
         let mut act = None;
         for d in todo {
             match d {
-                Do::Nothing => {}
+                Do::Nothing => continue,
                 Do::Resume => act = Some(Action::Resume),
                 Do::Quit => act = Some(Action::QuitToTitle),
+                Do::Retry => act = Some(Action::Retry),
                 Do::Screenshot => act = Some(Action::Screenshot),
                 Do::Speed(r) => act = Some(Action::Speed(r)),
-                Do::Hitboxes => {
-                    super::hitbox::cycle(gfx);
-                }
+                Do::Hitboxes(to) => super::hitbox::set_mode(gfx, to),
                 Do::EditLayout => {
                     if let Some(t) = &self.touch {
                         self.edit = Some(TouchEdit::new(t.clone()));
@@ -647,7 +792,7 @@ impl PortMenu {
         }
         self.generation = Some(gfx.generation());
         let (renderer, pending) = (&mut self.renderer, &mut self.pending);
-        // The sheet narrows the frame's safe area for this present only; the game keeps its own.
+        // The pillar narrows the frame's safe area for this present only; the game keeps its own.
         if self.edit.is_none() {
             gfx.safe = lay.picture;
         }
@@ -660,34 +805,39 @@ impl PortMenu {
     }
 }
 
-// What the card shows; `touch`: the overlay is on; `quit`: "Quit to title" is offered.
+// What the card shows; `touch`: the overlay is on; `quit`: Retry and Quit are offered.
 struct MenuState<'a> {
     pad: Option<&'a str>,
     touch: bool,
     cheats: &'a [&'static str],
-    hitboxes: super::hitbox::Hitboxes,
+    hitboxes: Hitboxes,
     status: Option<&'a str>,
     speed: Option<(u32, u32)>,
     no_saves: bool,
     quit: bool,
+    stage: Option<&'a (String, String)>,
 }
 
-// The egui context of a menu, with the CJK font (the language row names 日本語 in every language).
+// The paused stage ("1" … "6B", "Extra") and difficulty word, while a stage is played.
+pub fn stage_line(w: &th08_core::world::World) -> Option<(String, String)> {
+    const STAGES: [&str; 9] = ["1", "2", "3", "4A", "4B", "5", "6A", "6B", "Extra"];
+    const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
+    let g = &w.game;
+    if g.scene != th08_core::types::SceneId::Game {
+        return None;
+    }
+    let stage = STAGES.get(g.stage)?;
+    let diff = DIFF.get(usize::try_from(g.difficulty).ok()?)?;
+    Some(((*stage).to_string(), (*diff).to_string()))
+}
+
+// The egui context of a menu, with the serif and CJK faces.
 fn new_ctx(s: &Settings) -> egui::Context {
     let ctx = egui::Context::default();
     ctx.set_visuals(egui::Visuals::dark());
     i18n::install_fonts(&ctx, s.font.as_deref());
+    theme::apply(&ctx, theme::Density::new(false));
     ctx
-}
-
-fn style(ctx: &egui::Context, lay: &Layout) {
-    theme::apply(
-        ctx,
-        theme::Density {
-            target: lay.target,
-            touch: lay.touch,
-        },
-    );
 }
 
 fn insets(s: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
@@ -706,6 +856,246 @@ fn live_values(m: &launcher::Model) -> Vec<(&'static str, String)> {
         .collect()
 }
 
+// ---- Painting. Every rect below is in points of `Layout` (one point = one mock-up px).
+
+// The window, the safe area, the game frame and the playfield, in points.
+struct Geo {
+    screen: Rect,
+    safe: Rect,
+    frame: Rect,
+    // Game px → points.
+    gs: f32,
+}
+
+impl Geo {
+    fn new(ctx: &egui::Context, lay: &Layout) -> Self {
+        let [x, y, w, h] = lay.frame;
+        let u = lay.ppp;
+        let frame = Rect::from_min_size(pos2(x / u, y / u), vec2(w / u, h / u));
+        Self {
+            screen: ctx.viewport_rect(),
+            safe: ctx.content_rect(),
+            frame,
+            gs: frame.width() / 640.0,
+        }
+    }
+
+    // A rect in game px (640×480 frame coordinates).
+    fn game(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(self.frame.min + vec2(x, y) * self.gs, vec2(w, h) * self.gs)
+    }
+}
+
+// The texts of the menu in its language.
+struct Words {
+    lang: Lang,
+}
+
+impl Words {
+    fn ui(&self, id: &str) -> &'static str {
+        i18n::ui(self.lang, id)
+    }
+
+    fn item(&self, it: Item) -> &'static str {
+        match it {
+            Item::Resume => self.ui("resume"),
+            Item::Hitboxes => {
+                crate::settings::find("hitboxes").map_or("Hitboxes", |e| i18n::label(self.lang, e))
+            }
+            Item::Volume => self.ui("volume"),
+            Item::Speed => self.ui("slow_motion"),
+            Item::Screenshot => self.ui("screenshot"),
+            Item::TouchLayout => self.ui("touch_layout"),
+            Item::Settings => self.ui("settings_heading"),
+            Item::Retry => self.ui("retry_title"),
+            Item::Quit => self.ui("quit_title"),
+        }
+    }
+
+    // The original's Latin item captions under the Japanese words (ja only).
+    fn latin(&self, it: Item) -> Option<&'static str> {
+        (self.lang == Lang::Ja).then_some(())?;
+        match it {
+            Item::Resume => Some("Return to Game"),
+            Item::Retry => Some("Give up and Retry"),
+            Item::Quit => Some("Quit and Return to Title"),
+            _ => None,
+        }
+    }
+
+    fn help(&self, it: Item) -> &'static str {
+        match it {
+            Item::Resume => self.ui("help_resume"),
+            Item::Hitboxes => {
+                crate::settings::find("hitboxes").map_or("", |e| i18n::summary(self.lang, e))
+            }
+            Item::Volume => {
+                crate::settings::find(VOLUME).map_or("", |e| i18n::summary(self.lang, e))
+            }
+            Item::Speed => self.ui("help_speed"),
+            Item::Screenshot => self.ui("help_screenshot"),
+            Item::TouchLayout => self.ui("help_touch_layout"),
+            Item::Settings => self.ui("help_settings"),
+            Item::Retry => self.ui("help_retry"),
+            Item::Quit => self.ui("help_quit"),
+        }
+    }
+
+    fn heading_caption(&self, m: &MenuState<'_>) -> String {
+        if self.lang == Lang::Ja {
+            return "Pause".into();
+        }
+        m.stage.map_or_else(String::new, |(s, d)| {
+            if s == "Extra" {
+                "Extra".into()
+            } else {
+                i18n::ui_fmt(self.lang, "stage_line", &[("stage", s), ("difficulty", d)])
+            }
+        })
+    }
+
+    fn device(&self, m: &MenuState<'_>, lay: &Layout) -> String {
+        let dev = match m.pad {
+            Some(p) => p.to_string(),
+            None if lay.touch => self.ui("device_touch").into(),
+            None => self.ui("device_keyboard").into(),
+        };
+        format!("{dev} · {}", version(self.lang))
+    }
+
+    fn notes(&self, m: &MenuState<'_>) -> Vec<String> {
+        let mut v: Vec<String> = launcher::cheats_note(self.lang, m.cheats)
+            .into_iter()
+            .collect();
+        if m.no_saves {
+            v.push(self.ui("slow_nosave").into());
+        }
+        v.extend(m.status.map(str::to_string));
+        v
+    }
+}
+
+// The table's help texts start lower-case (they are also `--help` lines); the menu shows them as a sentence.
+fn sentence(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
+fn version(lang: Lang) -> String {
+    i18n::ui_fmt(lang, "version", &[("version", &launcher::version_line())])
+}
+
+// Key hints: plain glyphs on keyboard, A / B discs on a pad, none on touch.
+enum Hints {
+    Card,
+    Confirm,
+    Settings,
+}
+
+fn hint_items(
+    w: &Words,
+    m: &MenuState<'_>,
+    lay: &Layout,
+    which: &Hints,
+) -> Vec<(String, &'static str)> {
+    if m.pad.is_none() && lay.touch {
+        return Vec::new();
+    }
+    let pad = m.pad.is_some();
+    let k = |key: &str, pad_key: &str| -> String { if pad { pad_key } else { key }.to_string() };
+    let mut v = vec![(k("↑↓", "↑↓"), w.ui("hint_move"))];
+    if !matches!(which, Hints::Confirm) {
+        v.push((k("←→", "←→"), w.ui("hint_change")));
+    }
+    v.push((k("Z", "Ⓐ"), w.ui("hint_select")));
+    match which {
+        Hints::Card => v.push((k("Esc", "Ⓑ"), w.ui("hint_resume"))),
+        Hints::Confirm => v.push((k("X", "Ⓑ"), w.ui("hint_back"))),
+        Hints::Settings => {
+            v.push((k("X", "Ⓑ"), w.ui("hint_back")));
+            v.push((k("Q E", "LB RB"), w.ui("hint_tabs")));
+        }
+    }
+    v
+}
+
+// A hint line; pad buttons Ⓐ / Ⓑ as filled discs.
+fn draw_hints(p: &Painter, pos: Pos2, items: &[(String, &str)], size: f32) -> f32 {
+    let mut x = pos.x;
+    for (i, (k, word)) in items.iter().enumerate() {
+        if i > 0 {
+            x += size * 1.3;
+        }
+        let disc = match k.as_str() {
+            "Ⓐ" => Some("A"),
+            "Ⓑ" => Some("B"),
+            _ => None,
+        };
+        if let Some(d) = disc {
+            let r = size * 0.7;
+            theme::pad_disc(p, pos2(x + r, pos.y + size * 0.62), size, d);
+            let g = p.layout_no_wrap((*word).to_string(), theme::sans(size), theme::HELP);
+            let gw = g.size().x;
+            theme::shadowed(p, pos2(x + 2.0 * r + size * 0.45, pos.y), g, theme::HELP);
+            x += 2.0 * r + size * 0.45 + gw;
+        } else {
+            x += theme::key_hint(p, pos2(x, pos.y), k, word, size);
+        }
+    }
+    x - pos.x
+}
+
+// The pointer moved this pass: a row under it takes the focus (a resting pointer leaves key / pad focus alone).
+fn pointer_moved(ui: &Ui) -> bool {
+    ui.input(|i| i.pointer.is_moving() || i.pointer.any_pressed())
+}
+
+// Text in `rect`, left, vertically centred: shrunk to 85 % to stay on one line, else wrapped. The serif face's
+// "…" is the centred CJK one; after Latin or Cyrillic letters it is drawn as three periods.
+fn label(
+    p: &Painter,
+    rect: Rect,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    glow: bool,
+) -> f32 {
+    let text = theme::latin_ellipsis(text);
+    let mut font = font;
+    let one = p
+        .layout_no_wrap(text.to_string(), font.clone(), color)
+        .size()
+        .x;
+    if one > rect.width() && one * 0.85 <= rect.width() {
+        font.size *= rect.width() / one;
+    }
+    let g = p.layout(text.into_owned(), font, color, rect.width().max(10.0));
+    let h = g.size().y;
+    theme::outlined(
+        p,
+        pos2(rect.min.x, rect.center().y - h / 2.0),
+        g,
+        color,
+        glow,
+    );
+    h
+}
+
+fn sans_text(
+    p: &Painter,
+    pos: Pos2,
+    text: &str,
+    size: f32,
+    color: egui::Color32,
+    wrap: f32,
+) -> f32 {
+    let g = p.layout(text.to_string(), theme::sans(size), color, wrap.max(10.0));
+    let h = g.size().y;
+    theme::shadowed(p, pos, g, color);
+    h
+}
+
 // The card or the settings page; what was clicked.
 fn menu_ui(
     ctx: &egui::Context,
@@ -714,335 +1104,1372 @@ fn menu_ui(
     focus: &mut Focus,
     lay: &Layout,
 ) -> Vec<Do> {
-    let screen = ctx.viewport_rect();
-    let safe = ctx.content_rect();
+    let geo = Geo::new(ctx, lay);
     let mut out = Vec::new();
-    let bg = LayerId::new(Order::Background, Id::unique("port menu bg"));
-    let gap = if lay.touch { theme::S } else { theme::L };
-    if focus.page == Page::Settings {
-        ctx.layer_painter(bg).rect_filled(screen, 0.0, theme::SCRIM);
-        let pad = 2.0 * theme::L;
-        let w = (safe.width() - 2.0 * gap).min(SETTINGS_W);
-        let max_h = safe.height() - 2.0 * gap - pad;
-        egui::Area::new(Id::unique("port menu settings"))
-            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                theme::panel().show(ui, |ui| {
-                    ui.set_width(w - pad);
-                    settings_ui(ui, m, model, focus, lay, max_h);
-                });
-            });
-        return out;
+    let wash = ctx.layer_painter(LayerId::new(
+        Order::Background,
+        Id::unique("port menu wash"),
+    ));
+    match lay.shape {
+        Shape::Column => {
+            wash.rect_filled(geo.game(32.0, 16.0, 384.0, 448.0), 0.0, theme::WASH_DEEP);
+        }
+        _ => {
+            wash.rect_filled(geo.frame, 0.0, theme::WASH);
+        }
     }
-    if lay.sheet {
-        let x = safe.max.x - lay.card_w;
-        let sheet = egui::Rect::from_min_max(egui::pos2(x, screen.min.y), screen.max);
-        let p = ctx.layer_painter(bg);
-        p.rect_filled(sheet, 0.0, theme::SURFACE);
-        p.vline(x, sheet.y_range(), Stroke::new(1.0, theme::OUTLINE));
-        egui::Area::new(Id::unique("port menu sheet"))
-            .fixed_pos(egui::pos2(x + theme::L, safe.min.y + theme::M))
-            .show(ctx, |ui| {
-                ui.set_max_height(safe.height() - 2.0 * theme::M);
-                egui::ScrollArea::vertical()
-                    .max_height(safe.height() - 2.0 * theme::M)
-                    .show(ui, |ui| {
-                        out = card_ui(ui, m, model, focus, lay, lay.card_w - 2.0 * theme::L);
-                    });
-            });
-    } else {
-        ctx.layer_painter(bg)
-            .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(110));
-        egui::Area::new(Id::unique("port menu card"))
-            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                theme::panel().show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(safe.height() - 2.0 * gap - 2.0 * theme::L)
-                        .show(ui, |ui| {
-                            out = card_ui(ui, m, model, focus, lay, lay.card_w - 2.0 * theme::L);
-                        });
-                });
-            });
-    }
+    egui::Area::new(Id::unique("port menu"))
+        .fixed_pos(geo.screen.min)
+        .order(Order::Middle)
+        .show(ctx, |ui| {
+            ui.set_min_size(geo.screen.size());
+            ui.set_clip_rect(geo.screen);
+            let words = Words { lang: model.lang() };
+            if focus.page == Page::Settings {
+                settings_ui(ui, m, model, focus, lay, &geo, &words);
+            } else {
+                out = card_ui(ui, m, model, focus, lay, &geo, &words);
+            }
+        });
     out
 }
 
-// The settings page's widest panel, points.
-const SETTINGS_W: f32 = 600.0;
-
-// A full-width or tile button.
-fn wide(ui: &mut egui::Ui, text: &str, w: f32, h: f32, kind: Kind) -> egui::Response {
-    let b = theme::button(text, kind).wrap().min_size(vec2(w, h));
-    ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
+// Row geometry of one card shape.
+struct CardMetrics {
+    head: f32,
+    cap: f32,
+    resume_h: f32,
+    resume: f32,
+    row_h: f32,
+    row: f32,
+    status: f32,
+    hint: f32,
+    help: f32,
+    track: f32,
+    numw: f32,
 }
 
-// A tile: small text in up to two lines, all tiles of a row the same size.
-fn tile(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> egui::Response {
-    ui.scope(|ui| {
-        ui.spacing_mut().button_padding.x = theme::XS;
-        let b = egui::Button::new(RichText::new(text).color(theme::TEXT).small())
-            .wrap()
-            .min_size(vec2(w, h));
-        ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
-    })
-    .inner
+fn card_metrics(lay: &Layout) -> CardMetrics {
+    let f = |mock, dp| lay.font(mock, dp);
+    match lay.shape {
+        Shape::Pillar => CardMetrics {
+            head: f(42.0, 18.0),
+            cap: f(17.0, 11.0),
+            resume_h: 88.0,
+            resume: f(34.0, 16.0),
+            row_h: 72.0,
+            row: f(28.0, 14.0),
+            status: f(16.0, 11.0),
+            hint: f(15.0, 11.0),
+            help: f(18.0, 12.0),
+            track: 134.0,
+            numw: 72.0,
+        },
+        Shape::Column => CardMetrics {
+            head: f(34.0, 18.0),
+            cap: f(15.0, 11.0),
+            resume_h: 54.0,
+            resume: f(28.0, 16.0),
+            row_h: 42.0,
+            row: f(22.0, 14.0),
+            status: f(14.0, 11.0),
+            hint: f(14.0, 11.0),
+            help: f(14.0, 12.0),
+            track: 128.0,
+            numw: 58.0,
+        },
+        Shape::Split => CardMetrics {
+            head: f(48.0, 20.0),
+            cap: f(21.0, 12.0),
+            resume_h: 140.0,
+            resume: f(44.0, 18.0),
+            row_h: 120.0,
+            row: f(32.0, 14.0),
+            status: f(19.0, 12.0),
+            hint: f(16.0, 12.0),
+            help: f(24.0, 12.0),
+            track: 0.0,
+            numw: 100.0,
+        },
+    }
 }
 
-// The pointer moved this pass: a row under it takes the focus (a resting pointer leaves key / pad focus alone).
-fn pointer_moved(ui: &egui::Ui) -> bool {
-    ui.input(|i| i.pointer.is_moving() || i.pointer.any_pressed())
+// The control a card item shows on its row.
+fn item_ctl(it: Item, m: &MenuState<'_>, model: &launcher::Model, lang: Lang) -> Ctl {
+    match it {
+        Item::Hitboxes => Ctl::Choices {
+            words: Hitboxes::IDS
+                .iter()
+                .map(|id| {
+                    crate::settings::find("hitboxes")
+                        .and_then(|e| i18n::word(lang, e, id))
+                        .unwrap_or(id)
+                        .to_string()
+                })
+                .collect(),
+            sel: Some(m.hitboxes as usize),
+        },
+        Item::Volume if has_volume(model) => model.ctl(VOLUME, lang),
+        Item::Speed => {
+            let now = m.speed.unwrap_or((1, 1));
+            let rates = crate::transport::SLOW;
+            Ctl::Choices {
+                words: rates
+                    .iter()
+                    .map(|&r| crate::transport::rate_label(lang, r))
+                    .collect(),
+                sel: rates.iter().position(|&r| r == now),
+            }
+        }
+        _ => Ctl::None,
+    }
+}
+
+// A click / tap on an item's control.
+fn item_input(it: Item, o: CtlOut, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+    match (it, o) {
+        (Item::Volume, o) => {
+            model.ctl_input(VOLUME, o);
+            Do::Nothing
+        }
+        (Item::Hitboxes, CtlOut::Pick(i)) => Do::Hitboxes(hitbox_mode(i)),
+        (Item::Hitboxes, CtlOut::Step(d)) => Do::Hitboxes(hitbox_mode(
+            (m.hitboxes as usize)
+                .saturating_add_signed(d as isize)
+                .min(2),
+        )),
+        (Item::Speed, CtlOut::Pick(i)) => crate::transport::SLOW
+            .get(i)
+            .map_or(Do::Nothing, |&r| Do::Speed(r)),
+        (Item::Speed, CtlOut::Step(d)) => {
+            let rates = crate::transport::SLOW;
+            let at = rates.iter().position(|&x| Some(x) == m.speed).unwrap_or(0);
+            Do::Speed(rates[at.saturating_add_signed(d as isize).min(rates.len() - 1)])
+        }
+        _ => Do::Nothing,
+    }
+}
+
+// One item row: focus band (or the 4:3 gradient), label, its control, the › on Settings / Touch layout.
+#[expect(clippy::too_many_arguments, reason = "one painted row")]
+fn item_row(
+    ui: &Ui,
+    p: &Painter,
+    rect: Rect,
+    band: Rect,
+    it: Item,
+    size: f32,
+    cm: &CardMetrics,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+    words: &Words,
+    dimmed: bool,
+    out: &mut Vec<Do>,
+) {
+    let id = Id::unique(("card item", it as u8));
+    let resp = ui.interact(
+        band,
+        id,
+        if dimmed {
+            Sense::hover()
+        } else {
+            Sense::click()
+        },
+    );
+    let focused = !dimmed && focus.ask.is_none() && focus.item == it;
+    if !dimmed && resp.contains_pointer() && pointer_moved(ui) && focus.ask.is_none() {
+        focus.item = it;
+    }
+    if focused {
+        if lay.shape == Shape::Column {
+            theme::focus_over_game(p, band, 4.0);
+        } else {
+            theme::focus(
+                p,
+                band,
+                if lay.shape == Shape::Split { 5.0 } else { 4.0 },
+                resp.is_pointer_button_down_on(),
+            );
+        }
+    }
+    let color = if focused {
+        theme::TEXT_HI
+    } else if it.danger() {
+        theme::DANGER
+    } else {
+        theme::TEXT
+    };
+    let ctl = item_ctl(it, m, model, words.lang);
+    let label_w = if matches!(ctl, Ctl::None) {
+        rect.width() - size
+    } else {
+        rect.width() * 0.42
+    };
+    let caption = words.latin(it);
+    let mut lrect = Rect::from_min_size(rect.min, vec2(label_w, rect.height()));
+    if caption.is_some() {
+        lrect.max.y -= rect.height() * 0.32;
+    }
+    label(p, lrect, words.item(it), theme::serif(size), color, focused);
+    if let Some(c) = caption {
+        let g = p.layout_no_wrap(c.to_string(), theme::serif(cm.cap * 0.85), theme::ACCENT);
+        theme::caption_text(p, pos2(rect.min.x + size * 1.2, lrect.max.y - 2.0), g);
+    }
+    if matches!(it, Item::Settings | Item::TouchLayout) {
+        theme::chevron(
+            p,
+            pos2(rect.max.x, rect.center().y),
+            size * 0.85,
+            theme::HELP,
+        );
+    }
+    let st = CtlStyle {
+        size: size * 0.93,
+        num: size * 0.8,
+        cells: false,
+        right: true,
+        indent: 0.0,
+        track: cm.track,
+        numw: cm.numw,
+        gap: size * 0.93,
+        cell_w: 0.0,
+    };
+    let crect = Rect::from_min_max(pos2(rect.min.x + label_w, rect.min.y), rect.max);
+    if !dimmed && let Some(o) = theme::value_ctl(ui, p, id, crect, &ctl, focused, &st) {
+        focus.item = it;
+        out.push(item_input(it, o, m, model));
+    } else if resp.clicked() {
+        focus.item = it;
+        out.push(focus.activate(it, m));
+    }
+    if focused && focus.moved {
+        resp.scroll_to_me(None);
+    }
+}
+
+// The in-place question for Retry / Quit: question, note, "Keep playing" (focused first) and the action row.
+// Returns the height used.
+#[expect(clippy::too_many_arguments, reason = "one painted block")]
+fn confirm_block(
+    ui: &Ui,
+    p: &Painter,
+    x: f32,
+    y: f32,
+    w: f32,
+    band: (f32, f32),
+    ask: Ask,
+    cm: &CardMetrics,
+    focus: &mut Focus,
+    lay: &Layout,
+    words: &Words,
+    out: &mut Vec<Do>,
+) -> f32 {
+    let (q, note, act) = match ask {
+        Ask::Retry => ("retry_ask", "retry_note", "retry_do"),
+        Ask::Quit => ("quit_ask", "quit_note", "quit_do"),
+    };
+    let mut cy = y;
+    let qs = cm.row * 1.14;
+    let g = p.layout(
+        words.ui(q).to_string(),
+        theme::serif(qs),
+        theme::QUESTION,
+        w,
+    );
+    let gh = g.size().y;
+    theme::outlined(p, pos2(x, cy), g, theme::QUESTION, false);
+    cy += gh + qs * 0.3;
+    cy += sans_text(p, pos2(x, cy), words.ui(note), cm.help, theme::HELP_HI, w);
+    cy += cm.help * 0.9;
+    let rh = cm.row_h;
+    for (i, (id, yes)) in [("keep_playing", false), (act, true)]
+        .into_iter()
+        .enumerate()
+    {
+        let rect = Rect::from_min_size(pos2(x, cy), vec2(w, rh));
+        let b = Rect::from_x_y_ranges(band.0..=band.1, rect.y_range());
+        let resp = ui.interact(b, Id::unique(("confirm", i)), Sense::click());
+        if resp.contains_pointer() && pointer_moved(ui) {
+            focus.yes = yes;
+        }
+        let f = focus.yes == yes;
+        if f {
+            if lay.shape == Shape::Column {
+                theme::focus_over_game(p, b, 4.0);
+            } else {
+                theme::focus(p, b, 4.0, resp.is_pointer_button_down_on());
+            }
+        }
+        let color = if f {
+            theme::TEXT_HI
+        } else if yes {
+            theme::DANGER
+        } else {
+            theme::TEXT
+        };
+        label(p, rect, words.ui(id), theme::serif(cm.row * 1.07), color, f);
+        if resp.clicked() {
+            focus.yes = yes;
+            out.push(focus.confirm());
+        }
+        cy += rh;
+    }
+    cy - y
 }
 
 fn card_ui(
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     m: &MenuState<'_>,
     model: &mut launcher::Model,
     focus: &mut Focus,
     lay: &Layout,
-    w: f32,
+    geo: &Geo,
+    words: &Words,
 ) -> Vec<Do> {
-    let lang = model.lang();
-    let rows = card_rows(m);
-    focus.clamp(&rows);
+    let items = focus.items(m);
+    focus.clamp(&items);
+    let cm = card_metrics(lay);
     let mut out = Vec::new();
-    let t = lay.target;
-    let tile_h = t.max(50.0);
-    let moved = pointer_moved(ui);
-    ui.set_width(w);
-    ui.spacing_mut().item_spacing.y = if lay.touch { 6.0 } else { theme::S };
-    ui.vertical_centered(|ui| {
-        ui.label(
-            RichText::new(i18n::ui(lang, "paused_title"))
-                .size(theme::TITLE)
-                .color(theme::TEXT)
-                .strong(),
-        );
-    });
-    let mut notes: Vec<String> = launcher::cheats_note(lang, m.cheats).into_iter().collect();
-    if m.no_saves {
-        notes.push(i18n::ui(lang, "slow_nosave").into());
-    }
-    for n in notes {
-        ui.label(RichText::new(format!("⚠ {n}")).color(theme::WARN).small());
-    }
-    for (r, row) in rows.iter().enumerate() {
-        let n = row.len() as f32;
-        let tile_w = (w - theme::S * (n - 1.0)) / n;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = theme::S;
-            for (c, &it) in row.iter().enumerate() {
-                let resp = match it {
-                    Item::Resume => wide(ui, i18n::ui(lang, "resume"), w, t, Kind::Primary),
-                    Item::Quit if focus.confirm => {
-                        wide(ui, i18n::ui(lang, "quit_confirm"), w, t, Kind::Danger)
-                    }
-                    Item::Quit => wide(ui, i18n::ui(lang, "quit_title"), w, t, Kind::Secondary),
-                    Item::Volume => {
-                        ui.horizontal(|ui| {
-                            let label_w = w * 0.34;
-                            ui.allocate_ui_with_layout(
-                                vec2(label_w, t),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.set_min_size(vec2(label_w, t));
-                                    ui.add(egui::Label::new(i18n::ui(lang, "volume")).wrap());
-                                },
-                            );
-                            if has_volume(model) {
-                                let ctrl = w - label_w - ui.spacing().item_spacing.x;
-                                model.value_widget_ui(ui, VOLUME, lang, ctrl);
-                            }
-                        })
-                        .response
-                    }
-                    Item::Speed => {
-                        let now = m.speed.unwrap_or((1, 1));
-                        ui.horizontal_wrapped(|ui| {
-                            ui.set_min_height(t);
-                            ui.label(i18n::ui(lang, "slow_motion"));
-                            for rate in crate::transport::SLOW {
-                                let text = crate::transport::rate_label(lang, rate);
-                                let b = egui::Button::selectable(now == rate, text)
-                                    .min_size(vec2(t * 1.2, t));
-                                if ui.add(b).clicked() && now != rate {
-                                    out.push(Do::Speed(rate));
-                                }
-                            }
-                        })
-                        .response
-                    }
-                    Item::Hitboxes => tile(ui, &hitboxes_label(lang, m.hitboxes), tile_w, tile_h),
-                    Item::Screenshot => {
-                        let text = if cfg!(any(target_os = "android", target_arch = "wasm32")) {
-                            i18n::ui(lang, "screenshot").to_string()
-                        } else {
-                            format!("{} (F12)", i18n::ui(lang, "screenshot"))
-                        };
-                        tile(ui, &text, tile_w, tile_h)
-                    }
-                    Item::TouchLayout => {
-                        tile(ui, i18n::ui(lang, "touch_layout_short"), tile_w, tile_h)
-                    }
-                    Item::Settings => {
-                        wide(ui, i18n::ui(lang, "settings_page"), w, t, Kind::Secondary)
-                    }
-                };
-                if resp.clicked() {
-                    focus.card = (r, c);
-                    out.push(focus.activate(it, &rows));
-                } else if resp.contains_pointer() && moved && focus.card != (r, c) {
-                    focus.card = (r, c);
-                    focus.confirm &= it == Item::Quit;
-                }
-                if focus.card == (r, c) {
-                    theme::ring(ui, resp.rect, false);
-                    if focus.moved {
-                        resp.scroll_to_me(None);
-                    }
-                }
-            }
-        });
-    }
-    if let Some(s) = m.status {
-        ui.label(theme::hint(s));
-    }
-    ui.add_space(theme::XS);
-    let name = m.pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
-    let mut foot = i18n::ui_fmt(lang, "controller", &[("name", name)]);
-    let keys = if cfg!(target_os = "android") {
-        i18n::ui(lang, "key_back")
-    } else {
-        "F1 / Esc"
-    };
-    foot.push_str(&format!(" · {keys}"));
-    ui.label(theme::hint(foot));
-    if !lay.touch || m.pad.is_some() {
-        ui.label(theme::hint(i18n::ui(lang, "nav_hint")));
+    let p = ui.painter().clone();
+    match lay.shape {
+        Shape::Split => split_card(
+            ui, &p, &items, &cm, m, model, focus, lay, geo, words, &mut out,
+        ),
+        _ => list_card(
+            ui, &p, &items, &cm, m, model, focus, lay, geo, words, &mut out,
+        ),
     }
     out
 }
 
-// The settings page: Back, the title and version, the tabs, the rows of one tab, help for the focused row, the
-// key hints. Sized to the longest tab (no jump between tabs) up to `max_h`, where the rows scroll.
-fn settings_ui(
-    ui: &mut egui::Ui,
+// Pillar and 4:3 column: heading, Resume, rule, the shortcuts, rule, Retry… / Quit…, then status and hints.
+#[expect(clippy::too_many_arguments, reason = "one painted card")]
+#[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
+fn list_card(
+    ui: &Ui,
+    p: &Painter,
+    items: &[Item],
+    cm: &CardMetrics,
     m: &MenuState<'_>,
     model: &mut launcher::Model,
     focus: &mut Focus,
     lay: &Layout,
-    max_h: f32,
+    geo: &Geo,
+    words: &Words,
+    out: &mut Vec<Do>,
 ) {
-    let lang = model.lang();
-    let t = lay.target;
-    let tabs = model.live_tabs();
-    let rows = card_rows(m);
-    let top = ui.cursor().min.y;
-    let moved = pointer_moved(ui);
-    focus.tab = focus.tab.min(tabs.len().saturating_sub(1));
-    ui.horizontal(|ui| {
-        let back = format!("‹ {}", i18n::ui(lang, "back"));
-        let b = theme::button(back, Kind::Secondary).min_size(vec2(t * 1.5, t));
-        if ui.add(b).clicked() {
-            focus.back(&rows);
-        }
-        ui.add_space(theme::S);
-        ui.label(
-            RichText::new(i18n::ui(lang, "tab_settings"))
-                .size(theme::TITLE)
-                .strong()
-                .color(theme::TEXT),
+    let pillar = lay.shape == Shape::Pillar;
+    let (x, w, band, top) = if pillar {
+        let px = geo.frame.max.x;
+        theme::lacquer(
+            p,
+            Rect::from_x_y_ranges(px..=geo.screen.max.x, geo.screen.y_range()),
+            Edge::Left,
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(theme::hint(launcher::version_line()));
-        });
-    });
-    ui.add_space(theme::XS);
-    let labels: Vec<&str> = tabs.iter().map(|&g| i18n::group_title(lang, g)).collect();
-    let (clicked, sel) = theme::tabs(ui, &labels, focus.tab, lay.touch);
-    if let Some(i) = clicked {
+        let x = px + 44.0;
+        (
+            x,
+            geo.safe.max.x - 44.0 - x,
+            (px + 6.0, geo.screen.max.x),
+            geo.safe.min.y,
+        )
+    } else {
+        let pf = geo.game(32.0, 16.0, 384.0, 448.0);
+        let w = 396.0f32.min(pf.width() - 48.0);
+        let x = pf.center().x - 14.0 * geo.gs / 2.0 - w / 2.0;
+        let soft = Rect::from_min_max(
+            pos2(x - 64.0, pf.min.y + 40.0),
+            pos2(
+                x + w + 56.0,
+                pf.min.y + 40.0 + 590.0f32.min(pf.height() - 40.0),
+            ),
+        );
+        theme::soft_rect(p, soft, 60.0, egui::Color32::from_black_alpha(90));
+        (x, w, (x - 24.0, x + w + 16.0), geo.frame.min.y + 80.0)
+    };
+    let mut y = top + if pillar { 44.0 } else { 32.0 };
+    theme::heading(
+        p,
+        pos2(x, y),
+        words.ui("paused_title"),
+        &words.heading_caption(m),
+        cm.head,
+        cm.cap,
+    );
+    y = top + if pillar { 160.0 } else { 116.0 };
+    // The bottom block of the pillar is pinned; rows shrink when the list would reach it.
+    let hints_y = geo.safe.max.y - 60.0;
+    let notes = words.notes(m);
+    let dev_y = hints_y - 58.0;
+    let notes_y = dev_y - 26.0 * notes.len() as f32;
+    let help_text = match focus.ask {
+        Some(_) if focus.yes => words.help(match focus.ask {
+            Some(Ask::Retry) => Item::Retry,
+            _ => Item::Quit,
+        }),
+        Some(_) => words.ui("help_keep"),
+        None => words.help(focus.item),
+    };
+    let help_g = p.layout(
+        help_text.to_string(),
+        theme::sans(cm.help),
+        theme::HELP_HI,
+        w,
+    );
+    let rule_y = notes_y - 18.0 - help_g.size().y - 14.0;
+    let mids = items
+        .iter()
+        .filter(|i| !matches!(i, Item::Resume) && !i.danger())
+        .count() as f32;
+    let dangers = items.iter().filter(|i| i.danger()).count() as f32;
+    let gaps = if pillar { 24.0 + 32.0 } else { 16.0 + 20.0 };
+    let mut rh = cm.row_h;
+    if pillar {
+        let room = rule_y - 12.0 - y - cm.resume_h - gaps;
+        if (mids + dangers) * rh > room {
+            rh = (room / (mids + dangers)).max(48.0);
+        }
+    }
+    let dimmed = focus.ask.is_some();
+    let mut op = p.clone();
+    if dimmed {
+        op.set_opacity(0.3);
+    }
+    let row = |y: f32, h: f32| Rect::from_min_size(pos2(x, y), vec2(w, h));
+    let bandr = |r: Rect| Rect::from_x_y_ranges(band.0..=band.1, r.y_range());
+    // Japanese items with the original's Latin caption take a taller row.
+    let tall = |it: Item, h: f32| {
+        if words.latin(it).is_some() {
+            h * 1.33
+        } else {
+            h
+        }
+    };
+    let r = row(y, tall(Item::Resume, cm.resume_h));
+    let resume_h = r.height();
+    item_row(
+        ui,
+        &op,
+        r,
+        bandr(r),
+        Item::Resume,
+        cm.resume,
+        cm,
+        m,
+        model,
+        focus,
+        lay,
+        words,
+        dimmed,
+        out,
+    );
+    y += resume_h + if pillar { 14.0 } else { 10.0 };
+    theme::rule(&op, egui::Rangef::new(x, x + w), y);
+    y += if pillar { 10.0 } else { 6.0 };
+    for &it in items
+        .iter()
+        .filter(|i| !matches!(i, Item::Resume) && !i.danger())
+    {
+        let r = row(y, rh);
+        item_row(
+            ui,
+            &op,
+            r,
+            bandr(r),
+            it,
+            cm.row,
+            cm,
+            m,
+            model,
+            focus,
+            lay,
+            words,
+            dimmed,
+            out,
+        );
+        y += rh;
+    }
+    if dangers > 0.0 {
+        y += if pillar { 22.0 } else { 14.0 };
+        theme::rule(p, egui::Rangef::new(x, x + w), y);
+        y += if pillar { 10.0 } else { 6.0 };
+        if let Some(ask) = focus.ask {
+            y += 6.0;
+            let cmr = CardMetrics { row_h: rh, ..*cm };
+            y += confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
+        } else {
+            for &it in items.iter().filter(|i| i.danger()) {
+                let r = row(y, tall(it, rh));
+                item_row(
+                    ui,
+                    p,
+                    r,
+                    bandr(r),
+                    it,
+                    cm.row,
+                    cm,
+                    m,
+                    model,
+                    focus,
+                    lay,
+                    words,
+                    false,
+                    out,
+                );
+                y += r.height();
+            }
+        }
+    }
+    let span = egui::Rangef::new(x, x + w);
+    if pillar {
+        theme::rule(p, span, rule_y);
+        theme::shadowed(p, pos2(x, rule_y + 14.0), help_g, theme::HELP_HI);
+        for (i, n) in notes.iter().enumerate() {
+            sans_text(
+                p,
+                pos2(x, notes_y + 26.0 * i as f32),
+                n,
+                cm.status,
+                theme::HELP,
+                w,
+            );
+        }
+        let dev = match m.pad {
+            Some(pn) => pn.to_string(),
+            None if lay.touch => words.ui("device_touch").into(),
+            None => words.ui("device_keyboard").into(),
+        };
+        sans_text(p, pos2(x, dev_y), &dev, cm.status, theme::HELP, w);
+        let v = p.layout_no_wrap(version(words.lang), theme::sans(cm.status), theme::HELP);
+        theme::shadowed(p, pos2(x + w - v.size().x, dev_y), v, theme::HELP);
+        let which = if focus.ask.is_some() {
+            Hints::Confirm
+        } else {
+            Hints::Card
+        };
+        draw_hints(
+            p,
+            pos2(x, hints_y),
+            &hint_items(words, m, lay, &which),
+            cm.hint,
+        );
+    } else {
+        y += if dangers > 0.0 { 16.0 } else { 14.0 };
+        theme::rule(p, span, y);
+        y += 10.0;
+        for n in &notes {
+            y += sans_text(p, pos2(x, y), n, cm.status, theme::HELP_HI, w) + 6.0;
+        }
+        y += sans_text(
+            p,
+            pos2(x, y),
+            &words.device(m, lay),
+            cm.status,
+            theme::HELP,
+            w,
+        ) + 14.0;
+        let which = if focus.ask.is_some() {
+            Hints::Confirm
+        } else {
+            Hints::Card
+        };
+        draw_hints(p, pos2(x, y), &hint_items(words, m, lay, &which), cm.hint);
+    }
+}
+
+// Phone: the left bar holds the heading, status and the run items low in thumb reach; the right bar the quick
+// settings, bottom-anchored.
+#[expect(clippy::too_many_arguments, reason = "one painted card")]
+#[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
+fn split_card(
+    ui: &Ui,
+    p: &Painter,
+    items: &[Item],
+    cm: &CardMetrics,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+    geo: &Geo,
+    words: &Words,
+    out: &mut Vec<Do>,
+) {
+    let left = Rect::from_x_y_ranges(geo.screen.min.x..=geo.frame.min.x, geo.screen.y_range());
+    let right = Rect::from_x_y_ranges(geo.frame.max.x..=geo.screen.max.x, geo.screen.y_range());
+    theme::lacquer(p, left, Edge::Right);
+    theme::lacquer(p, right, Edge::Left);
+    let x = geo.safe.min.x + 20.0;
+    let w = left.max.x - 36.0 - x;
+    let top = geo.safe.min.y;
+    let bottom = geo.safe.max.y - 40.0;
+    let hh = theme::heading(
+        p,
+        pos2(x, top + 44.0),
+        words.ui("paused_title"),
+        &words.heading_caption(m),
+        cm.head,
+        cm.cap,
+    );
+    let mut y = top + 44.0 + hh + 24.0;
+    for n in words.notes(m) {
+        y += sans_text(p, pos2(x, y), &n, cm.status, theme::HELP_HI, w) + 4.0;
+    }
+    sans_text(
+        p,
+        pos2(x, y),
+        &words.device(m, lay),
+        cm.status,
+        theme::HELP,
+        w,
+    );
+    let dimmed = focus.ask.is_some();
+    let mut op = p.clone();
+    if dimmed {
+        op.set_opacity(0.3);
+    }
+    let band = (geo.safe.min.x, left.max.x - 6.0);
+    let bandr = |r: Rect| Rect::from_x_y_ranges(band.0..=band.1, r.y_range());
+    // Bottom-up: Quit, Retry (or the question), rule, Settings, Resume.
+    let mut yb = bottom;
+    let dangers: Vec<Item> = items.iter().copied().filter(|i| i.danger()).collect();
+    if let Some(ask) = focus.ask {
+        let need = cm.row * 1.14 * 1.6 + cm.help * 3.4 + 2.0 * cm.row_h;
+        yb -= need;
+        let cmr = CardMetrics {
+            row_h: cm.row_h,
+            ..*cm
+        };
+        confirm_block(ui, p, x, yb, w, band, ask, &cmr, focus, lay, words, out);
+        yb -= 24.0;
+        theme::rule(p, egui::Rangef::new(x, x + w), yb + 8.0);
+    } else if !dangers.is_empty() {
+        for &it in dangers.iter().rev() {
+            yb -= cm.row_h;
+            let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
+            item_row(
+                ui,
+                p,
+                r,
+                bandr(r),
+                it,
+                cm.row * 0.94,
+                cm,
+                m,
+                model,
+                focus,
+                lay,
+                words,
+                false,
+                out,
+            );
+        }
+        yb -= 24.0;
+        theme::rule(p, egui::Rangef::new(x, x + w), yb + 8.0);
+    }
+    yb -= cm.row_h;
+    let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
+    item_row(
+        ui,
+        &op,
+        r,
+        bandr(r),
+        Item::Settings,
+        cm.row,
+        cm,
+        m,
+        model,
+        focus,
+        lay,
+        words,
+        dimmed,
+        out,
+    );
+    yb -= cm.resume_h;
+    let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.resume_h));
+    item_row(
+        ui,
+        &op,
+        r,
+        bandr(r),
+        Item::Resume,
+        cm.resume,
+        cm,
+        m,
+        model,
+        focus,
+        lay,
+        words,
+        dimmed,
+        out,
+    );
+    // Quick settings.
+    let rx = right.min.x + 44.0;
+    let rw = geo.safe.max.x - 64.0 - rx;
+    let rband = (right.min.x + 6.0, geo.screen.max.x);
+    let quick: Vec<Item> = items
+        .iter()
+        .copied()
+        .filter(|i| {
+            matches!(
+                i,
+                Item::Volume | Item::Hitboxes | Item::Speed | Item::Screenshot | Item::TouchLayout
+            )
+        })
+        .collect();
+    let lab = cm.row;
+    let lab_h = lab * 1.75;
+    let height = |it: Item| match it {
+        Item::Volume => lab_h + 120.0 + 40.0 + 16.0,
+        Item::Hitboxes | Item::Speed => lab_h + 120.0 + 16.0,
+        _ => 120.0,
+    };
+    let total: f32 = quick.iter().map(|&i| height(i)).sum();
+    let mut y = bottom - total;
+    let cap = p.layout_no_wrap(
+        words.ui("quick_settings").to_string(),
+        theme::serif(cm.cap * 0.95),
+        theme::ACCENT,
+    );
+    let ch = cap.size().y;
+    theme::caption_text(p, pos2(rx, y - ch - 24.0), cap);
+    theme::rule(&op, egui::Rangef::new(rx, rx + rw), y - 12.0);
+    for it in quick {
+        let h = height(it);
+        let r = Rect::from_min_size(pos2(rx, y), vec2(rw, h));
+        let b = Rect::from_x_y_ranges(rband.0..=rband.1, r.y_range());
+        let id = Id::unique(("quick", it as u8));
+        let resp = ui.interact(
+            b,
+            id,
+            if dimmed {
+                Sense::hover()
+            } else {
+                Sense::click()
+            },
+        );
+        if !dimmed && resp.contains_pointer() && pointer_moved(ui) {
+            focus.item = it;
+        }
+        let focused = !dimmed && focus.item == it;
+        if focused {
+            theme::focus(&op, b, 5.0, resp.is_pointer_button_down_on());
+        }
+        let color = if focused { theme::TEXT_HI } else { theme::TEXT };
+        let ctl = item_ctl(it, m, model, words.lang);
+        if matches!(ctl, Ctl::None) {
+            label(&op, r, words.item(it), theme::serif(lab), color, focused);
+            if it == Item::TouchLayout {
+                theme::chevron(&op, pos2(r.max.x + 20.0, r.center().y), lab, theme::HELP);
+            }
+            if resp.clicked() {
+                out.push(focus.activate(it, m));
+            }
+        } else {
+            label(
+                &op,
+                Rect::from_min_size(r.min, vec2(rw, lab_h)),
+                words.item(it),
+                theme::serif(lab),
+                color,
+                focused,
+            );
+            let cells = Rect::from_min_size(pos2(rx, y + lab_h), vec2(rw, 120.0));
+            let st = CtlStyle {
+                size: lab,
+                num: lab,
+                cells: true,
+                right: true,
+                indent: 0.0,
+                track: 0.0,
+                numw: 0.0,
+                gap: lab,
+                cell_w: 120.0,
+            };
+            let res = if let Ctl::Slider { frac, text, unit } = &ctl {
+                phone_volume(ui, &op, id, cells, *frac, text, unit, focused, lab)
+            } else {
+                theme::value_ctl(ui, &op, id, cells, &ctl, focused, &st)
+            };
+            if let Some(o) = res.filter(|_| !dimmed) {
+                focus.item = it;
+                out.push(item_input(it, o, m, model));
+            } else if resp.clicked() {
+                out.push(focus.activate(it, m));
+            }
+            if it != *items.last().unwrap_or(&it) {
+                theme::rule(&op, egui::Rangef::new(rx, rx + rw), y + h - 8.0);
+            }
+        }
+        y += h;
+    }
+}
+
+// The phone's volume: ◀ number ▶ cells, the track below.
+#[expect(clippy::too_many_arguments, reason = "one painted control")]
+fn phone_volume(
+    ui: &Ui,
+    p: &Painter,
+    id: Id,
+    cells: Rect,
+    frac: f32,
+    text: &str,
+    unit: &str,
+    focused: bool,
+    size: f32,
+) -> Option<CtlOut> {
+    let mut out = None;
+    for (dir, r) in [
+        (-1, Rect::from_min_size(cells.min, vec2(120.0, 120.0))),
+        (
+            1,
+            Rect::from_min_size(pos2(cells.max.x - 120.0, cells.min.y), vec2(120.0, 120.0)),
+        ),
+    ] {
+        let resp = ui.interact(r, id.with(("vstep", dir)), Sense::click());
+        let fill = if resp.is_pointer_button_down_on() || focused {
+            theme::PRESSED
+        } else {
+            theme::CELL
+        };
+        p.rect_filled(r, 0.0, fill);
+        theme::arrow(
+            p,
+            r.center(),
+            20.0,
+            dir > 0,
+            if focused { theme::TEXT_HI } else { theme::TEXT },
+        );
+        if resp.clicked() {
+            out = Some(CtlOut::Step(dir));
+        }
+    }
+    let n = p.layout_no_wrap(text.to_string(), theme::sans(size), theme::TEXT_HI);
+    let u = p.layout_no_wrap(unit.to_string(), theme::sans(size * 0.7), theme::HELP);
+    let tw = n.size().x
+        + if unit.is_empty() {
+            0.0
+        } else {
+            u.size().x + 4.0
+        };
+    let c = cells.center();
+    let ny = c.y - n.size().y / 2.0;
+    let nx = c.x - tw / 2.0;
+    let nw = n.size().x;
+    theme::shadowed(p, pos2(nx, ny), n, theme::TEXT_HI);
+    theme::shadowed(p, pos2(nx + nw + 4.0, ny + size * 0.25), u, theme::HELP);
+    let ty = cells.max.y + 20.0;
+    let span = egui::Rangef::new(cells.min.x, cells.max.x);
+    theme::track(p, span, ty, frac, focused);
+    let tr = Rect::from_x_y_ranges(span, ty - 16.0..=ty + 16.0);
+    let resp = ui.interact(tr, id.with("vtrack"), Sense::click_and_drag());
+    if (resp.clicked() || resp.dragged())
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        out = Some(CtlOut::Frac(
+            ((pos.x - tr.min.x) / tr.width()).clamp(0.0, 1.0),
+        ));
+    }
+    out
+}
+
+// Settings page metrics of one shape.
+struct PageMetrics {
+    head: f32,
+    cap: f32,
+    tab: f32,
+    row_h: f32,
+    row: f32,
+    help: f32,
+    hint: f32,
+    label_w: f32,
+}
+
+// The settings page's frame: the rows panel, its text column and where the rows start; the back / tab clicks.
+struct Head {
+    panel: Rect,
+    x: f32,
+    w: f32,
+    list_top: f32,
+    back: bool,
+    tab: Option<usize>,
+}
+
+// Phone: ‹ back and the vertical tab rail in the left bar, the rows panel over the HUD.
+#[expect(clippy::too_many_arguments, reason = "one painted block")]
+fn rail_head(
+    ui: &Ui,
+    p: &Painter,
+    m: &MenuState<'_>,
+    tabs: &[crate::settings::Group],
+    focus: &Focus,
+    lay: &Layout,
+    geo: &Geo,
+    words: &Words,
+    pm: &PageMetrics,
+) -> Head {
+    let top = geo.safe.min.y;
+    let f = |mock, dp| lay.font(mock, dp);
+    let p = p.clone();
+    let left = Rect::from_x_y_ranges(geo.screen.min.x..=geo.frame.min.x, geo.screen.y_range());
+    theme::lacquer(&p, left, Edge::Right);
+    let lx = geo.safe.min.x + 20.0;
+    let lw = left.max.x - 36.0 - lx;
+    let back = Rect::from_min_size(pos2(lx, top + 24.0), vec2(lw, 120.0));
+    let resp = ui.interact(back, Id::unique("settings back"), Sense::click());
+    let chev = p.layout_no_wrap("‹".into(), theme::serif(pm.row * 1.14), theme::HELP);
+    let cw = chev.size().x;
+    theme::shadowed(
+        &p,
+        pos2(lx, back.center().y - chev.size().y / 2.0),
+        chev,
+        theme::HELP,
+    );
+    label(
+        &p,
+        Rect::from_min_max(pos2(lx + cw + 14.0, back.min.y), back.max),
+        words.ui("paused_title"),
+        theme::serif(pm.row * 1.14),
+        theme::TEXT,
+        false,
+    );
+    let back_clicked = resp.clicked();
+    theme::rule(&p, egui::Rangef::new(lx, lx + lw), top + 156.0);
+    let dev_y = geo.safe.max.y - 80.0;
+    let n = tabs.len().max(1) as f32;
+    let th = 120.0f32.min((dev_y - 16.0 - (top + 168.0)) / n);
+    let mut clicked = None;
+    for (i, &g) in tabs.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(lx, top + 168.0 + th * i as f32), vec2(lw, th));
+        let sel = i == focus.tab;
+        let resp = ui.interact(r, Id::unique(("tab", i)), Sense::click());
+        if focus.row == 0 && sel {
+            theme::focus(
+                &p,
+                Rect::from_x_y_ranges(geo.safe.min.x..=left.max.x - 6.0, r.y_range()),
+                5.0,
+                false,
+            );
+        }
+        let col = if sel { theme::TEXT_HI } else { theme::HELP };
+        let g = p.layout(
+            i18n::group_title(words.lang, g).to_string(),
+            theme::serif(pm.tab),
+            col,
+            lw,
+        );
+        let gp = pos2(lx, r.center().y - g.size().y / 2.0);
+        let (gw, gh) = (
+            g.rows.last().map_or(g.size().x, |row| row.rect().width()),
+            g.size().y,
+        );
+        theme::outlined(&p, gp, g, col, false);
+        if sel {
+            p.hline(
+                egui::Rangef::new(lx, lx + gw),
+                gp.y + gh + 8.0,
+                egui::Stroke::new(3.0, theme::ACCENT),
+            );
+        }
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+    }
+    sans_text(
+        &p,
+        pos2(lx, dev_y),
+        &words.device(m, lay),
+        f(19.0, 12.0),
+        theme::HELP,
+        lw,
+    );
+    let tab_clicked = clicked;
+    let px = geo.frame.min.x + 416.0 * geo.gs;
+    let panel = Rect::from_x_y_ranges(px..=geo.screen.max.x, geo.screen.y_range());
+    theme::lacquer(&p, panel, Edge::Left);
+    let x = px + 48.0;
+    let w = geo.safe.max.x - 64.0 - x;
+    let list_top = top + 24.0;
+    Head {
+        panel,
+        x,
+        w,
+        list_top,
+        back: back_clicked,
+        tab: tab_clicked,
+    }
+}
+
+// Desktop: heading, "X ‹ Pause", the underline tabs with Q / E at their ends.
+#[expect(clippy::too_many_arguments, reason = "one painted block")]
+fn wide_head(
+    ui: &Ui,
+    p: &Painter,
+    m: &MenuState<'_>,
+    tabs: &[crate::settings::Group],
+    focus: &Focus,
+    lay: &Layout,
+    geo: &Geo,
+    words: &Words,
+    pm: &PageMetrics,
+) -> Head {
+    let top = geo.safe.min.y;
+    let f = |mock, dp| lay.font(mock, dp);
+    let p = p.clone();
+    let px = if lay.shape == Shape::Pillar {
+        geo.frame.min.x + 421.33 * geo.gs
+    } else {
+        let pw = 972.0f32.min(geo.safe.width() - 32.0);
+        geo.safe.center().x - pw / 2.0
+    };
+    let panel = Rect::from_x_y_ranges(px..=geo.screen.max.x, geo.screen.y_range());
+    theme::lacquer(&p, panel, Edge::Left);
+    let x = px + 52.0;
+    let w = geo.safe.max.x - 44.0 - x;
+    theme::heading(
+        &p,
+        pos2(x, top + 30.0),
+        words.ui("settings_heading"),
+        words.ui("settings_caption"),
+        pm.head,
+        pm.cap,
+    );
+    // Back target: "X ‹ Pause" at the top right.
+    let bt = format!("‹ {}", words.ui("paused_title"));
+    let g = p.layout_no_wrap(bt, theme::sans(f(17.0, 11.0)), theme::HELP);
+    let keyed = m.pad.is_some() || !lay.touch;
+    let k = p.layout_no_wrap(
+        if m.pad.is_some() { "B" } else { "X" }.into(),
+        theme::sans(f(17.0, 11.0)),
+        theme::KEYCAP,
+    );
+    let gw = g.size().x;
+    let kw = if keyed { k.size().x + 10.0 } else { 0.0 };
+    let bx = x + w - gw;
+    let by = top + 48.0;
+    let br = Rect::from_min_size(pos2(bx - kw, by - 8.0), vec2(gw + kw, g.size().y + 16.0));
+    let back_clicked = ui
+        .interact(br, Id::unique("settings back"), Sense::click())
+        .clicked();
+    if keyed {
+        theme::shadowed(&p, pos2(bx - kw, by), k, theme::KEYCAP);
+    }
+    theme::shadowed(&p, pos2(bx, by), g, theme::HELP);
+    // Tabs with Q / E at the ends (keyboard), LB / RB (pad), shrunk to fit.
+    let ty = top + 126.0;
+    let labels: Vec<&str> = tabs
+        .iter()
+        .map(|&g| i18n::group_title(words.lang, g))
+        .collect();
+    let ends = if m.pad.is_some() {
+        ("LB", "RB")
+    } else if lay.touch {
+        ("", "")
+    } else {
+        ("Q", "E")
+    };
+    let mut size = pm.tab;
+    let gap = |s: f32| s * 1.4;
+    let width = |s: f32| -> f32 {
+        let words_w: f32 = labels
+            .iter()
+            .map(|l| {
+                p.layout_no_wrap((*l).to_string(), theme::serif(s), theme::TEXT)
+                    .size()
+                    .x
+            })
+            .sum();
+        words_w
+            + gap(s) * (labels.len() as f32 + 1.0)
+            + if ends.0.is_empty() {
+                0.0
+            } else {
+                2.0 * s * 1.3
+            }
+    };
+    while size > 13.0 && width(size) > w {
+        size -= 1.0;
+    }
+    let mut tx = x;
+    let hint_size = (size * 0.8).max(11.0);
+    if !ends.0.is_empty() {
+        let g = p.layout_no_wrap(ends.0.to_string(), theme::sans(hint_size), theme::KEYCAP);
+        let gw = g.size().x;
+        theme::shadowed(
+            &p,
+            pos2(tx, ty + (size - hint_size) * 0.75),
+            g,
+            theme::KEYCAP,
+        );
+        tx += gw + gap(size) * 0.7;
+    }
+    let mut clicked = None;
+    for (i, l) in labels.iter().enumerate() {
+        let sel = i == focus.tab;
+        let col = if sel { theme::TEXT_HI } else { theme::HELP };
+        let g = p.layout_no_wrap((*l).to_string(), theme::serif(size), col);
+        let (gw, gh) = (g.size().x, g.size().y);
+        let r = Rect::from_min_size(pos2(tx - 8.0, ty - 10.0), vec2(gw + 16.0, gh + 24.0));
+        if focus.row == 0 && sel {
+            theme::focus(&p, r, 3.0, false);
+        }
+        theme::outlined(&p, pos2(tx, ty), g, col, false);
+        if sel {
+            p.hline(
+                egui::Rangef::new(tx, tx + gw),
+                ty + gh + 9.0,
+                egui::Stroke::new(2.0, theme::ACCENT),
+            );
+        }
+        if ui
+            .interact(r, Id::unique(("tab", i)), Sense::click())
+            .clicked()
+        {
+            clicked = Some(i);
+        }
+        tx += gw + gap(size);
+    }
+    if !ends.1.is_empty() {
+        let g = p.layout_no_wrap(ends.1.to_string(), theme::sans(hint_size), theme::KEYCAP);
+        theme::shadowed(
+            &p,
+            pos2(tx - gap(size) * 0.3, ty + (size - hint_size) * 0.75),
+            g,
+            theme::KEYCAP,
+        );
+    }
+    let tab_clicked = clicked;
+    theme::rule(&p, egui::Rangef::new(x, x + w), ty + 50.0);
+    let list_top = ty + 64.0;
+    Head {
+        panel,
+        x,
+        w,
+        list_top,
+        back: back_clicked,
+        tab: tab_clicked,
+    }
+}
+
+// The settings page: back, heading, tabs, the rows of one tab, "Reset this page…", the help line following the
+// focus, the key hints.
+#[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
+fn settings_ui(
+    ui: &mut Ui,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    lay: &Layout,
+    geo: &Geo,
+    words: &Words,
+) {
+    let p = ui.painter().clone();
+    let tabs = model.live_tabs();
+    focus.tab = focus.tab.min(tabs.len().saturating_sub(1));
+    let split = lay.shape == Shape::Split;
+    let f = |mock, dp| lay.font(mock, dp);
+    let ru = words.lang == Lang::Ru;
+    let pm = if split {
+        PageMetrics {
+            head: 0.0,
+            cap: 0.0,
+            tab: f(if ru { 28.0 } else { 30.0 }, 14.0),
+            row_h: 120.0,
+            row: f(28.0, 14.0),
+            help: f(24.0, 12.0),
+            hint: f(16.0, 12.0),
+            label_w: 330.0,
+        }
+    } else {
+        PageMetrics {
+            head: f(40.0, 18.0),
+            cap: f(16.0, 11.0),
+            tab: f(if ru { 20.0 } else { 22.0 }, 13.0),
+            row_h: 70.0,
+            row: f(25.0, 14.0),
+            help: f(19.0, 12.0),
+            hint: f(16.0, 11.0),
+            label_w: 440.0,
+        }
+    };
+    let head = if split {
+        rail_head(ui, &p, m, &tabs, focus, lay, geo, words, &pm)
+    } else {
+        wide_head(ui, &p, m, &tabs, focus, lay, geo, words, &pm)
+    };
+    let Head {
+        panel,
+        x,
+        w,
+        list_top,
+        back: back_clicked,
+        tab: tab_clicked,
+    } = head;
+    if back_clicked {
+        focus.back();
+        return;
+    }
+    if let Some(i) = tab_clicked {
         focus.tab = i;
         focus.row = focus.row.min(1);
+        focus.scroll = 0.0;
+        focus.reset = false;
     }
-    if focus.row == 0
-        && let Some(r) = sel
-    {
-        theme::ring(ui, r, true);
-    }
-    ui.separator();
     let Some(&g) = tabs.get(focus.tab) else {
         return;
     };
     let keys = model.live_rows(g);
-    focus.row = focus.row.min(keys.len());
-    let most = tabs
-        .iter()
-        .map(|&g| model.live_rows(g).len())
-        .max()
-        .unwrap_or(0);
-    let row_h = t + ui.spacing().item_spacing.y;
-    // Header, tabs and footer as measured last pass (help lines vary).
-    let chrome_id = Id::unique("port menu chrome");
-    let chrome = ui
-        .data(|d| d.get_temp::<f32>(chrome_id))
-        .unwrap_or(t * 3.0 + theme::SMALL * 5.0);
-    let list_h = (max_h - chrome).max(t);
-    let width = ui.available_width();
-    let ctrl_w = (width * 0.5).min(320.0);
-    let label_w = width - ctrl_w - 2.0 * theme::S - ui.spacing().item_spacing.x * 2.0;
-    let list = egui::ScrollArea::vertical()
-        .id_salt(g.id())
-        .max_height(list_h)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.set_min_height((most as f32 * row_h).min(list_h));
-            for (k, key) in keys.iter().enumerate() {
-                let r = model.menu_row_ui(ui, key, lang, label_w, ctrl_w);
-                let rect = egui::Rect::from_min_max(
-                    r.rect.min,
-                    egui::pos2(ui.max_rect().max.x, r.rect.max.y),
-                );
-                if ui.rect_contains_pointer(rect) && moved {
-                    focus.row = k + 1;
-                }
-                if focus.row == k + 1 {
-                    theme::ring(ui, rect, true);
-                    if focus.moved {
-                        r.scroll_to_me(None);
-                    }
-                }
-            }
-        });
-    ui.separator();
-    let help = focus.row.checked_sub(1).and_then(|i| keys.get(i).copied());
-    let help_h = theme::SMALL * 2.6;
-    ui.allocate_ui_with_layout(
-        vec2(width, help_h),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.set_min_size(vec2(width, help_h));
-            if let Some(e) = help.and_then(crate::settings::find) {
-                ui.add(egui::Label::new(theme::hint(i18n::help(lang, e))).wrap());
-            }
-        },
-    );
-    if !lay.touch || m.pad.is_some() {
-        let keys = format!(
-            "{} · {}",
-            i18n::ui(lang, "nav_hint"),
-            i18n::ui(lang, "tabs_hint")
-        );
-        ui.add(egui::Label::new(theme::hint(keys)).wrap());
+    focus.row = focus.row.min(keys.len() + 1);
+    // Bottom block: help line (and on desktop the hints and device line).
+    let help = match focus.row {
+        0 => "",
+        r if r <= keys.len() => model.row_text(keys[r - 1], words.lang).1,
+        _ => words.ui("help_reset_page"),
+    };
+    let help_g = p.layout(sentence(help), theme::sans(pm.help), theme::HELP_HI, w);
+    let help_h = help_g.size().y.max(pm.help * 3.0);
+    let bottom = if split {
+        geo.safe.max.y - 24.0 - help_h - 30.0
+    } else {
+        geo.safe.max.y - 80.0 - help_h - 28.0
+    };
+    // Rows: label column, control column; scrolled to keep the focused row in view.
+    let n = keys.len() + 1;
+    let rh = pm.row_h;
+    let list = Rect::from_x_y_ranges(panel.min.x..=panel.max.x, list_top..=bottom);
+    let content = rh * n as f32 + 12.0;
+    let max_scroll = (content - list.height()).max(0.0);
+    if ui.rect_contains_pointer(list) {
+        let d = ui.input(|i| i.smooth_scroll_delta.y);
+        focus.scroll -= d;
     }
-    let used = ui.cursor().min.y - top - list.inner_rect.height();
-    ui.data_mut(|d| d.insert_temp(chrome_id, used));
-}
-
-// "Hitboxes" over "Off", the word from the settings row.
-fn hitboxes_label(lang: Lang, m: super::hitbox::Hitboxes) -> String {
-    let e = crate::settings::find("hitboxes").expect("hitboxes row");
-    let word = i18n::word(lang, e, m.id()).unwrap_or(m.id());
-    format!("{}\n{word}", i18n::ui(lang, "hitboxes_short"))
+    if focus.moved && focus.row > 0 {
+        let fy = rh * (focus.row - 1) as f32 + if focus.row > keys.len() { 12.0 } else { 0.0 };
+        if fy < focus.scroll {
+            focus.scroll = fy;
+        } else if fy + rh > focus.scroll + list.height() {
+            focus.scroll = fy + rh - list.height();
+        }
+    }
+    focus.scroll = focus.scroll.clamp(0.0, max_scroll);
+    let lp = p.with_clip_rect(list);
+    let moved = pointer_moved(ui);
+    let label_w = pm.label_w.min(w * 0.48);
+    let st = CtlStyle {
+        size: pm.row * 0.96,
+        num: if split { pm.row } else { pm.row * 0.8 },
+        cells: split,
+        right: false,
+        indent: if split { 0.0 } else { 32.0 },
+        track: if split {
+            0.0
+        } else {
+            (w - label_w - 166.0).clamp(80.0, 270.0)
+        },
+        numw: 100.0,
+        gap: pm.row * 1.2,
+        cell_w: if split { 120.0 } else { 0.0 },
+    };
+    let ui_clip = ui.clip_rect();
+    ui.set_clip_rect(list);
+    let mut y = list.min.y - focus.scroll;
+    for (k, key) in keys.iter().enumerate() {
+        let r = Rect::from_min_size(pos2(x, y), vec2(w, rh));
+        let b = Rect::from_x_y_ranges(panel.min.x + 6.0..=panel.max.x, r.y_range());
+        let id = Id::unique(("row", *key));
+        let resp = ui.interact(b.intersect(list), id, Sense::click());
+        if resp.contains_pointer() && moved {
+            focus.row = k + 1;
+            focus.reset = false;
+        }
+        let focused = focus.row == k + 1;
+        if focused {
+            theme::focus(
+                &lp,
+                b,
+                if split { 5.0 } else { 4.0 },
+                resp.is_pointer_button_down_on(),
+            );
+        }
+        let (lab, _) = model.row_text(key, words.lang);
+        let col = if focused { theme::TEXT_HI } else { theme::TEXT };
+        label(
+            &lp,
+            Rect::from_min_size(r.min, vec2(label_w - 16.0, rh)),
+            lab,
+            theme::serif(pm.row),
+            col,
+            focused,
+        );
+        let ctl = model.ctl(key, words.lang);
+        let cr = Rect::from_min_max(pos2(x + label_w, r.min.y), r.max);
+        if let Some(o) = theme::value_ctl(ui, &lp, id, cr, &ctl, focused, &st) {
+            focus.row = k + 1;
+            model.ctl_input(key, o);
+        } else if resp.clicked() {
+            focus.row = k + 1;
+            model.activate(key);
+        }
+        y += rh;
+    }
+    y += 4.0;
+    theme::rule(&lp, egui::Rangef::new(x, x + w), y);
+    y += 8.0;
+    {
+        let r = Rect::from_min_size(pos2(x, y), vec2(w, rh));
+        let b = Rect::from_x_y_ranges(panel.min.x + 6.0..=panel.max.x, r.y_range());
+        let resp = ui.interact(b.intersect(list), Id::unique("reset page"), Sense::click());
+        if resp.contains_pointer() && moved {
+            focus.row = keys.len() + 1;
+        }
+        let focused = focus.row == keys.len() + 1;
+        if focused {
+            theme::focus(
+                &lp,
+                b,
+                if split { 5.0 } else { 4.0 },
+                resp.is_pointer_button_down_on(),
+            );
+        }
+        let text = if focus.reset {
+            words.ui("reset_page_ask")
+        } else {
+            words.ui("reset_page")
+        };
+        let col = if focus.reset {
+            theme::QUESTION
+        } else if focused {
+            theme::TEXT_HI
+        } else {
+            theme::DANGER
+        };
+        label(&lp, r, text, theme::serif(pm.row), col, focused);
+        if resp.clicked() {
+            focus.row = keys.len() + 1;
+            if std::mem::take(&mut focus.reset) {
+                model.reset_rows(&keys);
+            } else {
+                focus.reset = true;
+            }
+        }
+    }
+    ui.set_clip_rect(ui_clip);
+    let by = bottom + 14.0;
+    theme::rule(&p, egui::Rangef::new(x, x + w), by);
+    theme::shadowed(&p, pos2(x, by + 14.0), help_g, theme::HELP_HI);
+    if !split {
+        let hy = geo.safe.max.y - 60.0;
+        draw_hints(
+            &p,
+            pos2(x, hy),
+            &hint_items(words, m, lay, &Hints::Settings),
+            pm.hint,
+        );
+        let d = p.layout_no_wrap(words.device(m, lay), theme::sans(pm.hint), theme::HELP);
+        let dw = d.size().x;
+        theme::shadowed(&p, pos2(x + w - dw, hy + 2.0), d, theme::HELP);
+    }
 }
 
 fn paint(
@@ -1110,14 +2537,26 @@ pub struct Shot {
     pub speed: Option<(u32, u32)>,
     pub no_saves: bool,
     pub status: Option<String>,
-    // Key presses before the shot (e.g. into the settings page).
+    pub stage: Option<(String, String)>,
+    // The settings page open at this tab.
+    pub settings: Option<usize>,
+    // The Retry / Quit question open.
+    pub ask: Option<ShotAsk>,
+    // Key presses before the shot.
     pub navs: Vec<Nav>,
 }
 
-// Tools: the safe area to capture the game frame in, so it sits where the menu's sheet leaves it.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn picture_safe(safe: SafeArea, size: (u32, u32), shot: &Shot) -> SafeArea {
-    layout(safe, size, shot.density.max(1.0), shot.touch).picture
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShotAsk {
+    Retry,
+    Quit,
+}
+
+// Tools: the safe area to capture the game frame in, so it sits where the menu's pillar leaves it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn picture_safe(safe: SafeArea, size: (u32, u32), shot: &Shot, integer: bool) -> SafeArea {
+    layout(safe, size, shot.density.max(1.0), shot.touch, integer).picture
 }
 
 // Tools: the menu over `frame` (a w×h picture of the game as the menu shows it, see `picture_safe`) on a headless
@@ -1170,8 +2609,13 @@ pub fn render_image(
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let ctx = new_ctx(s);
     let mut model = launcher::Model::port_menu(s, shot.touch);
-    let lay = layout(safe, (w, h), shot.density.max(1.0), shot.touch);
-    style(&ctx, &lay);
+    let lay = layout(
+        safe,
+        (w, h),
+        shot.density.max(1.0),
+        shot.touch,
+        s.blit.integer,
+    );
     let ppp = lay.ppp;
     let (mut renderer, mut pending) = (None, egui::TexturesDelta::default());
     let cheats = s.active_cheats();
@@ -1184,8 +2628,25 @@ pub fn render_image(
         speed: shot.speed,
         no_saves: shot.no_saves,
         quit: shot.quit,
+        stage: shot.stage.as_ref(),
     };
-    let mut focus = Focus::default();
+    let mut focus = Focus {
+        split: lay.shape == Shape::Split,
+        ..Focus::default()
+    };
+    if let Some(t) = shot.settings {
+        focus.activate(Item::Settings, &m);
+        focus.tab = t;
+    }
+    if let Some(a) = shot.ask {
+        focus.activate(
+            match a {
+                ShotAsk::Retry => Item::Retry,
+                ShotAsk::Quit => Item::Quit,
+            },
+            &m,
+        );
+    }
     for &n in &shot.navs {
         focus.nav(n, &m, &mut model);
     }
@@ -1211,10 +2672,10 @@ pub fn render_image(
             .entry(egui::ViewportId::ROOT)
             .or_default()
             .native_pixels_per_point = Some(ppp);
+        focus.moved = i == 0;
         let out = ctx.run_pass(raw, |ctx| {
             menu_ui(ctx, &m, &mut model, &mut focus, &lay);
         });
-        focus.moved = false;
         pending.append(out.textures_delta);
         if i + 1 < PASSES {
             continue;
@@ -1245,11 +2706,12 @@ mod tests {
             pad: None,
             touch,
             cheats: &[],
-            hitboxes: super::super::hitbox::Hitboxes::Off,
+            hitboxes: Hitboxes::Off,
             status: None,
             speed,
             no_saves: false,
             quit,
+            stage: None,
         }
     }
 
@@ -1284,102 +2746,106 @@ mod tests {
     fn resume() {
         let (m, mut model) = (state(true, false, None), model(false));
         let mut f = Focus::default();
-        assert_eq!(f.clamp(&card_rows(&m)), Item::Resume);
+        assert_eq!(f.clamp(&f.items(&m)), Item::Resume);
         assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Resume]);
         let mut f = Focus::default();
         assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
     }
 
-    // Quit to title asks first: the second press quits; moving away or Back cancels the question.
+    // Retry… and Quit… ask in place with "Keep playing" focused: Z there or X cancels back to the item; ↓ Z acts.
     #[test]
-    fn quit_confirm() {
+    fn run_confirms() {
         let (m, mut model) = (state(true, false, None), model(false));
-        let mut f = Focus::default();
-        let d = run(&mut f, &m, &mut model, &[Nav::Down, Nav::Activate]);
-        assert_eq!(d, [Do::Nothing, Do::Nothing]);
-        assert!(f.confirm);
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Quit]);
-        let mut f = Focus::default();
-        run(
-            &mut f,
-            &m,
-            &mut model,
-            &[Nav::Down, Nav::Activate, Nav::Up, Nav::Down],
-        );
-        assert!(!f.confirm);
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Nothing]);
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Nothing]);
-        assert!(!f.confirm);
-        assert_eq!(f.page, Page::Card);
-        let rows = card_rows(&m);
-        let mut f = Focus::default();
-        assert_eq!(f.activate(Item::Quit, &rows), Do::Nothing);
-        assert_eq!(f.activate(Item::Quit, &rows), Do::Quit);
-        assert!(
-            !card_rows(&state(false, false, None))
-                .concat()
-                .contains(&Item::Quit)
-        );
+        for (item, ask, act) in [
+            (Item::Retry, Ask::Retry, Do::Retry),
+            (Item::Quit, Ask::Quit, Do::Quit),
+        ] {
+            let mut f = Focus::default();
+            assert_eq!(f.activate(item, &m), Do::Nothing);
+            assert_eq!((f.ask, f.yes), (Some(ask), false));
+            assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Nothing]);
+            assert_eq!((f.ask, f.item), (None, item));
+            f.activate(item, &m);
+            assert!(f.back());
+            assert_eq!((f.ask, f.item), (None, item));
+            f.activate(item, &m);
+            assert_eq!(
+                run(&mut f, &m, &mut model, &[Nav::Down, Nav::Activate]),
+                [Do::Nothing, act]
+            );
+            assert_eq!(f.ask, None);
+        }
+        let none = card_items(&state(false, false, None), false);
+        assert!(!none.contains(&Item::Quit) && !none.contains(&Item::Retry));
     }
 
-    // The card's focus order, the tiles sharing a row, and Settings › / Back.
+    // The card's focus order on the column / pillar and on the phone; ← / → change values; Settings › / Back.
     #[test]
     fn focus_order_and_settings() {
         let m = state(true, true, Some((1, 1)));
         let mut model = model(true);
-        let rows = card_rows(&m);
+        let items = card_items(&m, false);
         assert_eq!(
-            rows,
+            items,
             [
-                vec![Item::Resume],
-                vec![Item::Quit],
-                vec![Item::Volume],
-                vec![Item::Speed],
-                vec![Item::Hitboxes, Item::Screenshot, Item::TouchLayout],
-                vec![Item::Settings],
+                Item::Resume,
+                Item::Hitboxes,
+                Item::Volume,
+                Item::Speed,
+                Item::Screenshot,
+                Item::TouchLayout,
+                Item::Settings,
+                Item::Retry,
+                Item::Quit,
+            ]
+        );
+        assert_eq!(
+            card_items(&m, true),
+            [
+                Item::Resume,
+                Item::Settings,
+                Item::Retry,
+                Item::Quit,
+                Item::Volume,
+                Item::Hitboxes,
+                Item::Speed,
+                Item::Screenshot,
+                Item::TouchLayout,
             ]
         );
         let mut f = Focus::default();
-        let mut seen = vec![f.clamp(&rows)];
-        for _ in 0..6 {
+        let mut seen = vec![f.clamp(&items)];
+        for _ in 0..9 {
             f.nav(Nav::Down, &m, &mut model);
-            seen.push(f.clamp(&rows));
+            seen.push(f.item);
         }
+        assert_eq!(&seen[..9], &items[..]);
+        assert_eq!(seen[9], Item::Quit);
+        f.item = Item::Hitboxes;
         assert_eq!(
-            seen,
-            [
-                Item::Resume,
-                Item::Quit,
-                Item::Volume,
-                Item::Speed,
-                Item::Hitboxes,
-                Item::Settings,
-                Item::Settings
-            ]
+            run(&mut f, &m, &mut model, &[Nav::Right]),
+            [Do::Hitboxes(Hitboxes::Player)]
         );
-        run(
-            &mut f,
-            &m,
-            &mut model,
-            &[Nav::Up, Nav::Right, Nav::Right, Nav::Right],
-        );
-        assert_eq!(f.clamp(&rows), Item::TouchLayout);
+        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Left]), [Do::Nothing]);
         assert_eq!(
             run(&mut f, &m, &mut model, &[Nav::Activate]),
-            [Do::EditLayout]
+            [Do::Hitboxes(Hitboxes::Player)]
         );
-        run(&mut f, &m, &mut model, &[Nav::Up]);
-        assert_eq!(f.clamp(&rows), Item::Speed);
+        f.item = Item::Speed;
         assert_eq!(
             run(&mut f, &m, &mut model, &[Nav::Right]),
             [Do::Speed((3, 4))]
         );
         let v = model.value_text(VOLUME);
-        run(&mut f, &m, &mut model, &[Nav::Up, Nav::Left]);
-        assert_eq!(f.clamp(&rows), Item::Volume);
+        f.item = Item::Volume;
+        run(&mut f, &m, &mut model, &[Nav::Left]);
         assert_ne!(model.value_text(VOLUME), v);
-        run(&mut f, &m, &mut model, &[Nav::Down, Nav::Down, Nav::Down]);
-        assert_eq!(f.clamp(&rows), Item::Settings);
+        f.item = Item::TouchLayout;
+        assert_eq!(
+            run(&mut f, &m, &mut model, &[Nav::Activate]),
+            [Do::EditLayout]
+        );
+        f.item = Item::Settings;
         run(&mut f, &m, &mut model, &[Nav::Activate]);
         assert_eq!((f.page, f.tab, f.row), (Page::Settings, 0, 1));
         let tabs = model.live_tabs();
@@ -1405,50 +2871,77 @@ mod tests {
         let was = model.value_text("mute_unfocused");
         run(&mut g, &m, &mut model, &[Nav::Activate]);
         assert_ne!(model.value_text("mute_unfocused"), was);
-        // Back returns to the card with Settings › focused; X there closes the menu.
+        // "Reset this page" asks once, then resets the tab's rows.
+        let mut r = Focus {
+            page: Page::Settings,
+            row: keys.len() + 1,
+            ..Focus::default()
+        };
+        run(&mut r, &m, &mut model, &[Nav::Activate]);
+        assert!(r.reset);
+        run(&mut r, &m, &mut model, &[Nav::Activate]);
+        assert!(!r.reset);
+        assert_eq!(model.value_text(VOLUME).as_deref(), Some("100"));
+        assert_eq!(model.value_text("mute_unfocused"), was);
+        // Back returns to the card with Settings focused; X there closes the menu.
         assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Nothing]);
-        assert_eq!((f.page, f.clamp(&rows)), (Page::Card, Item::Settings));
+        assert_eq!((f.page, f.item), (Page::Card, Item::Settings));
         assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
     }
 
-    // Phones: ppp from the density, so 48 pt targets are ≥ 48 dp and text ≥ 14 sp; desktop windows: the OS scale,
-    // growing at most 1.5× with the window; the sheet docks where the letterbox leaves room, the centred card elsewhere.
+    // The value controls a row paints: a slider with its number and unit, Off / On words, the choice words.
     #[test]
-    fn density_and_sheet() {
+    fn row_controls() {
+        let model = model(false);
+        let Ctl::Slider { text, unit, frac } = model.ctl(VOLUME, Lang::En) else {
+            panic!("volume is a slider");
+        };
+        assert_eq!((text.as_str(), unit.as_str(), frac), ("100", "%", 1.0));
+        assert_eq!(
+            model.ctl("mute_unfocused", Lang::En),
+            Ctl::Choices {
+                words: vec!["Off".into(), "On".into()],
+                sel: Some(1)
+            }
+        );
+        let Ctl::Choices { words, sel } = model.ctl("scale_filter", Lang::Ja) else {
+            panic!("scale_filter is a choice");
+        };
+        assert_eq!(words.len(), 3);
+        assert!(sel.is_some());
+    }
+
+    // Phones split the card into the side bars with 48 dp targets; 16:9 desktops dock the pillar and move the
+    // picture left; 4:3 windows put the column over the playfield.
+    #[test]
+    fn shapes_and_scale() {
         let phone_safe = SafeArea {
-            left: 118,
+            left: 112,
             ..SafeArea::default()
         };
-        let phone = layout(phone_safe, (2400, 1080), 2.625, true);
-        assert!(phone.target * phone.ppp >= 48.0 * 2.625);
-        assert!(theme::SMALL * phone.ppp >= 14.0 * 2.625);
-        assert!(phone.sheet);
-        assert!(phone.card_w >= 300.0);
-        let [_, _, pw, ph] = phone.picture.rect(2400, 1080);
-        assert!((pw / 640.0).min(ph / 480.0) >= SHEET_MIN_PICTURE * 2.25);
-        let flat = layout(SafeArea::default(), (2400, 1080), 2.625, true);
-        assert_eq!(flat.picture.right, 960);
-        assert!((flat.card_w - 960.0 / 2.625).abs() < 1.0);
-        let portrait = layout(SafeArea::default(), (1080, 2400), 2.625, true);
-        assert!(!portrait.sheet && portrait.picture == SafeArea::default());
-        assert!(portrait.target * portrait.ppp >= 48.0 * 2.625);
-        let tablet = layout(SafeArea::default(), (2560, 1600), 2.0, true);
-        assert!(tablet.target * tablet.ppp >= 48.0 * 2.0);
-        for (size, sheet) in [
-            ((1280, 960), false),
-            ((800, 600), false),
-            ((640, 480), false),
-            ((1920, 1080), true),
-            ((2560, 1440), true),
-        ] {
-            let l = layout(SafeArea::default(), size, 1.0, false);
-            assert_eq!(l.sheet, sheet, "{size:?}");
-            assert!((1.0..=1.5).contains(&l.ppp), "{size:?}");
-            assert!(l.card_w * l.ppp <= size.0 as f32);
+        let phone = layout(phone_safe, (2400, 1080), 2.625, true, false);
+        assert_eq!(phone.shape, Shape::Split);
+        assert!(120.0 * phone.ppp >= 48.0 * 2.625 - 0.01);
+        assert!(phone.font(24.0, 12.0) * phone.ppp >= 12.0 * 2.625 - 0.01);
+        assert_eq!(phone.picture, phone_safe);
+        let portrait = layout(SafeArea::default(), (1080, 2400), 2.625, true, false);
+        assert_eq!(portrait.shape, Shape::Column);
+        assert!(120.0 * portrait.ppp >= 48.0 * 2.625 - 0.01);
+        let hd = layout(SafeArea::default(), (1920, 1080), 1.0, false, false);
+        assert_eq!(hd.shape, Shape::Pillar);
+        assert!((hd.ppp - 1.0).abs() < 1e-4);
+        assert_eq!(hd.picture.right, 480);
+        assert_eq!(hd.frame, [0.0, 0.0, 1440.0, 1080.0]);
+        let qhd = layout(SafeArea::default(), (2560, 1440), 1.0, false, false);
+        assert_eq!(qhd.shape, Shape::Pillar);
+        assert_eq!(qhd.picture.right, 640);
+        for size in [(1280, 960), (800, 600), (640, 480)] {
+            let l = layout(SafeArea::default(), size, 1.0, false, false);
+            assert_eq!(l.shape, Shape::Column, "{size:?}");
+            assert_eq!(l.picture, SafeArea::default());
         }
-        assert_eq!(
-            layout(SafeArea::default(), (1280, 960), 2.0, false).ppp,
-            2.0
+        assert!(
+            (layout(SafeArea::default(), (1280, 960), 1.0, false, false).ppp - 1.0).abs() < 1e-4
         );
     }
 }

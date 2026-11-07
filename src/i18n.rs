@@ -178,18 +178,62 @@ pub const UI: &[(&str, &str)] = &[
     ("port_menu", "Port menu"),
     ("paused", "the game is paused"),
     ("resume", "Resume"),
-    ("paused_title", "Paused"),
+    ("paused_title", "Pause"),
     ("volume", "Volume"),
-    ("quit_confirm", "Quit to title? Press again"),
-    ("settings_page", "Settings ›"),
-    ("touch_layout_short", "Touch layout"),
-    ("hitboxes_short", "Hitboxes"),
-    ("nav_hint", "Arrows / d-pad · Z / A: select · X / B: back"),
-    ("tabs_hint", "Q / E or LB / RB: tabs"),
-    ("quit_title", "Quit to title"),
-    ("key_back", "Back"),
-    ("controller", "Controller: {name}"),
-    ("no_controller", "none"),
+    ("quit_title", "Quit to title…"),
+    ("stage_line", "Stage {stage} · {difficulty}"),
+    ("settings_heading", "Settings"),
+    ("settings_caption", "Port options"),
+    ("retry_title", "Give up and retry…"),
+    ("quit_ask", "Quit to title?"),
+    ("retry_ask", "Give up and retry?"),
+    ("quit_note", "This run ends here. Its replay is not saved."),
+    (
+        "retry_note",
+        "This run starts again from the beginning. Its replay is not saved.",
+    ),
+    ("keep_playing", "Keep playing"),
+    ("quit_do", "Quit to title"),
+    ("retry_do", "Retry"),
+    ("quick_settings", "Quick settings"),
+    ("help_resume", "Close this menu and return to the stage."),
+    ("help_screenshot", "Save a PNG picture of the paused game."),
+    (
+        "help_settings",
+        "Sound, display, accessibility and language options.",
+    ),
+    ("help_touch_layout", "Move and resize the touch controls."),
+    (
+        "help_speed",
+        "Game speed: slow motion for practice, or the replay speed.",
+    ),
+    ("help_retry", "Give up this run and start it again."),
+    ("help_quit", "End this run and go back to the title screen."),
+    ("help_keep", "Go back to the pause menu."),
+    ("help_play", "Start the game with these settings."),
+    ("reset_page", "Reset this page…"),
+    ("reset_page_ask", "Reset this page? Press again"),
+    (
+        "help_reset_page",
+        "Set every option on this page back to its default.",
+    ),
+    ("word_off", "Off"),
+    ("word_on", "On"),
+    ("device_keyboard", "Keyboard"),
+    ("device_touch", "Touch"),
+    ("hint_move", "move"),
+    ("hint_change", "change"),
+    ("hint_select", "select"),
+    ("hint_back", "back"),
+    ("hint_resume", "resume"),
+    ("hint_tabs", "tabs"),
+    ("hint_quit", "quit"),
+    ("launcher_title", "Imperishable Night"),
+    ("launcher_caption", "Touhou 8 port · {version}"),
+    ("change", "Change…"),
+    ("more_title", "More"),
+    ("touch_layout", "Touch layout"),
+    ("version", "ver {version}"),
     ("touch_edit", "Touch controls layout"),
     (
         "touch_hint",
@@ -564,17 +608,21 @@ fn cjk_font(_: Option<&str>) -> Option<egui::FontData> {
 
 // `font` = the `font` setting, tried before the system font paths.
 pub fn install_fonts(ctx: &egui::Context, font: Option<&str>) {
-    let Some(data) = cjk_font(font) else {
-        log::warn!("no CJK font found (set TH08_FONT); Japanese launcher text shows as boxes");
-        return;
-    };
     let mut fonts = egui::FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("cjk".into(), std::sync::Arc::new(data));
-    for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(fam).or_default().push("cjk".into());
+    match cjk_font(font) {
+        Some(data) => {
+            fonts
+                .font_data
+                .insert("cjk".into(), std::sync::Arc::new(data));
+            for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts.families.entry(fam).or_default().push("cjk".into());
+            }
+        }
+        None => log::warn!(
+            "no CJK font found (set TH08_FONT); Japanese help text falls back to the serif face"
+        ),
     }
+    crate::theme::add_serif(&mut fonts);
     ctx.set_fonts(fonts);
 }
 
@@ -618,25 +666,28 @@ mod tests {
         }
     }
 
-    // The web subset font holds every non-ASCII glyph of the tables and the language names.
+    // The web CJK subset and the serif face hold every non-ASCII glyph of the tables and the language names.
     #[test]
     fn web_font_covers_tables() {
         use ab_glyph::Font;
-        let font = ab_glyph::FontRef::try_from_slice(include_bytes!(
-            "../i18n/fonts/NotoSansJP-launcher.otf"
-        ))
-        .unwrap();
-        let words = ENTRIES.iter().flat_map(|e| e.words.iter().map(|(_, w)| *w));
-        let missing: String = [source(Lang::Ja).unwrap(), source(Lang::Ru).unwrap()]
-            .into_iter()
-            .chain(words)
-            .flat_map(str::chars)
-            .filter(|c| !c.is_ascii() && font.glyph_id(*c).0 == 0)
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "rerun tools/i18n_font_subset: {missing}"
-        );
+        for data in [
+            &include_bytes!("../i18n/fonts/NotoSansJP-launcher.otf")[..],
+            crate::theme::SERIF_FONT,
+        ] {
+            let font = ab_glyph::FontRef::try_from_slice(data).unwrap();
+            let words = ENTRIES.iter().flat_map(|e| e.words.iter().map(|(_, w)| *w));
+            let missing: String = [source(Lang::Ja).unwrap(), source(Lang::Ru).unwrap()]
+                .into_iter()
+                .chain(words)
+                .chain(UI.iter().map(|(_, en)| *en))
+                .flat_map(str::chars)
+                .filter(|c| !c.is_ascii() && font.glyph_id(*c).0 == 0)
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "rerun tools/i18n_font_subset: {missing}"
+            );
+        }
     }
 
     #[test]

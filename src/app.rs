@@ -898,10 +898,16 @@ impl App {
                 }
             }
             Action::Resume => self.resume_game(el),
-            Action::QuitToTitle => {
+            Action::QuitToTitle | Action::Retry => {
+                use crate::platform::quittitle::{Exit, Quit};
+                let exit = if matches!(a, Action::Retry) {
+                    Exit::Retry
+                } else {
+                    Exit::Title
+                };
                 if let Shell::PortMenu(r, _) = &mut self.shell {
-                    log::info!("port menu: quit to title");
-                    r.quit = Some(crate::platform::quittitle::Quit::default());
+                    log::info!("port menu: {exit:?}");
+                    r.quit = Some(Quit::new(exit));
                 }
                 self.resume_game(el);
             }
@@ -1078,6 +1084,7 @@ impl App {
         let mut menu = crate::platform::portmenu::PortMenu::new(self.window(), &r.settings, touch);
         menu.quit_ok = r.quit.is_none() && crate::platform::quittitle::available(&r.ctx.w);
         menu.cheats = r.settings.active_cheats();
+        menu.stage = crate::platform::portmenu::stage_line(&r.ctx.w);
         menu.speed = menu_speed(&r);
         menu.no_saves = no_score_saves(&mut r);
         self.shell = Shell::PortMenu(r, Box::new(menu));
@@ -2435,24 +2442,20 @@ mod tests {
 
     // Port menu "Quit to title" in stage 1: the Esc / Q pulses take the game's own pause menu to the title scene;
     // score.dat keeps every record.
-    #[test]
-    fn quit_to_title() {
-        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
-        else {
-            return;
-        };
+    // A run in stage 1 (game data and the user's settings), saving into a temp folder.
+    fn stage_one(dir: std::path::PathBuf, tag: &str) -> (Running, std::path::PathBuf) {
         let src = crate::sources::native(dir);
         let mut s = crate::settings::get().clone();
         s.set_from(crate::settings::Origin::Cli, "stage", "1")
             .unwrap();
-        let saves = std::env::temp_dir().join(format!("th08_quit_title_{}", std::process::id()));
+        let saves = std::env::temp_dir().join(format!("th08_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&saves);
         std::fs::create_dir_all(&saves).unwrap();
         s.save_dir = Some(saves.clone());
         let mut io = s.tool_io(th08_core::drawlist::NullRenderer, &src);
         io.host = s.app_host();
         let ctx = pollster::block_on(Ctx::load_with(src.clone(), io, s.core(), true)).unwrap();
-        let mut r = Running {
+        let r = Running {
             ctx,
             pacer: Pacer::new(0),
             vsync_epoch: Instant::now(),
@@ -2472,6 +2475,16 @@ mod tests {
             volume: None,
             quit: None,
         };
+        (r, saves)
+    }
+
+    #[test]
+    fn quit_to_title() {
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
+            return;
+        };
+        let (mut r, saves) = stage_one(dir, "quit_title");
         let step = |r: &mut Running| {
             assert!(logic_frames(r, 1, false, false).is_none());
             r.ctx.draw();
@@ -2523,6 +2536,48 @@ mod tests {
                 "score.dat byte {i:#x} changed"
             );
         }
+        let _ = std::fs::remove_dir_all(&saves);
+    }
+
+    // Port menu "Give up and retry" in stage 1: Esc then R take the game's own pause menu to its retry state, which
+    // starts the run again (12 §3 state 10: scene 10 / 11, back in the stage scene within the frame).
+    #[test]
+    fn retry_restarts() {
+        use th08_core::types::SceneId;
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
+            return;
+        };
+        let (mut r, saves) = stage_one(dir, "retry");
+        let step = |r: &mut Running| {
+            assert!(logic_frames(r, 1, false, false).is_none());
+            r.ctx.draw();
+            r.ctx.present();
+        };
+        for _ in 0..300 {
+            step(&mut r);
+        }
+        let scene = |r: &Running| r.ctx.w.game.scene;
+        assert_eq!(scene(&r), th08_core::types::SceneId::Game);
+        r.quit = Some(crate::platform::quittitle::Quit::new(
+            crate::platform::quittitle::Exit::Retry,
+        ));
+        let started = r.ctx.w.game.stages_started;
+        let mut n = 0;
+        let mut seen = None;
+        while r.quit.is_some() || n < 120 {
+            step(&mut r);
+            n += 1;
+            let g = &r.ctx.w.game;
+            if g.stages_started > started {
+                seen.get_or_insert(n);
+            }
+            assert!(n < 1000, "retry did not finish");
+        }
+        let seen = seen.expect("the stage never started again");
+        assert_eq!(scene(&r), SceneId::Game);
+        assert_eq!((r.ctx.w.game.paused, r.ctx.w.game.stage), (0, 0));
+        eprintln!("stage started again after {seen} frames");
         let _ = std::fs::remove_dir_all(&saves);
     }
 

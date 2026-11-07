@@ -1,9 +1,11 @@
 //! Renders the in-game port menu over a headless game frame to a PNG (TH08_DIR: the game folder).
 
-use th08::platform::portmenu::{Nav, Shot, picture_safe, render_image};
+use th08::platform::portmenu::{Nav, Shot, ShotAsk, picture_safe, render_image};
 
 // Switches of this tool, removed before the th08 switches are parsed.
-const OWN: [&str; 9] = [
+const OWN: [&str; 11] = [
+    "--ask=",
+    "--settings=",
     "--frames=",
     "--safe=",
     "--touch",
@@ -21,7 +23,7 @@ fn main() -> anyhow::Result<()> {
     anyhow::ensure!(
         !args.is_empty(),
         "usage: portmenushot OUT.png [WxH] [--frames=N] [--safe=L,T,R,B] [--touch] [--density=F] [--pad=NAME] \
-         [--speed=N/D] [--no-saves] [--status=TEXT] [--settings=TAB] [--nav=down,z,…] [th08 switches]..."
+         [--speed=N/D] [--no-saves] [--status=TEXT] [--settings=TAB] [--ask=retry|quit] [--nav=down,z,…] [th08 switches]..."
     );
     let out = args.remove(0);
     let size = args
@@ -56,11 +58,13 @@ fn main() -> anyhow::Result<()> {
     };
     let flag = |name: &str| args.iter().any(|a| a == name);
     let mut navs = Vec::new();
-    if let Some(tab) = opt("--settings=") {
-        navs.extend([Nav::Down; 8]);
-        navs.push(Nav::Activate);
-        navs.extend(std::iter::repeat_n(Nav::NextTab, tab.parse()?));
-    }
+    let settings = opt("--settings=").map(|t| t.parse()).transpose()?;
+    let ask = match opt("--ask=").as_deref() {
+        None => None,
+        Some("retry") => Some(ShotAsk::Retry),
+        Some("quit") => Some(ShotAsk::Quit),
+        Some(a) => anyhow::bail!("--ask={a}: expected retry or quit"),
+    };
     for n in opt("--nav=").iter().flat_map(|v| v.split(',')) {
         navs.push(match n {
             "up" => Nav::Up,
@@ -91,9 +95,11 @@ fn main() -> anyhow::Result<()> {
         no_saves: flag("--no-saves"),
         status: opt("--status="),
         navs,
+        settings,
+        ask,
         ..Shot::default()
     };
-    args.retain(|a| !OWN.iter().any(|o| a.starts_with(o)) && !a.starts_with("--settings="));
+    args.retain(|a| !OWN.iter().any(|o| a.starts_with(o)));
     let s = th08::settings::Settings::from_args(th08::launcher::desktop_dirs().tool(), args)
         .unwrap_or_else(|e| e.exit());
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
@@ -115,13 +121,14 @@ fn main() -> anyhow::Result<()> {
     ctx.calc();
     ctx.draw();
     shot.quit = th08::platform::quittitle::available(&ctx.w);
+    shot.stage = th08::platform::portmenu::stage_line(&ctx.w);
     let quit = shot.quit;
     let g: &mut th08_render::gfx::Gfx = ctx
         .renderer
         .as_any_mut()
         .downcast_mut()
         .expect("headless Gfx");
-    g.safe = picture_safe(safe, (w, h), &shot);
+    g.safe = picture_safe(safe, (w, h), &shot, s.blit.integer);
     let frame = g.capture(&mut ctx.rec, Some((w, h)));
     g.safe = safe;
     render_image(g, &s, &frame, safe, &shot)

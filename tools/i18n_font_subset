@@ -1,7 +1,8 @@
 #!/bin/bash
-# Web launcher CJK font: Noto Sans CJK JP (OFL 1.1) cut down to the glyphs of i18n/ja.toml
-# and the language names. Rerun after editing ja.toml; `cargo test i18n` fails while a glyph is missing.
-# usage: tools/i18n_font_subset [NotoSansCJK-Regular.ttc]
+# Launcher / port-menu fonts (OFL 1.1), cut down to the glyphs of i18n/*.toml, src/settings.rs and src/i18n.rs:
+# NotoSansJP-launcher.otf (Noto Sans CJK JP, the web CJK fallback) and NotoSerifJP-ui.otf (Noto Serif CJK JP
+# SemiBold, the menu face on every platform). Rerun after editing the tables; `cargo test i18n` fails on a missing glyph.
+# usage: tools/i18n_font_subset [NotoSansCJK-Regular.ttc [NotoSerifCJK-SemiBold.ttc]]
 #        tools/i18n_font_subset --merge BASE OURS THEIRS — git merge driver (tools/land --setup registers it): writes
 #        into OURS the subset of the work tree's texts plus every glyph of OURS and THEIRS.
 set -euo pipefail
@@ -11,12 +12,16 @@ if [[ ${1:-} == --merge ]]; then
   merge=("$ours" "$theirs"); set --
 fi
 cd "$(dirname "$0")/.."
-src=${1:-${TH08_CJK_TTC:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc}}
-out=i18n/fonts/NotoSansJP-launcher.otf
+sans=${1:-${TH08_CJK_TTC:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc}}
+serif=${2:-${TH08_CJK_SERIF_TTC:-/usr/share/fonts/noto-cjk/NotoSerifCJK-SemiBold.ttc}}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-cat i18n/ja.toml i18n/ru.toml src/settings.rs > "$tmp/text"
-extra=()
+for f in i18n/ja.toml i18n/ru.toml src/settings.rs src/i18n.rs; do if [[ -f $f ]]; then cat "$f"; fi; done > "$tmp/text"
+# Face 0 of a collection is the JP face.
+subset() {
+  pyftsubset "$1" --font-number=0 --text-file="$tmp/text" "${@:3}" --layout-features='' --no-hinting \
+      --desubroutinize --name-IDs='*' --output-file="$2"
+}
 if (( ${#merge[@]} )); then
   python3 -I -c '
 import sys
@@ -24,10 +29,17 @@ from fontTools.ttLib import TTFont
 cps = set()
 for p in sys.argv[1:]: cps |= set(TTFont(p).getBestCmap())
 print("\n".join(f"U+{c:04X}" for c in sorted(cps)))' "${merge[@]}" > "$tmp/unicodes"
-  extra=(--unicodes-file="$tmp/unicodes")
-  out=$tmp/merged.otf
+  src=$sans
+  if python3 -I -c 'import sys; from fontTools.ttLib import TTFont; sys.exit("Serif" not in TTFont(sys.argv[1])["name"].getDebugName(1))' "${merge[0]}"; then
+    src=$serif
+  fi
+  subset "$src" "$tmp/merged.otf" --unicodes-file="$tmp/unicodes"
+  cp "$tmp/merged.otf" "${merge[0]}"
+  exit
 fi
-# Face 0 of the collection is the JP face.
-pyftsubset "$src" --font-number=0 --text-file="$tmp/text" "${extra[@]}" --layout-features='' --no-hinting \
-    --desubroutinize --name-IDs='*' --output-file="$out"
-if (( ${#merge[@]} )); then cp "$out" "${merge[0]}"; else ls -l "$out"; fi
+subset "$sans" i18n/fonts/NotoSansJP-launcher.otf
+ls -l i18n/fonts/NotoSansJP-launcher.otf
+if [[ -f $serif ]]; then
+  subset "$serif" i18n/fonts/NotoSerifJP-ui.otf
+  ls -l i18n/fonts/NotoSerifJP-ui.otf
+fi

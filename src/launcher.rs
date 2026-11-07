@@ -235,6 +235,8 @@ pub enum Action {
     Speed((u32, u32)),
     // Port menu: back to the game, which then quits to the title through its own pause menu.
     QuitToTitle,
+    // Port menu: back to the game, which then restarts the run through its own pause menu (R).
+    Retry,
     // The Fullscreen box was changed on screen; the app applies it to the window.
     Fullscreen(bool),
 }
@@ -553,43 +555,28 @@ impl Model {
         self.row_mut(key).apply(1, true)
     }
 
-    // A port menu row: label, then the value widget in a `ctrl_w` column; no help line; the response covers the row.
-    pub fn menu_row_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        key: &str,
-        lang: Lang,
-        label_w: f32,
-        ctrl_w: f32,
-    ) -> egui::Response {
-        let r = self.row_mut(key);
-        let h = ui.spacing().interact_size.y;
-        ui.horizontal(|ui| {
-            ui.add_space(crate::theme::S);
-            ui.allocate_ui_with_layout(
-                egui::vec2(label_w, h),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.set_min_size(egui::vec2(label_w, h));
-                    ui.add(egui::Label::new(i18n::label(lang, r.e)).wrap());
-                },
-            );
-            value_ui(ui, r, lang, &[], Some(ctrl_w));
-        })
-        .response
+    // The painted control of a Bool / Int / Enum row (`Ctl::None` for text and path rows).
+    pub fn ctl(&self, key: &str, lang: Lang) -> theme::Ctl {
+        row_ctl(self.row(key), lang, &[])
     }
 
-    // A port menu value widget alone in a `ctrl_w` column (the card's volume slider).
-    pub fn value_widget_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        key: &str,
-        lang: Lang,
-        ctrl_w: f32,
-    ) -> egui::Response {
-        let r = self.row_mut(key);
-        ui.horizontal(|ui| value_ui(ui, r, lang, &[], Some(ctrl_w)))
-            .response
+    // A click / tap / drag on a row's control; true when the value changed.
+    pub fn ctl_input(&mut self, key: &str, out: theme::CtlOut) -> bool {
+        row_input(self.row_mut(key), out, &[])
+    }
+
+    // The row's label and help text in `lang`.
+    pub fn row_text(&self, key: &str, lang: Lang) -> (&'static str, &'static str) {
+        let e = self.row(key).e;
+        (i18n::label(lang, e), i18n::help(lang, e))
+    }
+
+    // These rows back to their defaults (the port menu's "Reset this page").
+    pub fn reset_rows(&mut self, keys: &[&str]) {
+        for k in keys {
+            let r = self.row_mut(k);
+            r.set(r.default_value());
+        }
     }
 
     // Keys of the rows the port menu shows.
@@ -1799,6 +1786,85 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(Strin
         }
         ui.label(egui::RichText::new(i18n::help(lang, r.e)).small().weak());
     });
+}
+
+// The values an Enum row offers: the unset value first when the entry has no default, then the table's
+// choices, then `extra` (value, shown name).
+fn enum_values(r: &Row, choices: &[&str], extra: &[(String, String)]) -> Vec<String> {
+    (r.e.default.is_empty().then(String::new))
+        .into_iter()
+        .chain(choices.iter().map(|c| (*c).to_string()))
+        .chain(extra.iter().map(|(v, _)| v.clone()))
+        .collect()
+}
+
+fn row_ctl(r: &Row, lang: Lang, extra: &[(String, String)]) -> theme::Ctl {
+    let shown = |v: &str| -> String {
+        if let Some((_, n)) = extra.iter().find(|(x, _)| x == v) {
+            return n.clone();
+        }
+        match i18n::word(lang, r.e, v) {
+            Some(w) => w.to_string(),
+            None if v.is_empty() => i18n::ui(lang, "not_set").to_string(),
+            None => v.to_string(),
+        }
+    };
+    match (&r.value, r.e.kind) {
+        (Value::Bool(b), _) => theme::Ctl::Choices {
+            words: vec![
+                i18n::ui(lang, "word_off").into(),
+                i18n::ui(lang, "word_on").into(),
+            ],
+            sel: Some(usize::from(*b)),
+        },
+        (Value::Int(n), Kind::Int { min, max }) => {
+            let v = n.unwrap_or(min);
+            let word = n.and_then(|n| i18n::word(lang, r.e, &n.to_string()));
+            theme::Ctl::Slider {
+                frac: (v - min) as f32 / (max - min).max(1) as f32,
+                text: match (n, word) {
+                    (None, _) => i18n::ui(lang, "not_set").into(),
+                    (_, Some(w)) => w.into(),
+                    (Some(n), None) => n.to_string(),
+                },
+                unit: if word.is_some() || n.is_none() {
+                    String::new()
+                } else {
+                    i18n::unit(lang, r.e).trim().to_string()
+                },
+            }
+        }
+        (Value::Choice(c), Kind::Enum(choices)) => {
+            let all = enum_values(r, choices, extra);
+            theme::Ctl::Choices {
+                sel: all.iter().position(|x| x == c),
+                words: all.iter().map(|v| shown(v)).collect(),
+            }
+        }
+        _ => theme::Ctl::None,
+    }
+}
+
+fn row_input(r: &mut Row, out: theme::CtlOut, extra: &[(String, String)]) -> bool {
+    let v = match (out, &r.value, r.e.kind) {
+        (theme::CtlOut::Step(d), ..) => return r.apply(d, false),
+        (theme::CtlOut::Pick(i), Value::Bool(_), _) => Value::Bool(i == 1),
+        (theme::CtlOut::Pick(i), Value::Choice(_), Kind::Enum(choices)) => {
+            match enum_values(r, choices, extra).get(i) {
+                Some(v) => Value::Choice(v.clone()),
+                None => return false,
+            }
+        }
+        (theme::CtlOut::Frac(f), Value::Int(_), Kind::Int { min, max }) => {
+            Value::Int(Some(min + ((max - min) as f32 * f).round() as i64))
+        }
+        _ => return false,
+    };
+    let changed = v != r.value;
+    if changed {
+        r.set(v);
+    }
+    changed
 }
 
 // The port menu's value box (a slider's number), points.
