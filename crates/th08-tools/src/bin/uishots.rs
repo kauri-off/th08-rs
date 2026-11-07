@@ -325,13 +325,50 @@ fn launcher_model(fx: &Fixture, lang: &str, view: &str) -> (th08::launcher::Mode
     (m, probe)
 }
 
-// A plain stand-in for the game frame under the port menu.
-fn backdrop((w, h): (u32, u32)) -> image::RgbaImage {
-    image::RgbaImage::from_fn(w, h, |x, y| {
-        let t = u64::from(x + y) * 255 / u64::from(w + h).max(1);
-        let t = u8::try_from(t).unwrap_or(255);
-        image::Rgba([40 + t / 4, 30, 70 - t / 8, 255])
-    })
+#[expect(clippy::cast_sign_loss, reason = "the frame rect is positive")]
+// The game picture under the port menu: a stage screenshot from the design references (never game data), scaled
+// into the frame rect the menu leaves it; a plain gradient when the references are not checked out.
+fn backdrop(stage: Option<&image::RgbaImage>, sz: &Size, shot: &Shot) -> image::RgbaImage {
+    let (w, h) = sz.px;
+    let Some(stage) = stage else {
+        return image::RgbaImage::from_fn(w, h, |x, y| {
+            let t = u64::from(x + y) * 255 / u64::from(w + h).max(1);
+            let t = u8::try_from(t).unwrap_or(255);
+            image::Rgba([40 + t / 4, 30, 70 - t / 8, 255])
+        });
+    };
+    let shot = Shot {
+        density: sz.density,
+        ..shot.clone()
+    };
+    let [x, y, fw, fh] = th08::platform::portmenu::picture_frame(sz.safe, sz.px, &shot, false);
+    let mut img = image::RgbaImage::from_pixel(w, h, image::Rgba([0, 0, 0, 255]));
+    let scaled = image::imageops::resize(
+        stage,
+        fw as u32,
+        fh as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    image::imageops::overlay(&mut img, &scaled, x as i64, y as i64);
+    img
+}
+
+// `docs/briefs/uiref/05_th08_stage.png` in this checkout or, from a worktree, in the main checkout.
+fn stage_reference() -> Option<image::RgbaImage> {
+    const REL: &str = "docs/briefs/uiref/05_th08_stage.png";
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let main = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(&repo)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|d| Path::new(d.trim()).parent().map(Path::to_path_buf));
+    [Some(repo), main]
+        .into_iter()
+        .flatten()
+        .find_map(|r| image::open(r.join(REL)).ok())
+        .map(|i| i.to_rgba8())
 }
 
 struct Frame {
@@ -368,6 +405,10 @@ fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
+    let stage = gfx.as_ref().and_then(|_| stage_reference());
+    if gfx.is_some() && stage.is_none() {
+        eprintln!("uishots: no stage reference image, the port menu renders over a gradient");
+    }
     let mut frames = Vec::new();
     for &lang in &langs {
         for sz in &sizes {
@@ -407,7 +448,7 @@ fn main() -> anyhow::Result<()> {
                             th08::platform::portmenu::render_image(
                                 g,
                                 &s,
-                                &backdrop(sz.px),
+                                &backdrop(stage.as_ref(), sz, &shot),
                                 sz.safe,
                                 &shot,
                             )
