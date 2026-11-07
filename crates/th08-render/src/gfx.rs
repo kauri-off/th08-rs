@@ -2405,6 +2405,27 @@ impl Gfx {
         self.read_texture(encoder(&self.device), &self.gpu.frame)
     }
 
+    // The last rendered frame blitted at its own size (640k × 480k) with the overlays painted over it, like the window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_frame_overlaid(&mut self) -> image::RgbaImage {
+        let (w, h) = (self.gpu.frame.width(), self.gpu.frame.height());
+        let t = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlaid frame"),
+            size: extent(w, h),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let mut enc = encoder(&self.device);
+        let target = view(&t);
+        self.blit(&mut enc, &target, w, h);
+        self.paint_overlay(&mut enc, &target, (w, h));
+        self.read_texture(enc, &t)
+    }
+
     // Renders the pending batches into the 640x480 frame without presenting (tools).
     pub fn flush(&mut self, rec: &mut Recorder) {
         self.submit(rec);

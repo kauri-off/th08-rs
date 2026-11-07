@@ -5,7 +5,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!(
-            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--pad-capture=PAD_ROW] [--pad-press=PAD_ROW:BUTTON]... [--tab=replays|stats] [th08 switches]..."
+            "usage: launchershot OUT.png [WxH] [--developer] [--error=TEXT] [--view=waiting|loading] [--safe=L,T,R,B] [--config=DIR] [--bundled=DIR] [--tr-install=CODE] [--tr-list] [--capture=KEY_ROW] [--pad-capture=PAD_ROW] [--pad-press=PAD_ROW:BUTTON]... [--tab=replays|stats] [--video=ask:RPY|progress:FILE:DONE:TOTAL] [th08 switches]..."
         );
         std::process::exit(2);
     }
@@ -90,20 +90,12 @@ fn main() {
                 std::process::exit(2);
             }
         });
-    args.retain(|a| {
-        a != "--developer"
-            && !a.starts_with("--tab=")
-            && a != "--tr-list"
-            && !a.starts_with("--error=")
-            && !a.starts_with("--view=")
-            && !a.starts_with("--safe=")
-            && !a.starts_with("--config=")
-            && !a.starts_with("--tr-install=")
-            && !a.starts_with("--bundled=")
-            && !a.starts_with("--capture=")
-            && !a.starts_with("--pad-capture=")
-            && !a.starts_with("--pad-press=")
-    });
+    // Replays tab: the video export dialog of a replay, or an export in progress.
+    let video = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--video="))
+        .map(String::from);
+    strip_shot_switches(&mut args);
     let mut dirs = th08::launcher::desktop_dirs().tool();
     if let Some(c) = config {
         dirs.config = Some(c.clone());
@@ -148,6 +140,9 @@ fn main() {
     if let Some(t) = tab {
         model.set_tab(t);
     }
+    if let Some(v) = video {
+        video_shot(&mut model, &v);
+    }
     model.view = match error {
         Some(e) => th08::launcher::View::Error(e),
         None => view,
@@ -155,6 +150,41 @@ fn main() {
     th08::launcher::render_image(&gfx, model, size.unwrap_or((640, 480)), safe)
         .save(&out)
         .expect("save png");
+}
+
+// The launchershot switches out of the th08 switches.
+fn strip_shot_switches(args: &mut Vec<String>) {
+    args.retain(|a| {
+        a != "--developer"
+            && !a.starts_with("--video=")
+            && !a.starts_with("--tab=")
+            && a != "--tr-list"
+            && !a.starts_with("--error=")
+            && !a.starts_with("--view=")
+            && !a.starts_with("--safe=")
+            && !a.starts_with("--config=")
+            && !a.starts_with("--tr-install=")
+            && !a.starts_with("--bundled=")
+            && !a.starts_with("--capture=")
+            && !a.starts_with("--pad-capture=")
+            && !a.starts_with("--pad-press=")
+    });
+}
+
+// `--video`: the export dialog of a replay file, or an export shown at DONE of TOTAL frames.
+fn video_shot(model: &mut th08::launcher::Model, v: &str) {
+    match v.split(':').collect::<Vec<_>>().as_slice() {
+        ["ask", rpy] => model.shot_video_ask((*rpy).into()),
+        ["progress", file, done, total] => model.shot_video_progress(
+            (*file).to_string(),
+            done.parse().unwrap_or(0),
+            total.parse().unwrap_or(0),
+        ),
+        _ => {
+            eprintln!("--video: expected ask:RPY or progress:FILE:DONE:TOTAL");
+            std::process::exit(2);
+        }
+    }
 }
 
 // `--pad-press` captures fed their button, then the `--pad-capture` row left waiting.

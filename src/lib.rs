@@ -26,6 +26,8 @@ pub mod translations;
 pub mod transport;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+pub mod videoexport;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

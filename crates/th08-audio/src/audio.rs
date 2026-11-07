@@ -342,6 +342,8 @@ pub struct Audio {
     midi_open: i32,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     cfg: AudioConfig,
+    // No device: `OfflineMix` pulls the samples, BGM tracks decode before the play command returns.
+    offline: bool,
 }
 
 impl Audio {
@@ -370,7 +372,23 @@ impl Audio {
             midi_slots: Default::default(),
             midi_open: -1,
             cfg,
+            offline: false,
         }
+    }
+
+    // A device-less sound manager whose mix is pulled per game frame through the returned `OfflineMix` at `rate` Hz.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn offline(source: Source, cfg: AudioConfig, rate: u32) -> (Self, OfflineMix) {
+        let mut a = Self::new(source, cfg);
+        a.offline = true;
+        a.started = true;
+        lock(&a.mixer).out_rate = f64::from(rate);
+        let mix = OfflineMix {
+            mixer: a.mixer.clone(),
+            rate,
+            frames: 0,
+        };
+        (a, mix)
     }
 
     // Host input for `sound::Bgm::midi_ready`: a SoundFont (`AudioConfig::soundfont`, else its dirs) loads, so
@@ -567,6 +585,9 @@ impl Audio {
     }
 
     fn open(&mut self) {
+        if self.offline {
+            return;
+        }
         self.lost.store(false, Ordering::Relaxed);
         match (self.open_stream)(
             self.mixer.clone(),
@@ -638,7 +659,7 @@ impl Audio {
             m.generation
         };
         let (source, mixer, cell) = (self.source.clone(), self.mixer.clone(), self.bgm.clone());
-        spawn(async move {
+        let job = async move {
             let t0 = web_time::Instant::now();
             let known = lock(&cell).clone();
             let bgm = if let Some(b) = known {
@@ -701,7 +722,13 @@ impl Audio {
                 ),
                 Err(e) => log::warn!("bgm {}: {e:#}", t.name),
             }
-        });
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.offline {
+            pollster::block_on(job);
+            return;
+        }
+        spawn(job);
     }
 
     // Sound_LoadSE 0x45D3F0: one buffer per SE id, each a copy of its wave file; the table volume is not
@@ -789,6 +816,42 @@ impl th08_core::game::AudioOut for Audio {
     }
     fn set_muted(&mut self, on: bool) {
         Audio::set_muted(self, on);
+    }
+}
+
+// The mix of an offline `Audio`, pulled one game frame (1/60 s) at a time; no output device is ever opened.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OfflineMix {
+    mixer: Arc<Mutex<Mixer>>,
+    rate: u32,
+    frames: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OfflineMix {
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    // Sample frames of game frame `n` at `rate`: the running total after n frames is exactly ⌊n × rate / 60⌋.
+    #[expect(clippy::cast_possible_truncation, reason = "at most rate / 60 + 1")]
+    pub fn samples_in_frame(rate: u32, n: u64) -> usize {
+        let at = |n: u64| n * u64::from(rate) / 60;
+        (at(n + 1) - at(n)) as usize
+    }
+
+    // Appends the next game frame's interleaved stereo samples (f32, −1…1) to `out`.
+    pub fn frame(&mut self, out: &mut Vec<f32>) {
+        let n = Self::samples_in_frame(self.rate, self.frames);
+        self.frames += 1;
+        let at = out.len();
+        out.resize(at + n * 2, 0.0);
+        render_guarded(&self.mixer, &mut out[at..], 2);
+    }
+
+    // Game frames mixed so far.
+    pub fn frames(&self) -> u64 {
+        self.frames
     }
 }
 
@@ -1116,6 +1179,56 @@ mod tests {
         assert_eq!(opens(), 1);
         a.reopen_if_lost(t + Duration::from_secs(1));
         assert_eq!(opens(), 2);
+    }
+
+    // The offline mix yields exactly ⌊n × rate / 60⌋ sample frames after n game frames (735 per frame at 44.1 kHz),
+    // carries a playing SE across frames and never opens a stream.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn offline_mix_sample_count() {
+        for rate in [44100u32, 48000, 22050, 32000, 44101] {
+            let (mut a, mut m) = Audio::offline(Source::new(NoFiles), AudioConfig::default(), rate);
+            a.ensure_started();
+            assert!(a.is_started() && a.stream.is_none());
+            let mut out = Vec::new();
+            let n = 10_007u64;
+            for k in 0..n {
+                let before = out.len();
+                m.frame(&mut out);
+                if rate == 44100 {
+                    assert_eq!(out.len() - before, 2 * 735, "frame {k}");
+                }
+            }
+            assert_eq!(m.frames(), n);
+            assert_eq!(
+                out.len() as u64,
+                2 * (n * u64::from(rate) / 60),
+                "rate {rate}"
+            );
+        }
+        let (mut a, mut m) = Audio::offline(Source::new(NoFiles), AudioConfig::default(), 44100);
+        lock(&a.mixer).voices = vec![Voice {
+            wave: Some(Arc::new(Wave {
+                samples: vec![[0.5, 0.5]; 1000],
+                rate: 44100.0,
+            })),
+            ..Voice::default()
+        }];
+        a.exec(SoundCmd::Se {
+            id: 0,
+            pan: 0,
+            vol: 0,
+        });
+        let mut out = Vec::new();
+        m.frame(&mut out);
+        m.frame(&mut out);
+        let heard = out
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|f| f[0] != 0.0)
+            .count();
+        assert_eq!(heard, 1000);
     }
 
     // A configured SoundFont that is missing or does not parse leaves MIDI not ready; a valid one makes it ready.

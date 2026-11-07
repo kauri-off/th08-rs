@@ -22,6 +22,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 log = "0.4.34"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4.6", default-features = false, features = ["std", "help", "usage", "error-context"] }
 env_logger = "0.11.11"
 liblzma = { version = "0.4.9", features = ["static", "parallel"] }
 pollster = "1.0.1"

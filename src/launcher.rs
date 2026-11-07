@@ -2108,13 +2108,14 @@ pub fn render_image(
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let ppp = zoom(safe_size(safe, (w, h)));
     let mut enc = None;
+    // Passes 0.1 s apart: a dialog's fade-in has ended by the last.
     for i in 0..4 {
         let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(w as f32 / ppp, h as f32 / ppp),
             )),
-            time: Some(f64::from(i) / 60.0),
+            time: Some(f64::from(i) / 10.0),
             safe_area_insets: Some(insets(safe, ppp)),
             ..Default::default()
         };

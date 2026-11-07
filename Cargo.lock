@@ -3277,6 +3277,7 @@ dependencies = [
  "egui-winit",
  "env_logger",
  "gilrs",
+ "hound",
  "image",
  "jni",
  "js-sys",
@@ -3423,6 +3424,7 @@ name = "th08-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "env_logger",
  "image",
  "liblzma",

@@ -330,6 +330,27 @@ pub const UI: &[(&str, &str)] = &[
     ("rp_exported", "Saved to {path}"),
     ("rp_export_failed", "Export failed: {err}"),
     ("rp_no_save", "No save folder: replays cannot be imported"),
+    ("rp_video", "Export video…"),
+    (
+        "rp_video_hint",
+        "Renders the replay with its music and sound effects into an .mp4 or .mkv file (needs ffmpeg).",
+    ),
+    ("rp_video_title", "Export video: {file}"),
+    ("rp_video_scale", "Size"),
+    ("rp_video_inputs", "Input display"),
+    ("rp_video_hitboxes", "Hitboxes"),
+    ("rp_video_save", "Save as…"),
+    (
+        "rp_video_running",
+        "Exporting {file}: frame {done} of about {total}",
+    ),
+    ("rp_video_done", "Video saved to {path}"),
+    ("rp_video_failed", "Video export failed: {err}"),
+    ("rp_video_cancelled", "Video export cancelled"),
+    (
+        "rp_video_no_ffmpeg",
+        "Video export needs ffmpeg: install it (ffmpeg.org) so that the ffmpeg command is on the PATH.",
+    ),
     ("tab_stats", "Stats"),
     (
         "st_off",

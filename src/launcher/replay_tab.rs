@@ -1,9 +1,12 @@
-//! Launcher Replays tab: the replay folder's list, Watch, import (file picker, drag and drop), export and delete.
+//! Launcher Replays tab: the replay folder's list, Watch, import (file picker, drag and drop), export, video export and delete.
 
 use super::{Action, Model, Value};
 use crate::i18n::{self, Lang};
 use crate::replays::{self, Entry, Sort};
+use crate::videoexport::{self, Progress};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(super) struct ReplayTab {
@@ -12,6 +15,95 @@ pub(super) struct ReplayTab {
     sort: Sort,
     confirm: Option<PathBuf>,
     status: Option<Result<String, String>>,
+    video_ask: Option<VideoAsk>,
+    video: Option<VideoJob>,
+}
+
+// The video export dialog of one replay.
+struct VideoAsk {
+    path: PathBuf,
+    scale: u32,
+    inputs: bool,
+    hitboxes: bool,
+}
+
+#[derive(Default)]
+struct JobState {
+    progress: Progress,
+    done: Option<Result<videoexport::Report, String>>,
+}
+
+// A video export running on its own thread; the window only reads its state.
+struct VideoJob {
+    file: String,
+    out: PathBuf,
+    cancel: Arc<AtomicBool>,
+    state: Arc<Mutex<JobState>>,
+}
+
+impl VideoJob {
+    fn start(
+        settings: crate::settings::Settings,
+        o: videoexport::Options,
+        file: String,
+        repaint: impl Fn() + Send + 'static,
+    ) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(Mutex::new(JobState::default()));
+        let out = match &o.output {
+            videoexport::Output::Video(p) | videoexport::Output::PngWav(p) => p.clone(),
+        };
+        let (c, st) = (cancel.clone(), state.clone());
+        std::thread::spawn(move || {
+            let mut last = std::time::Instant::now();
+            let r = videoexport::export(&settings, &o, &c, |p| {
+                if let Ok(mut s) = st.lock() {
+                    s.progress = p;
+                }
+                if last.elapsed() >= std::time::Duration::from_millis(100) {
+                    last = std::time::Instant::now();
+                    repaint();
+                }
+            });
+            let r = r.map_err(|e| {
+                if e.is::<videoexport::Cancelled>() {
+                    String::new()
+                } else {
+                    format!("{e:#}")
+                }
+            });
+            if let Ok(mut s) = st.lock() {
+                s.done = Some(r);
+            }
+            repaint();
+        });
+        Self {
+            file,
+            out,
+            cancel,
+            state,
+        }
+    }
+
+    // A job that only shows `progress` (launcher screenshots).
+    fn shown(file: String, progress: Progress) -> Self {
+        Self {
+            file,
+            out: PathBuf::new(),
+            cancel: Arc::default(),
+            state: Arc::new(Mutex::new(JobState {
+                progress,
+                done: None,
+            })),
+        }
+    }
+
+    fn snapshot(&self) -> (Progress, Option<Result<videoexport::Report, String>>) {
+        self.state
+            .lock()
+            .map(|s| (s.progress, s.done.clone()))
+            .unwrap_or_default()
+    }
 }
 
 impl Model {
@@ -145,6 +237,8 @@ impl Model {
             ui.label(i18n::ui_fmt(lang, "rp_none", &[("dir", &dir)]));
         }
         let can_play = self.can_play();
+        let mut video = None;
+        self.video_progress_ui(ui, lang);
         for e in &list {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -195,6 +289,15 @@ impl Model {
                             self.rp.confirm = Some(e.path.clone());
                         }
                         if e.info.is_ok() {
+                            let v = ui
+                                .add_enabled(
+                                    can_play && self.rp.video.is_none(),
+                                    egui::Button::new(i18n::ui(lang, "rp_video")),
+                                )
+                                .on_hover_text(i18n::ui(lang, "rp_video_hint"));
+                            if v.clicked() {
+                                video = Some(e.path.clone());
+                            }
                             if ui.button(i18n::ui(lang, "rp_export")).clicked() {
                                 self.export_replay(&e.path, lang);
                             }
@@ -219,8 +322,181 @@ impl Model {
             });
         }
         self.rp.list = Some(list);
+        if let Some(p) = video {
+            self.ask_video(p);
+        }
         self.confirm_ui(ui, lang);
+        self.video_ask_ui(ui, lang);
         act.map(|p| self.watch(&p))
+    }
+
+    // Launcher screenshots: the export dialog of `path`, or an export of `file` shown at `done` of `total` frames.
+    pub fn shot_video_ask(&mut self, path: PathBuf) {
+        self.ask_video(path);
+    }
+
+    pub fn shot_video_progress(&mut self, file: String, done: u64, total: u64) {
+        self.rp.video = Some(VideoJob::shown(
+            file,
+            Progress {
+                frames: done,
+                total,
+                stage: 0,
+            },
+        ));
+    }
+
+    // The dialog starts from the game's own render scale, input display and hitbox settings.
+    fn ask_video(&mut self, path: PathBuf) {
+        let s = self.settings();
+        let scale = match s.render_scale {
+            th08_render::gfx::RenderScale::Fixed(k) => k.clamp(1, 3),
+            th08_render::gfx::RenderScale::Auto => 2,
+        };
+        self.rp.video_ask = Some(VideoAsk {
+            path,
+            scale,
+            inputs: s.input_display.is_some(),
+            hitboxes: s.hitboxes != crate::platform::hitbox::Hitboxes::Off,
+        });
+    }
+
+    fn video_ask_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        let Some(ask) = &mut self.rp.video_ask else {
+            return;
+        };
+        let file = file_name(&ask.path);
+        let mut go = false;
+        let mut close = false;
+        let m = egui::Modal::new(egui::Id::unique("rp_video")).show(ui.ctx(), |ui| {
+            ui.label(
+                egui::RichText::new(i18n::ui_fmt(lang, "rp_video_title", &[("file", &file)]))
+                    .strong(),
+            );
+            ui.label(egui::RichText::new(i18n::ui(lang, "rp_video_hint")).weak());
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(i18n::ui(lang, "rp_video_scale"));
+                for k in 1..=3u32 {
+                    ui.selectable_value(&mut ask.scale, k, format!("{}×{}", 640 * k, 480 * k));
+                }
+            });
+            ui.checkbox(&mut ask.inputs, i18n::ui(lang, "rp_video_inputs"));
+            ui.checkbox(&mut ask.hitboxes, i18n::ui(lang, "rp_video_hitboxes"));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                go = ui
+                    .button(egui::RichText::new(i18n::ui(lang, "rp_video_save")).strong())
+                    .clicked();
+                close = ui.button(i18n::ui(lang, "cancel")).clicked();
+            });
+        });
+        if go {
+            self.start_video(ui.ctx().clone(), lang);
+        } else if close || m.should_close() {
+            self.rp.video_ask = None;
+        }
+    }
+
+    fn start_video(&mut self, ctx: egui::Context, lang: Lang) {
+        let Some(ask) = self.rp.video_ask.take() else {
+            return;
+        };
+        let ffmpeg = PathBuf::from("ffmpeg");
+        if !videoexport::ffmpeg_available(&ffmpeg) {
+            self.rp.status = Some(Err(i18n::ui(lang, "rp_video_no_ffmpeg").into()));
+            return;
+        }
+        let stem = ask
+            .path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let mut dlg = rfd::FileDialog::new()
+            .set_title(i18n::ui(lang, "rp_video"))
+            .set_file_name(format!("{stem}.mp4"))
+            .add_filter("MP4", &["mp4"])
+            .add_filter("MKV", &["mkv"]);
+        if let Some(d) =
+            directories::UserDirs::new().and_then(|u| u.video_dir().map(Path::to_path_buf))
+        {
+            dlg = dlg.set_directory(d);
+        }
+        let Some(mut out) = dlg.save_file() else {
+            return;
+        };
+        if !out
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("mkv"))
+        {
+            out.set_extension("mp4");
+        }
+        let mut o = videoexport::Options::new(
+            videoexport::Source::File(ask.path.clone()),
+            videoexport::Output::Video(out),
+        );
+        o.scale = ask.scale;
+        let s = self.settings();
+        o.inputs = ask.inputs.then(|| {
+            s.input_display
+                .unwrap_or(crate::platform::overlay::Corner::BottomLeft)
+        });
+        o.hitboxes = if ask.hitboxes {
+            crate::platform::hitbox::Hitboxes::All
+        } else {
+            crate::platform::hitbox::Hitboxes::Off
+        };
+        self.rp.status = None;
+        self.rp.video = Some(VideoJob::start(s, o, file_name(&ask.path), move || {
+            ctx.request_repaint();
+        }));
+    }
+
+    // The running export's progress and Cancel; its result becomes the tab's status line.
+    fn video_progress_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
+        let Some(job) = &self.rp.video else {
+            return;
+        };
+        let (p, done) = job.snapshot();
+        if let Some(r) = done {
+            let path = job.out.display().to_string();
+            self.rp.status = Some(match r {
+                Ok(_) => Ok(i18n::ui_fmt(lang, "rp_video_done", &[("path", &path)])),
+                Err(e) if e.is_empty() => Ok(i18n::ui(lang, "rp_video_cancelled").into()),
+                Err(e) => Err(i18n::ui_fmt(lang, "rp_video_failed", &[("err", &e)])),
+            });
+            self.rp.video = None;
+            return;
+        }
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let total = p.total.max(p.frames).max(1);
+            ui.label(i18n::ui_fmt(
+                lang,
+                "rp_video_running",
+                &[
+                    ("file", &job.file),
+                    ("done", &p.frames.to_string()),
+                    ("total", &total.to_string()),
+                ],
+            ));
+            ui.horizontal(|ui| {
+                let cancelling = job.cancel.load(Ordering::Relaxed);
+                if ui
+                    .add_enabled(!cancelling, egui::Button::new(i18n::ui(lang, "cancel")))
+                    .clicked()
+                {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
+                ui.add(
+                    egui::ProgressBar::new(p.frames as f32 / total as f32)
+                        .show_percentage()
+                        .animate(true),
+                );
+            });
+        });
+        ui.add_space(4.0);
     }
 
     fn confirm_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
@@ -261,6 +537,13 @@ impl Model {
     }
 }
 
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
 // 1234567890 → "1,234,567,890".
 pub(super) fn group_digits(n: u64) -> String {
     let s = n.to_string();
@@ -279,6 +562,8 @@ mod tests {
     use super::super::{Folder, Model};
     use crate::i18n::Lang;
     use crate::settings::{PlatformDirs, Settings};
+    use crate::videoexport;
+    use std::sync::atomic::Ordering;
 
     // Dropped files land in the save dir's replay folder; Watch plays the file through the `replay` setting only.
     #[test]
@@ -314,6 +599,40 @@ mod tests {
         assert!(matches!(m.watch(&dst), super::Action::Play));
         assert_eq!(m.settings().replay.as_deref(), Some(dst.to_str().unwrap()));
         assert!(m.changes().iter().all(|(k, _)| *k != "replay"));
+    }
+
+    // The launcher's export job runs on its own thread: 60 frames of demo 0 as PNG + WAV, then a job cancelled at once.
+    #[test]
+    fn video_job_runs_and_cancels() {
+        let Some(dir) = crate::settings::test_game_dir() else {
+            eprintln!("skipped: no game data (TH08_DIR unset)");
+            return;
+        };
+        let out = std::env::temp_dir().join(format!("th08-videojob-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let mut s = crate::settings::get().clone();
+        s.game_dir = Some(dir);
+        let wait = |j: &super::VideoJob| loop {
+            if let (_, Some(r)) = j.snapshot() {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let mut o = videoexport::Options::new(
+            videoexport::Source::Demo(0),
+            videoexport::Output::PngWav(out.clone()),
+        );
+        o.to = Some(59);
+        let j = super::VideoJob::start(s.clone(), o.clone(), "demo".into(), || {});
+        let r = wait(&j).unwrap();
+        assert_eq!((r.frames, r.samples), (60, 60 * 735));
+        assert_eq!(j.snapshot().0.frames, 60);
+        assert!(out.join("000059.png").is_file() && !out.join("000060.png").exists());
+        o.to = None;
+        let j = super::VideoJob::start(s, o, "demo".into(), || {});
+        j.cancel.store(true, Ordering::Relaxed);
+        assert_eq!(wait(&j).unwrap_err(), "");
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]
