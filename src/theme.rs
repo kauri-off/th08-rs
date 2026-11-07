@@ -976,7 +976,37 @@ fn choice_layout(p: &Painter, words: &[String], st: &CtlStyle, room: f32) -> (Ve
         x += w + gap;
     }
     let lines = if v.is_empty() { 0 } else { line + 1 };
+    // Right-aligned words end at the rect's right edge, line by line.
+    if st.right && !st.cells {
+        for l in 0..lines {
+            let end = v
+                .iter()
+                .filter(|c| c.2 == l)
+                .map(|c| c.1 + c.3)
+                .fold(0.0, f32::max);
+            let shift = (room - end).max(0.0);
+            v.iter_mut().filter(|c| c.2 == l).for_each(|c| c.1 += shift);
+        }
+    }
     (v, lines)
+}
+
+// The widest single choice word of `ctl` (0 for other controls): a column narrower than this cannot hold it.
+pub fn widest_word(p: &Painter, ctl: &Ctl, st: &CtlStyle) -> f32 {
+    match ctl {
+        Ctl::Choices { words, .. } if words.len() <= MAX_WORDS => words
+            .iter()
+            .map(|w| {
+                let x = p.layout_no_wrap(w.clone(), serif(st.size), TEXT).size().x;
+                if st.cells {
+                    st.cell_w.max(x + word_gap(st))
+                } else {
+                    x
+                }
+            })
+            .fold(0.0, f32::max),
+        _ => 0.0,
+    }
 }
 
 // The height a control needs in a row `w` points wide.

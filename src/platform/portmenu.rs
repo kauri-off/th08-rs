@@ -109,6 +109,8 @@ pub struct Layout {
 
 // Pillar width at the reference size, points.
 const PILLAR: f32 = 480.0;
+// A phone side bar's least width, points.
+const SPLIT_BAR: f32 = 420.0;
 // The picture may shrink to this share of its full size to make room for the pillar.
 const SHEET_MIN_PICTURE: f32 = 0.8;
 // Touch: 120 points are at least 48 dp.
@@ -162,8 +164,18 @@ pub fn layout(
     };
     if sw > sh {
         let u = (f / 2.25).max(floor);
-        if touch && (sw - 640.0 * f) / 2.0 >= 360.0 * u {
-            return mk(Shape::Split, u, safe);
+        // Every landscape phone gets the side bars: the picture shrinks (down to `SHEET_MIN_PICTURE`) until both
+        // bars are `SPLIT_BAR` points wide.
+        let bar = SPLIT_BAR * u;
+        if touch && fit(sw - 2.0 * bar) >= SHEET_MIN_PICTURE * f {
+            let room = (sw - 640.0 * f) / 2.0;
+            let inset = if room >= bar { 0 } else { bar.ceil() as u32 };
+            let picture = SafeArea {
+                left: safe.left + inset,
+                right: safe.right + inset,
+                ..safe
+            };
+            return mk(Shape::Split, u, picture);
         }
         let rest = sw - PILLAR * u;
         if rest > 0.0 && fit(rest) >= SHEET_MIN_PICTURE * f && sh / u >= 600.0 {
@@ -1175,6 +1187,12 @@ fn label(
     h
 }
 
+// A text row at least `min` tall that grows with its wrapped label (the row's chevron column kept free).
+fn fit_row(p: &Painter, w: f32, text: &str, size: f32, min: f32) -> f32 {
+    let g = label_galley(p, w - size, text, theme::serif(size), theme::TEXT);
+    min.max(g.size().y + 40.0)
+}
+
 fn label_galley(
     p: &Painter,
     w: f32,
@@ -2088,8 +2106,9 @@ fn split_card(
         theme::rule(p, egui::Rangef::new(x, x + w), yb + 8.0);
     } else if !dangers.is_empty() {
         for &it in dangers.iter().rev() {
-            yb -= cm.row_h;
-            let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
+            let h = fit_row(p, w, words.item(it), cm.row * 0.94, cm.row_h);
+            yb -= h;
+            let r = Rect::from_min_size(pos2(x, yb), vec2(w, h));
             item_row(
                 ui,
                 p,
@@ -2112,8 +2131,9 @@ fn split_card(
     }
     // The question takes the bar on a phone; the items behind it are not drawn.
     if !dimmed {
-        yb -= cm.row_h;
-        let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
+        let h = fit_row(p, w, words.item(Item::Settings), cm.row, cm.row_h);
+        yb -= h;
+        let r = Rect::from_min_size(pos2(x, yb), vec2(w, h));
         item_row(
             ui,
             &op,
@@ -2199,7 +2219,7 @@ fn split_card(
     let height = |it: Item| match it {
         Item::Volume => lab_h + 120.0 + 40.0 + 16.0,
         Item::Hitboxes | Item::Speed => lab_h + 120.0 * lines(it) as f32 + 16.0,
-        _ => 120.0,
+        _ => fit_row(p, rw, words.item(it), lab, 120.0),
     };
     let total: f32 = quick.iter().map(|&i| height(i)).sum();
     let mut y = bottom - total;
@@ -2765,12 +2785,9 @@ fn settings_ui(
         num: if split { pm.row } else { pm.row * 0.8 },
         cells: split,
         right: false,
-        indent: if split { 0.0 } else { 32.0 },
-        track: if split {
-            0.0
-        } else {
-            (w - label_w - 166.0).clamp(80.0, 270.0)
-        },
+        indent: 0.0,
+        // The slider fills the value column to the panel's right margin.
+        track: if split { 0.0 } else { f32::INFINITY },
         numw: 100.0,
         gap: pm.row * 1.2,
         cell_w: if split { 120.0 } else { 0.0 },
@@ -2778,25 +2795,27 @@ fn settings_ui(
     };
     let pad = if split { 24.0 } else { 16.0 };
     let mut tops = Vec::with_capacity(n + 1);
-    // Stacked rows: the label on its own line and the control the full width under it, when the control would
-    // wrap in its column but fits the full width in fewer lines.
+    // One value column per page: values start at it and wrap inside it. A row drops its control under the label
+    // (full width) only when one of its words is wider than the column. Rows are 1, 1.5, 2… row pitches tall.
     let mut stacked = Vec::with_capacity(n);
+    let pitch = |h: f32| rh.max((h / (rh / 2.0) - 0.01).ceil() * (rh / 2.0));
     let mut y = 0.0;
     for (key, lab) in keys.iter().zip(&labels) {
         tops.push(y);
         let ctl = model.ctl(key, words.lang);
-        let lh = label_galley(&p, label_w - 16.0, lab, font.clone(), theme::TEXT)
+        let lh = label_galley(&p, label_w - 24.0, lab, font.clone(), theme::TEXT)
             .size()
             .y;
-        let side = theme::ctl_height(&p, &ctl, &st, w - label_w);
-        let full = theme::ctl_height(&p, &ctl, &st, w);
-        let stack = full < side - 1.0;
+        let col = w - label_w;
+        let stack = theme::widest_word(&p, &ctl, &st) > col;
         stacked.push(stack);
-        y += if stack {
-            label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y + full + pad
+        y += pitch(if stack {
+            label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y
+                + theme::ctl_height(&p, &ctl, &st, w)
+                + pad
         } else {
-            rh.max(lh + pad).max(side + pad)
-        };
+            (lh + pad).max(theme::ctl_height(&p, &ctl, &st, col) + pad)
+        });
     }
     y += 12.0;
     tops.push(y);
@@ -2869,7 +2888,7 @@ fn settings_ui(
         } else {
             label(
                 &lp,
-                Rect::from_min_size(r.min, vec2(label_w - 16.0, r.height())),
+                Rect::from_min_size(r.min, vec2(label_w - 24.0, r.height())),
                 labels[k],
                 font.clone(),
                 col,
@@ -3056,6 +3075,12 @@ pub enum ShotAsk {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn picture_safe(safe: SafeArea, size: (u32, u32), shot: &Shot, integer: bool) -> SafeArea {
     layout(safe, size, shot.density.max(1.0), shot.touch, integer).picture
+}
+
+// The game frame's window rect (x, y, w, h) inside `picture_safe`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn picture_frame(safe: SafeArea, size: (u32, u32), shot: &Shot, integer: bool) -> [f32; 4] {
+    layout(safe, size, shot.density.max(1.0), shot.touch, integer).frame
 }
 
 // Tools: the menu over `frame` (a w×h picture of the game as the menu shows it, see `picture_safe`) on a headless
@@ -3475,7 +3500,11 @@ mod tests {
         assert_eq!(phone.shape, Shape::Split);
         assert!(120.0 * phone.ppp >= 48.0 * 2.625 - 0.01);
         assert!(phone.font(24.0, 12.0) * phone.ppp >= 12.0 * 2.625 - 0.01);
-        assert_eq!(phone.picture, phone_safe);
+        assert!(phone.frame[0] - 112.0 >= SPLIT_BAR * phone.ppp - 1.0);
+        let small = layout(phone_safe, (1600, 720), 2.0, true, false);
+        assert_eq!(small.shape, Shape::Split);
+        assert!(120.0 * small.ppp >= 48.0 * 2.0 - 0.01);
+        assert!(small.frame[0] - 112.0 >= SPLIT_BAR * small.ppp - 1.0);
         let portrait = layout(SafeArea::default(), (1080, 2400), 2.625, true, false);
         assert_eq!(portrait.shape, Shape::Column);
         assert!(120.0 * portrait.ppp >= 48.0 * 2.625 - 0.01);
