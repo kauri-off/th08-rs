@@ -170,7 +170,7 @@ impl Model {
                         Some((key, t)) if key == r.e.key => {
                             let left = TIMEOUT.saturating_sub(t.elapsed()).as_secs() + 1;
                             ui.colored_label(
-                                egui::Color32::from_rgb(120, 170, 255),
+                                crate::theme::INFO,
                                 i18n::ui_fmt(lang, "pad_press", &[("s", &left.to_string())]),
                             );
                             if ui.button(i18n::ui(lang, "cancel")).clicked() {

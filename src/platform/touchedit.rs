@@ -1,8 +1,9 @@
 //! Touch layout editor in the port menu: move, resize, opacity, show / hide and reset of the overlay controls.
 
-use super::overlay::{accent, button, label, white};
+use super::overlay::{button, label, white};
 use super::touch::{Control, Ctl, Screen, TouchConfig, TouchLayout, TouchSource};
 use crate::i18n::{self, Lang};
+use crate::theme;
 use egui::{
     Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2,
 };
@@ -138,7 +139,7 @@ impl TouchEdit {
                     white(a.max(0.3) * 1.6),
                 );
                 if sel {
-                    p.rect_stroke(r, 6.0, Stroke::new(3.0, accent(1.0)), StrokeKind::Inside);
+                    p.rect_stroke(r, 6.0, Stroke::new(3.0, theme::FOCUS), StrokeKind::Inside);
                 }
             } else {
                 button(
@@ -150,7 +151,7 @@ impl TouchEdit {
                     false,
                 );
                 if sel {
-                    p.circle_stroke(centre, half.x + 3.0, Stroke::new(3.0, accent(1.0)));
+                    p.circle_stroke(centre, half.x + 3.0, Stroke::new(3.0, theme::FOCUS));
                 }
             }
             if !c.visible {
@@ -198,7 +199,7 @@ impl TouchEdit {
                         out = Some(EditOut::Cancel);
                     }
                     if ui
-                        .button(RichText::new(i18n::ui(lang, "save")).strong())
+                        .add(theme::button(i18n::ui(lang, "save"), theme::Kind::Primary))
                         .clicked()
                     {
                         out = Some(EditOut::Save(self.src.cfg.layout.clone()));

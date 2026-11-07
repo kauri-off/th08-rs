@@ -3,6 +3,7 @@
 use super::{Action, Model, Value};
 use crate::i18n::{self, Lang};
 use crate::replays::{self, Entry, Sort};
+use crate::theme::{self, Kind};
 use crate::videoexport::{self, Progress};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -240,7 +241,7 @@ impl Model {
         let mut video = None;
         self.video_progress_ui(ui, lang);
         for e in &list {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            theme::card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 match &e.info {
                     Ok(i) => {
@@ -285,7 +286,10 @@ impl Model {
                     };
                     ui.label(egui::RichText::new(detail).small().weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(i18n::ui(lang, "rp_delete")).clicked() {
+                        if ui
+                            .add(theme::button(i18n::ui(lang, "rp_delete"), Kind::Danger))
+                            .clicked()
+                        {
                             self.rp.confirm = Some(e.path.clone());
                         }
                         if e.info.is_ok() {
@@ -371,10 +375,11 @@ impl Model {
         let m = egui::Modal::new(egui::Id::unique("rp_video")).show(ui.ctx(), |ui| {
             ui.label(
                 egui::RichText::new(i18n::ui_fmt(lang, "rp_video_title", &[("file", &file)]))
+                    .size(theme::TITLE)
                     .strong(),
             );
-            ui.label(egui::RichText::new(i18n::ui(lang, "rp_video_hint")).weak());
-            ui.add_space(6.0);
+            ui.label(theme::hint(i18n::ui(lang, "rp_video_hint")));
+            ui.add_space(theme::M);
             ui.horizontal(|ui| {
                 ui.label(i18n::ui(lang, "rp_video_scale"));
                 for k in 1..=3u32 {
@@ -383,10 +388,13 @@ impl Model {
             });
             ui.checkbox(&mut ask.inputs, i18n::ui(lang, "rp_video_inputs"));
             ui.checkbox(&mut ask.hitboxes, i18n::ui(lang, "rp_video_hitboxes"));
-            ui.add_space(8.0);
+            ui.add_space(theme::M);
             ui.horizontal(|ui| {
                 go = ui
-                    .button(egui::RichText::new(i18n::ui(lang, "rp_video_save")).strong())
+                    .add(theme::button(
+                        i18n::ui(lang, "rp_video_save"),
+                        Kind::Primary,
+                    ))
                     .clicked();
                 close = ui.button(i18n::ui(lang, "cancel")).clicked();
             });
@@ -469,7 +477,7 @@ impl Model {
             self.rp.video = None;
             return;
         }
-        egui::Frame::group(ui.style()).show(ui, |ui| {
+        theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             let total = p.total.max(p.frames).max(1);
             ui.label(i18n::ui_fmt(
@@ -510,13 +518,10 @@ impl Model {
             .into_owned();
         let m = egui::Modal::new(egui::Id::unique("rp_confirm")).show(ui.ctx(), |ui| {
             ui.label(i18n::ui_fmt(lang, "rp_delete_confirm", &[("file", &file)]));
-            ui.add_space(8.0);
+            ui.add_space(theme::M);
             ui.horizontal(|ui| {
                 if ui
-                    .button(
-                        egui::RichText::new(i18n::ui(lang, "rp_delete"))
-                            .color(ui.visuals().error_fg_color),
-                    )
+                    .add(theme::button(i18n::ui(lang, "rp_delete"), Kind::Danger))
                     .clicked()
                 {
                     self.rp.status = Some(

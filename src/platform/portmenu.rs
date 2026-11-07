@@ -5,7 +5,8 @@ use super::touchedit::{EditOut, TouchEdit};
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};
 use crate::settings::Settings;
-use egui::{Align2, Color32, Id, LayerId, Order, RichText, Stroke, StrokeKind, vec2};
+use crate::theme::{self, Kind};
+use egui::{Align2, Id, LayerId, Order, RichText, Stroke, vec2};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
 use winit::event::{ElementState, WindowEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
@@ -78,22 +79,6 @@ impl Nav {
 // Stick / hat deflection that moves the focus once.
 const STICK_NAV: i32 = 600;
 
-// Theme colours; `theme_contrast` checks text ≥ 4.5:1 and outlines ≥ 3:1 on the panel.
-const PANEL: Color32 = Color32::from_rgb(24, 20, 34);
-const TEXT: Color32 = Color32::from_rgb(236, 232, 244);
-const TEXT_DIM: Color32 = Color32::from_rgb(184, 176, 200);
-const ACCENT: Color32 = Color32::from_rgb(104, 62, 168);
-const BUTTON: Color32 = Color32::from_rgb(50, 42, 68);
-const BUTTON_HOVER: Color32 = Color32::from_rgb(70, 60, 96);
-const BORDER: Color32 = Color32::from_rgb(134, 122, 164);
-const FOCUS: Color32 = Color32::from_rgb(255, 214, 102);
-const WARN: Color32 = Color32::from_rgb(255, 140, 128);
-
-// Text sizes, points (= dp on touch screens, where ppp ≥ the display density).
-const BODY: f32 = 16.0;
-const SMALL: f32 = 14.0;
-const HEADING: f32 = 22.0;
-
 // Where and how big the menu is for one window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
@@ -121,8 +106,8 @@ const SHEET_MIN_PICTURE: f32 = 0.8;
 pub fn layout(safe: SafeArea, (w, h): (u32, u32), density: f32, touch: bool) -> Layout {
     let [_, _, sw, sh] = safe.rect(w, h);
     let fit = |width: f32| (width / 640.0).min(sh / 480.0);
-    let ppp = fit(sw).max(0.5).max(density);
-    let target = if touch { 48.0 } else { 36.0 };
+    let ppp = theme::ppp(sw, sh, density, touch);
+    let target = theme::Density::new(touch).target;
     let min_card = if touch { 300.0 } else { 280.0 };
     let rest = sw - min_card * ppp;
     let sheet = rest > 0.0 && fit(rest) >= SHEET_MIN_PICTURE * fit(sw) && sh / ppp >= 320.0;
@@ -695,69 +680,14 @@ fn new_ctx(s: &Settings) -> egui::Context {
     ctx
 }
 
-// The menu theme: the game's purple accent, outlined buttons, high-contrast text, targets of `lay.target` points.
 fn style(ctx: &egui::Context, lay: &Layout) {
-    use egui::{FontFamily, FontId, TextStyle};
-    ctx.all_styles_mut(|st| {
-        st.text_styles = [
-            (
-                TextStyle::Heading,
-                FontId::new(HEADING, FontFamily::Proportional),
-            ),
-            (TextStyle::Body, FontId::new(BODY, FontFamily::Proportional)),
-            (
-                TextStyle::Button,
-                FontId::new(BODY, FontFamily::Proportional),
-            ),
-            (
-                TextStyle::Small,
-                FontId::new(SMALL, FontFamily::Proportional),
-            ),
-            (
-                TextStyle::Monospace,
-                FontId::new(SMALL, FontFamily::Monospace),
-            ),
-        ]
-        .into();
-        let sp = &mut st.spacing;
-        sp.interact_size = vec2(40.0, lay.target);
-        sp.item_spacing = vec2(8.0, 6.0);
-        sp.button_padding = vec2(12.0, 6.0);
-        sp.icon_width = if lay.touch { 28.0 } else { 20.0 };
-        sp.icon_width_inner = sp.icon_width * 0.6;
-        sp.icon_spacing = 8.0;
-        sp.slider_rail_height = 8.0;
-        sp.combo_width = 160.0;
-        let v = &mut st.visuals;
-        v.dark_mode = true;
-        v.override_text_color = None;
-        v.weak_text_color = Some(TEXT_DIM);
-        v.window_fill = PANEL;
-        v.panel_fill = PANEL;
-        v.extreme_bg_color = Color32::from_rgb(12, 10, 18);
-        v.slider_trailing_fill = true;
-        v.handle_shape = egui::style::HandleShape::Circle;
-        v.selection.bg_fill = ACCENT;
-        v.selection.stroke = Stroke::new(1.5, TEXT);
-        v.error_fg_color = WARN;
-        let w = &mut v.widgets;
-        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        w.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-        for (x, fill) in [
-            (&mut w.inactive, BUTTON),
-            (&mut w.hovered, BUTTON_HOVER),
-            (&mut w.active, BUTTON_HOVER),
-            (&mut w.open, BUTTON_HOVER),
-        ] {
-            x.bg_fill = fill;
-            x.weak_bg_fill = fill;
-            x.bg_stroke = Stroke::new(1.5, BORDER);
-            x.fg_stroke = Stroke::new(1.5, TEXT);
-            x.corner_radius = egui::CornerRadius::same(6);
-        }
-        w.hovered.bg_stroke = Stroke::new(2.0, TEXT);
-        w.active.bg_stroke = Stroke::new(2.0, TEXT);
-    });
+    theme::apply(
+        ctx,
+        theme::Density {
+            target: lay.target,
+            touch: lay.touch,
+        },
+    );
 }
 
 fn insets(s: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
@@ -776,22 +706,6 @@ fn live_values(m: &launcher::Model) -> Vec<(&'static str, String)> {
         .collect()
 }
 
-// The focus ring inside `rect` (rows in a clipped scroll area).
-fn ring_inside(ui: &egui::Ui, rect: egui::Rect) {
-    ui.painter()
-        .rect_stroke(rect, 8.0, Stroke::new(3.0, FOCUS), StrokeKind::Inside);
-}
-
-// The visible focus ring.
-fn ring(ui: &egui::Ui, rect: egui::Rect) {
-    ui.painter().rect_stroke(
-        rect.expand(2.0),
-        8.0,
-        Stroke::new(3.0, FOCUS),
-        StrokeKind::Outside,
-    );
-}
-
 // The card or the settings page; what was clicked.
 fn menu_ui(
     ctx: &egui::Context,
@@ -804,50 +718,49 @@ fn menu_ui(
     let safe = ctx.content_rect();
     let mut out = Vec::new();
     let bg = LayerId::new(Order::Background, Id::unique("port menu bg"));
+    let gap = if lay.touch { theme::S } else { theme::L };
     if focus.page == Page::Settings {
-        ctx.layer_painter(bg)
-            .rect_filled(screen, 0.0, Color32::from_black_alpha(170));
-        let w = (safe.width() - 24.0).min(560.0);
-        let h = safe.height() - 24.0;
+        ctx.layer_painter(bg).rect_filled(screen, 0.0, theme::SCRIM);
+        let pad = 2.0 * theme::L;
+        let w = (safe.width() - 2.0 * gap).min(SETTINGS_W);
+        let max_h = safe.height() - 2.0 * gap - pad;
         egui::Area::new(Id::unique("port menu settings"))
             .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                panel_frame(ui).show(ui, |ui| {
-                    ui.set_width(w - 32.0);
-                    ui.set_height(h - 32.0);
-                    settings_ui(ui, m, model, focus, lay);
+                theme::panel().show(ui, |ui| {
+                    ui.set_width(w - pad);
+                    settings_ui(ui, m, model, focus, lay, max_h);
                 });
             });
         return out;
     }
     if lay.sheet {
         let x = safe.max.x - lay.card_w;
-        ctx.layer_painter(bg).rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x, screen.min.y), screen.max),
-            0.0,
-            PANEL,
-        );
+        let sheet = egui::Rect::from_min_max(egui::pos2(x, screen.min.y), screen.max);
+        let p = ctx.layer_painter(bg);
+        p.rect_filled(sheet, 0.0, theme::SURFACE);
+        p.vline(x, sheet.y_range(), Stroke::new(1.0, theme::OUTLINE));
         egui::Area::new(Id::unique("port menu sheet"))
-            .fixed_pos(egui::pos2(x + 16.0, safe.min.y + 12.0))
+            .fixed_pos(egui::pos2(x + theme::L, safe.min.y + theme::M))
             .show(ctx, |ui| {
-                ui.set_max_height(safe.height() - 24.0);
+                ui.set_max_height(safe.height() - 2.0 * theme::M);
                 egui::ScrollArea::vertical()
-                    .max_height(safe.height() - 24.0)
+                    .max_height(safe.height() - 2.0 * theme::M)
                     .show(ui, |ui| {
-                        out = card_ui(ui, m, model, focus, lay, lay.card_w - 32.0);
+                        out = card_ui(ui, m, model, focus, lay, lay.card_w - 2.0 * theme::L);
                     });
             });
     } else {
         ctx.layer_painter(bg)
-            .rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+            .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(110));
         egui::Area::new(Id::unique("port menu card"))
             .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                panel_frame(ui).show(ui, |ui| {
+                theme::panel().show(ui, |ui| {
                     egui::ScrollArea::vertical()
-                        .max_height(safe.height() - 56.0)
+                        .max_height(safe.height() - 2.0 * gap - 2.0 * theme::L)
                         .show(ui, |ui| {
-                            out = card_ui(ui, m, model, focus, lay, lay.card_w - 32.0);
+                            out = card_ui(ui, m, model, focus, lay, lay.card_w - 2.0 * theme::L);
                         });
                 });
             });
@@ -855,35 +768,30 @@ fn menu_ui(
     out
 }
 
-fn panel_frame(ui: &egui::Ui) -> egui::Frame {
-    egui::Frame::popup(ui.style())
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::same(16))
-}
+// The settings page's widest panel, points.
+const SETTINGS_W: f32 = 600.0;
 
-// A full-width or tile button; `primary`: accent filled.
-fn wide(ui: &mut egui::Ui, text: &str, w: f32, h: f32, primary: bool) -> egui::Response {
-    button(ui, RichText::new(text).color(TEXT), w, h, primary)
+// A full-width or tile button.
+fn wide(ui: &mut egui::Ui, text: &str, w: f32, h: f32, kind: Kind) -> egui::Response {
+    let b = theme::button(text, kind).wrap().min_size(vec2(w, h));
+    ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
 }
 
 // A tile: small text in up to two lines, all tiles of a row the same size.
 fn tile(ui: &mut egui::Ui, text: &str, w: f32, h: f32) -> egui::Response {
     ui.scope(|ui| {
-        ui.spacing_mut().button_padding.x = 4.0;
-        button(ui, RichText::new(text).color(TEXT).small(), w, h, false)
+        ui.spacing_mut().button_padding.x = theme::XS;
+        let b = egui::Button::new(RichText::new(text).color(theme::TEXT).small())
+            .wrap()
+            .min_size(vec2(w, h));
+        ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
     })
     .inner
 }
 
-// A button of exactly w×h points at least.
-fn button(ui: &mut egui::Ui, text: RichText, w: f32, h: f32, primary: bool) -> egui::Response {
-    let mut b = egui::Button::new(text).wrap().min_size(vec2(w, h));
-    if primary {
-        b = b.fill(ACCENT).stroke(Stroke::new(2.0, TEXT));
-    }
-    ui.allocate_ui(vec2(w, h), |ui| ui.add(b)).inner
+// The pointer moved this pass: a row under it takes the focus (a resting pointer leaves key / pad focus alone).
+fn pointer_moved(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.pointer.is_moving() || i.pointer.any_pressed())
 }
 
 fn card_ui(
@@ -900,12 +808,14 @@ fn card_ui(
     let mut out = Vec::new();
     let t = lay.target;
     let tile_h = t.max(50.0);
+    let moved = pointer_moved(ui);
     ui.set_width(w);
-    ui.spacing_mut().item_spacing.y = if lay.touch { 6.0 } else { 8.0 };
+    ui.spacing_mut().item_spacing.y = if lay.touch { 6.0 } else { theme::S };
     ui.vertical_centered(|ui| {
-        ui.heading(
+        ui.label(
             RichText::new(i18n::ui(lang, "paused_title"))
-                .color(TEXT)
+                .size(theme::TITLE)
+                .color(theme::TEXT)
                 .strong(),
         );
     });
@@ -914,46 +824,34 @@ fn card_ui(
         notes.push(i18n::ui(lang, "slow_nosave").into());
     }
     for n in notes {
-        ui.label(RichText::new(format!("⚠ {n}")).color(WARN).small());
+        ui.label(RichText::new(format!("⚠ {n}")).color(theme::WARN).small());
     }
     for (r, row) in rows.iter().enumerate() {
         let n = row.len() as f32;
-        let tile_w = (w - 8.0 * (n - 1.0)) / n;
+        let tile_w = (w - theme::S * (n - 1.0)) / n;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().item_spacing.x = theme::S;
             for (c, &it) in row.iter().enumerate() {
                 let resp = match it {
-                    Item::Resume => wide(ui, i18n::ui(lang, "resume"), w, t, true),
-                    Item::Quit => {
-                        let text = if focus.confirm {
-                            i18n::ui(lang, "quit_confirm")
-                        } else {
-                            i18n::ui(lang, "quit_title")
-                        };
-                        let r = wide(ui, text, w, t, false);
-                        if focus.confirm {
-                            ui.painter().rect_stroke(
-                                r.rect,
-                                6.0,
-                                Stroke::new(2.0, WARN),
-                                StrokeKind::Inside,
-                            );
-                        }
-                        r
+                    Item::Resume => wide(ui, i18n::ui(lang, "resume"), w, t, Kind::Primary),
+                    Item::Quit if focus.confirm => {
+                        wide(ui, i18n::ui(lang, "quit_confirm"), w, t, Kind::Danger)
                     }
+                    Item::Quit => wide(ui, i18n::ui(lang, "quit_title"), w, t, Kind::Secondary),
                     Item::Volume => {
                         ui.horizontal(|ui| {
+                            let label_w = w * 0.34;
                             ui.allocate_ui_with_layout(
-                                vec2(w * 0.34, t),
+                                vec2(label_w, t),
                                 egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    ui.set_min_size(vec2(w * 0.34, t));
+                                    ui.set_min_size(vec2(label_w, t));
                                     ui.add(egui::Label::new(i18n::ui(lang, "volume")).wrap());
                                 },
                             );
-                            ui.spacing_mut().slider_width = (w * 0.66 - 72.0).max(60.0);
                             if has_volume(model) {
-                                model.value_widget_ui(ui, VOLUME, lang);
+                                let ctrl = w - label_w - ui.spacing().item_spacing.x;
+                                model.value_widget_ui(ui, VOLUME, lang, ctrl);
                             }
                         })
                         .response
@@ -986,17 +884,19 @@ fn card_ui(
                     Item::TouchLayout => {
                         tile(ui, i18n::ui(lang, "touch_layout_short"), tile_w, tile_h)
                     }
-                    Item::Settings => wide(ui, i18n::ui(lang, "settings_page"), w, t, false),
+                    Item::Settings => {
+                        wide(ui, i18n::ui(lang, "settings_page"), w, t, Kind::Secondary)
+                    }
                 };
                 if resp.clicked() {
                     focus.card = (r, c);
                     out.push(focus.activate(it, &rows));
-                } else if resp.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
+                } else if resp.contains_pointer() && moved && focus.card != (r, c) {
                     focus.card = (r, c);
                     focus.confirm &= it == Item::Quit;
                 }
                 if focus.card == (r, c) {
-                    ring(ui, resp.rect);
+                    theme::ring(ui, resp.rect, false);
                     if focus.moved {
                         resp.scroll_to_me(None);
                     }
@@ -1005,8 +905,9 @@ fn card_ui(
         });
     }
     if let Some(s) = m.status {
-        ui.label(RichText::new(s).small().color(TEXT_DIM));
+        ui.label(theme::hint(s));
     }
+    ui.add_space(theme::XS);
     let name = m.pad.unwrap_or_else(|| i18n::ui(lang, "no_controller"));
     let mut foot = i18n::ui_fmt(lang, "controller", &[("name", name)]);
     let keys = if cfg!(target_os = "android") {
@@ -1015,118 +916,126 @@ fn card_ui(
         "F1 / Esc"
     };
     foot.push_str(&format!(" · {keys}"));
-    ui.label(RichText::new(foot).small().color(TEXT_DIM));
+    ui.label(theme::hint(foot));
     if !lay.touch || m.pad.is_some() {
-        ui.label(
-            RichText::new(i18n::ui(lang, "nav_hint"))
-                .small()
-                .color(TEXT_DIM),
-        );
+        ui.label(theme::hint(i18n::ui(lang, "nav_hint")));
     }
     out
 }
 
-// The settings page: Back, the tabs, the rows of one tab, then help for the hovered or focused row.
+// The settings page: Back, the title and version, the tabs, the rows of one tab, help for the focused row, the
+// key hints. Sized to the longest tab (no jump between tabs) up to `max_h`, where the rows scroll.
 fn settings_ui(
     ui: &mut egui::Ui,
     m: &MenuState<'_>,
     model: &mut launcher::Model,
     focus: &mut Focus,
     lay: &Layout,
+    max_h: f32,
 ) {
     let lang = model.lang();
     let t = lay.target;
     let tabs = model.live_tabs();
     let rows = card_rows(m);
+    let top = ui.cursor().min.y;
+    let moved = pointer_moved(ui);
     focus.tab = focus.tab.min(tabs.len().saturating_sub(1));
     ui.horizontal(|ui| {
         let back = format!("‹ {}", i18n::ui(lang, "back"));
-        if ui
-            .add(egui::Button::new(back).min_size(vec2(t * 1.5, t)))
-            .clicked()
-        {
+        let b = theme::button(back, Kind::Secondary).min_size(vec2(t * 1.5, t));
+        if ui.add(b).clicked() {
             focus.back(&rows);
         }
-        ui.add_space(8.0);
-        egui::ScrollArea::horizontal()
-            .id_salt("tabs")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (i, &g) in tabs.iter().enumerate() {
-                        let b =
-                            egui::Button::selectable(i == focus.tab, i18n::group_title(lang, g))
-                                .min_size(vec2(t * 1.5, t));
-                        let r = ui.add(b);
-                        if r.clicked() {
-                            focus.tab = i;
-                            focus.row = focus.row.min(1);
-                        }
-                        if i == focus.tab && focus.moved {
-                            r.scroll_to_me(None);
-                        }
-                        if focus.row == 0 && i == focus.tab {
-                            ring_inside(ui, r.rect);
-                        }
-                    }
-                });
-            });
+        ui.add_space(theme::S);
+        ui.label(
+            RichText::new(i18n::ui(lang, "tab_settings"))
+                .size(theme::TITLE)
+                .strong()
+                .color(theme::TEXT),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(theme::hint(launcher::version_line()));
+        });
     });
+    ui.add_space(theme::XS);
+    let labels: Vec<&str> = tabs.iter().map(|&g| i18n::group_title(lang, g)).collect();
+    let (clicked, sel) = theme::tabs(ui, &labels, focus.tab, lay.touch);
+    if let Some(i) = clicked {
+        focus.tab = i;
+        focus.row = focus.row.min(1);
+    }
+    if focus.row == 0
+        && let Some(r) = sel
+    {
+        theme::ring(ui, r, true);
+    }
     ui.separator();
     let Some(&g) = tabs.get(focus.tab) else {
         return;
     };
     let keys = model.live_rows(g);
     focus.row = focus.row.min(keys.len());
-    // The footer's height as measured last pass (help lines vary).
-    let footer_id = egui::Id::unique("port menu footer");
-    let footer = ui
-        .data(|d| d.get_temp::<f32>(footer_id))
-        .unwrap_or(SMALL * 1.4 * 3.0 + 16.0);
-    let label_w = (ui.available_width() * 0.42).min(240.0);
-    ui.spacing_mut().slider_width = (ui.available_width() - label_w - 96.0).clamp(80.0, 260.0);
-    let mut hovered = None;
-    egui::ScrollArea::vertical()
+    let most = tabs
+        .iter()
+        .map(|&g| model.live_rows(g).len())
+        .max()
+        .unwrap_or(0);
+    let row_h = t + ui.spacing().item_spacing.y;
+    // Header, tabs and footer as measured last pass (help lines vary).
+    let chrome_id = Id::unique("port menu chrome");
+    let chrome = ui
+        .data(|d| d.get_temp::<f32>(chrome_id))
+        .unwrap_or(t * 3.0 + theme::SMALL * 5.0);
+    let list_h = (max_h - chrome).max(t);
+    let width = ui.available_width();
+    let ctrl_w = (width * 0.5).min(320.0);
+    let label_w = width - ctrl_w - 2.0 * theme::S - ui.spacing().item_spacing.x * 2.0;
+    let list = egui::ScrollArea::vertical()
         .id_salt(g.id())
-        .max_height((ui.available_height() - footer).max(t))
+        .max_height(list_h)
         .auto_shrink([false, true])
         .show(ui, |ui| {
+            ui.set_min_height((most as f32 * row_h).min(list_h));
             for (k, key) in keys.iter().enumerate() {
-                let r = model.menu_row_ui(ui, key, lang, label_w);
+                let r = model.menu_row_ui(ui, key, lang, label_w, ctrl_w);
                 let rect = egui::Rect::from_min_max(
                     r.rect.min,
                     egui::pos2(ui.max_rect().max.x, r.rect.max.y),
                 );
-                if r.contains_pointer() {
-                    hovered = Some(*key);
-                    if ui.input(|i| i.pointer.any_pressed()) {
-                        focus.row = k + 1;
-                    }
+                if ui.rect_contains_pointer(rect) && moved {
+                    focus.row = k + 1;
                 }
                 if focus.row == k + 1 {
-                    ring_inside(ui, rect);
+                    theme::ring(ui, rect, true);
                     if focus.moved {
                         r.scroll_to_me(None);
                     }
                 }
             }
         });
-    let top = ui.cursor().min.y;
     ui.separator();
-    let help = hovered.or(focus.row.checked_sub(1).and_then(|i| keys.get(i).copied()));
-    if let Some(e) = help.and_then(crate::settings::find) {
-        ui.add(egui::Label::new(RichText::new(i18n::help(lang, e)).small().color(TEXT_DIM)).wrap());
-    }
-    let mut foot = launcher::version_line();
+    let help = focus.row.checked_sub(1).and_then(|i| keys.get(i).copied());
+    let help_h = theme::SMALL * 2.6;
+    ui.allocate_ui_with_layout(
+        vec2(width, help_h),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_size(vec2(width, help_h));
+            if let Some(e) = help.and_then(crate::settings::find) {
+                ui.add(egui::Label::new(theme::hint(i18n::help(lang, e))).wrap());
+            }
+        },
+    );
     if !lay.touch || m.pad.is_some() {
-        foot = format!(
-            "{} · {} · {foot}",
+        let keys = format!(
+            "{} · {}",
             i18n::ui(lang, "nav_hint"),
             i18n::ui(lang, "tabs_hint")
         );
+        ui.add(egui::Label::new(theme::hint(keys)).wrap());
     }
-    ui.label(RichText::new(foot).small().color(TEXT_DIM));
-    let used = ui.cursor().min.y - top;
-    ui.data_mut(|d| d.insert_temp(footer_id, used));
+    let used = ui.cursor().min.y - top - list.inner_rect.height();
+    ui.data_mut(|d| d.insert_temp(chrome_id, used));
 }
 
 // "Hitboxes" over "Off", the word from the settings row.
@@ -1502,8 +1411,8 @@ mod tests {
         assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
     }
 
-    // Phones: ppp from the density, so 48 pt targets are ≥ 48 dp and text ≥ 14 sp; the sheet docks where the
-    // letterbox leaves room, the centred card elsewhere.
+    // Phones: ppp from the density, so 48 pt targets are ≥ 48 dp and text ≥ 14 sp; desktop windows: the OS scale,
+    // growing at most 1.5× with the window; the sheet docks where the letterbox leaves room, the centred card elsewhere.
     #[test]
     fn density_and_sheet() {
         let phone_safe = SafeArea {
@@ -1512,7 +1421,7 @@ mod tests {
         };
         let phone = layout(phone_safe, (2400, 1080), 2.625, true);
         assert!(phone.target * phone.ppp >= 48.0 * 2.625);
-        assert!(SMALL * phone.ppp >= 14.0 * 2.625);
+        assert!(theme::SMALL * phone.ppp >= 14.0 * 2.625);
         assert!(phone.sheet);
         assert!(phone.card_w >= 300.0);
         let [_, _, pw, ph] = phone.picture.rect(2400, 1080);
@@ -1534,46 +1443,12 @@ mod tests {
         ] {
             let l = layout(SafeArea::default(), size, 1.0, false);
             assert_eq!(l.sheet, sheet, "{size:?}");
-            assert_eq!(l.ppp, (size.0 as f32 / 640.0).min(size.1 as f32 / 480.0));
+            assert!((1.0..=1.5).contains(&l.ppp), "{size:?}");
             assert!(l.card_w * l.ppp <= size.0 as f32);
         }
         assert_eq!(
             layout(SafeArea::default(), (1280, 960), 2.0, false).ppp,
             2.0
         );
-    }
-
-    #[expect(clippy::disallowed_methods, reason = "test-only sRGB curve")]
-    fn luminance(c: Color32) -> f32 {
-        let f = |v: u8| {
-            let v = f32::from(v) / 255.0;
-            if v <= 0.040_45 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
-    }
-
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let (x, y) = (luminance(a), luminance(b));
-        (x.max(y) + 0.05) / (x.min(y) + 0.05)
-    }
-
-    // WCAG: text 4.5:1 on the panel and buttons (the red note sits on the panel only), outlines and the focus ring 3:1 against the panel.
-    #[test]
-    fn theme_contrast() {
-        for bg in [PANEL, BUTTON, BUTTON_HOVER] {
-            for fg in [TEXT, TEXT_DIM] {
-                assert!(contrast(fg, bg) >= 4.5, "{fg:?} on {bg:?}");
-            }
-        }
-        assert!(contrast(WARN, PANEL) >= 4.5);
-        assert!(contrast(TEXT, ACCENT) >= 4.5);
-        for c in [BORDER, FOCUS] {
-            assert!(contrast(c, PANEL) >= 3.0, "{c:?}");
-        }
-        assert!(contrast(FOCUS, ACCENT) >= 3.0 && contrast(FOCUS, BUTTON) >= 3.0);
     }
 }

@@ -3,6 +3,7 @@
 use crate::i18n::{self, Lang};
 use crate::platform::keymap;
 use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
+use crate::theme;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use th08_render::gfx::{Gfx, SafeArea};
@@ -552,18 +553,19 @@ impl Model {
         self.row_mut(key).apply(1, true)
     }
 
-    // A port menu row: label and value widget, no help line; the response covers the row.
+    // A port menu row: label, then the value widget in a `ctrl_w` column; no help line; the response covers the row.
     pub fn menu_row_ui(
         &mut self,
         ui: &mut egui::Ui,
         key: &str,
         lang: Lang,
         label_w: f32,
+        ctrl_w: f32,
     ) -> egui::Response {
         let r = self.row_mut(key);
         let h = ui.spacing().interact_size.y;
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
+            ui.add_space(crate::theme::S);
             ui.allocate_ui_with_layout(
                 egui::vec2(label_w, h),
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -572,15 +574,21 @@ impl Model {
                     ui.add(egui::Label::new(i18n::label(lang, r.e)).wrap());
                 },
             );
-            value_ui(ui, r, lang, &[], true);
+            value_ui(ui, r, lang, &[], Some(ctrl_w));
         })
         .response
     }
 
-    // A port menu value widget alone (the card's volume slider).
-    pub fn value_widget_ui(&mut self, ui: &mut egui::Ui, key: &str, lang: Lang) -> egui::Response {
+    // A port menu value widget alone in a `ctrl_w` column (the card's volume slider).
+    pub fn value_widget_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        lang: Lang,
+        ctrl_w: f32,
+    ) -> egui::Response {
         let r = self.row_mut(key);
-        ui.horizontal(|ui| value_ui(ui, r, lang, &[], true))
+        ui.horizontal(|ui| value_ui(ui, r, lang, &[], Some(ctrl_w)))
             .response
     }
 
@@ -937,49 +945,52 @@ impl Model {
     fn settings_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let mut act = None;
         let lang = self.lang();
-        egui::Panel::top("folder").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading(i18n::ui(lang, "title"));
-                ui.label(egui::RichText::new(version_line()).small().weak());
+        egui::Panel::top("folder")
+            .frame(theme::bar())
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(i18n::ui(lang, "title"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(theme::hint(version_line()));
+                    });
+                });
+                ui.add_space(theme::XS);
+                self.folder_ui(ui);
+                #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+                self.tabs_ui(ui, lang);
             });
-            self.folder_ui(ui);
-            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-            self.tabs_ui(ui, lang);
-            ui.add_space(4.0);
-        });
-        egui::Panel::bottom("buttons").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let play = ui.add_enabled(
-                    self.can_play(),
-                    egui::Button::new(
-                        egui::RichText::new(format!("  {}  ", i18n::ui(lang, "play"))).strong(),
-                    ),
-                );
-                if play.clicked() {
-                    act = Some(Action::Play);
-                }
-                if ui.button(i18n::ui(lang, "reset")).clicked() {
-                    self.reset();
-                }
-                if cfg!(not(target_arch = "wasm32")) && ui.button(i18n::ui(lang, "quit")).clicked()
-                {
-                    act = Some(Action::Quit);
-                }
-                ui.checkbox(&mut self.dev, i18n::ui(lang, "developer"))
-                    .on_hover_text(i18n::ui(lang, "developer_hint"));
-                if !self.folder_ok() {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        i18n::ui(lang, "select_folder_first"),
+        egui::Panel::bottom("buttons")
+            .frame(theme::bar())
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let play = ui.add_enabled(
+                        self.can_play(),
+                        theme::button(i18n::ui(lang, "play"), theme::Kind::Primary)
+                            .min_size(egui::vec2(120.0, 0.0)),
                     );
-                } else if self.rows.iter().any(|r| r.error().is_some()) {
-                    ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "fix_values"));
-                }
+                    if play.clicked() {
+                        act = Some(Action::Play);
+                    }
+                    if ui.button(i18n::ui(lang, "reset")).clicked() {
+                        self.reset();
+                    }
+                    if cfg!(not(target_arch = "wasm32"))
+                        && ui.button(i18n::ui(lang, "quit")).clicked()
+                    {
+                        act = Some(Action::Quit);
+                    }
+                    ui.checkbox(&mut self.dev, i18n::ui(lang, "developer"))
+                        .on_hover_text(i18n::ui(lang, "developer_hint"));
+                    if !self.folder_ok() {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            i18n::ui(lang, "select_folder_first"),
+                        );
+                    } else if self.rows.iter().any(|r| r.error().is_some()) {
+                        ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "fix_values"));
+                    }
+                });
             });
-            ui.add_space(4.0);
-        });
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         self.dropped_ui(ui, lang);
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -1040,9 +1051,16 @@ impl Model {
     fn tabs_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
         ui.horizontal(|ui| {
             let before = self.tab;
-            ui.selectable_value(&mut self.tab, Tab::Settings, i18n::ui(lang, "tab_settings"));
-            ui.selectable_value(&mut self.tab, Tab::Replays, i18n::ui(lang, "tab_replays"));
-            ui.selectable_value(&mut self.tab, Tab::Stats, i18n::ui(lang, "tab_stats"));
+            let all = [
+                (Tab::Settings, "tab_settings"),
+                (Tab::Replays, "tab_replays"),
+                (Tab::Stats, "tab_stats"),
+            ];
+            let labels: Vec<&str> = all.iter().map(|&(_, k)| i18n::ui(lang, k)).collect();
+            let now = all.iter().position(|&(t, _)| t == self.tab).unwrap_or(0);
+            if let (Some(i), _) = theme::tabs(ui, &labels, now, false) {
+                self.tab = all[i].0;
+            }
             if self.tab != before {
                 self.forget_replays();
                 self.forget_stats();
@@ -1125,10 +1143,7 @@ impl Model {
         });
         ui.horizontal(|ui| {
             if ok {
-                ui.colored_label(
-                    egui::Color32::from_rgb(110, 200, 110),
-                    i18n::ui(lang, "dat_found"),
-                );
+                ui.colored_label(theme::SUCCESS, i18n::ui(lang, "dat_found"));
             } else {
                 ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "dat_missing"));
             }
@@ -1248,10 +1263,7 @@ impl Model {
                         r.set(Value::Text(keymap::format(&keys)));
                     }
                     if capture == Some(r.e.key) {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(120, 170, 255),
-                            i18n::ui(lang, "keys_press"),
-                        );
+                        ui.colored_label(theme::INFO, i18n::ui(lang, "keys_press"));
                         if ui.button(i18n::ui(lang, "cancel")).clicked() {
                             capture = None;
                         }
@@ -1716,7 +1728,7 @@ fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
         Some(Outcome::Installed { lang: l, percent }) => {
             let pct = format!("{percent:.1}");
             ui.colored_label(
-                egui::Color32::from_rgb(110, 200, 110),
+                theme::SUCCESS,
                 i18n::ui_fmt(lang, "tr_done", &[("lang", l), ("pct", &pct)]),
             );
         }
@@ -1747,7 +1759,7 @@ fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui
-                .button(format!("  {}  ", i18n::ui(lang, "back")))
+                .add(theme::button(i18n::ui(lang, "back"), theme::Kind::Primary))
                 .clicked()
             {
                 act = Some(Action::Back);
@@ -1777,7 +1789,7 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(Strin
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            value_ui(ui, r, lang, extra, false);
+            value_ui(ui, r, lang, extra, None);
             if dev {
                 origin_label(ui, r, lang);
             }
@@ -1789,14 +1801,32 @@ fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(Strin
     });
 }
 
+// The port menu's value box (a slider's number), points.
+const MENU_BOX_W: f32 = 56.0;
+
 // Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
 // `extra` = choices after the table's (value, shown name): the installed pack languages for `game_text`.
-// `menu`: the port menu, where every number is a slider (no small drag targets on touch).
-fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String)], menu: bool) {
+// `menu`: the port menu's control column width; there every number is a slider (no small drag targets on touch)
+// with its value box at the column's right edge, a checkbox centred under the value boxes, a list filling the column.
+fn value_ui(
+    ui: &mut egui::Ui,
+    r: &mut Row,
+    lang: Lang,
+    extra: &[(String, String)],
+    menu: Option<f32>,
+) {
     let unsettable = r.e.default.is_empty();
     let mut v = r.value.clone();
+    let gap = ui.spacing().item_spacing.x;
+    if let Some(w) = menu {
+        ui.spacing_mut().interact_size.x = MENU_BOX_W;
+        ui.spacing_mut().slider_width = (w - MENU_BOX_W - gap).max(60.0);
+    }
     match (&mut v, r.e.kind) {
         (Value::Bool(on), _) => {
+            if let Some(w) = menu {
+                ui.add_space((w - MENU_BOX_W / 2.0 - ui.spacing().icon_width / 2.0).max(0.0));
+            }
             ui.checkbox(on, "");
         }
         (Value::Int(n), Kind::Int { min, max }) => {
@@ -1807,7 +1837,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
             if let Some(n) = n {
                 let mut f = *n as f64;
                 let range = min as f64..=max as f64;
-                let changed = if menu || max - min <= 16 {
+                let changed = if menu.is_some() || max - min <= 16 {
                     ui.add(
                         egui::Slider::new(&mut f, range)
                             .step_by(1.0)
@@ -1843,6 +1873,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
                 .find(|(x, _)| x == c)
                 .map_or_else(|| shown(c), |(_, n)| n.clone());
             egui::ComboBox::from_id_salt(r.e.key)
+                .width(menu.unwrap_or(ui.spacing().combo_width))
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if unsettable {
@@ -1910,8 +1941,8 @@ fn origin_label(ui: &mut egui::Ui, r: &Row, lang: Lang) {
         }
     };
     let c = match (r.dirty, r.origin) {
-        (true, _) | (_, Origin::Launcher) => egui::Color32::from_rgb(120, 170, 255),
-        (_, Origin::Cli | Origin::Env) => egui::Color32::from_rgb(240, 190, 80),
+        (true, _) | (_, Origin::Launcher) => theme::INFO,
+        (_, Origin::Cli | Origin::Env) => theme::WARN,
         _ => ui.visuals().weak_text_color(),
     };
     ui.colored_label(c, text);
@@ -1937,11 +1968,14 @@ fn insets(safe: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
     })
 }
 
-// The 640×480 layout scaled to the window's safe rect.
-fn zoom(size_px: (u32, u32)) -> f32 {
-    (size_px.0 as f32 / 640.0)
-        .min(size_px.1 as f32 / 480.0)
-        .max(0.5)
+// Window px per point for the safe rect: the OS scale (`density`), growing with big windows.
+fn zoom(size_px: (u32, u32), density: f32) -> f32 {
+    crate::theme::ppp(
+        size_px.0 as f32,
+        size_px.1 as f32,
+        density,
+        cfg!(target_os = "android"),
+    )
 }
 
 // egui context and renderer on the game's device, drawing the model.
@@ -2013,7 +2047,7 @@ impl Screen {
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
-        let ppp = zoom(safe_size(gfx.safe, (w, h)));
+        let ppp = zoom(safe_size(gfx.safe, (w, h)), window.scale_factor() as f32);
         let z = ppp / window.scale_factor() as f32;
         // egui's zoom-change pass lays out one frame with the old insets: draw once more after it.
         if self.p.ctx.zoom_factor() != z {
@@ -2079,6 +2113,10 @@ impl Painter {
     fn new(gfx: &Gfx, model: Model) -> Self {
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
+        crate::theme::apply(
+            &ctx,
+            crate::theme::Density::new(cfg!(target_os = "android")),
+        );
         let font = model.row("font").value.text();
         i18n::install_fonts(&ctx, Some(font.as_str()).filter(|f| !f.is_empty()));
         let renderer = egui_wgpu::Renderer::new(
@@ -2197,7 +2235,7 @@ pub fn render_image(
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let ppp = zoom(safe_size(safe, (w, h)));
+    let ppp = zoom(safe_size(safe, (w, h)), 1.0);
     let mut enc = None;
     // Passes 0.1 s apart: a dialog's fade-in has ended by the last.
     for i in 0..4 {

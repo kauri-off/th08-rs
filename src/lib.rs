@@ -24,6 +24,7 @@ pub mod selfupdate;
 pub mod settings;
 pub mod sources;
 pub mod stats;
+pub mod theme;
 pub mod translations;
 pub mod transport;
 #[cfg(not(target_arch = "wasm32"))]
