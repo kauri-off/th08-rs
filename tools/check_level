@@ -1,6 +1,6 @@
 #!/bin/bash
-# usage: tools/check_level [BASE] — the check a change needs, from the files it touches (default: work tree and
-# untracked files vs HEAD). Prints light | full | batch with the deciding files; exit 0.
+# usage: tools/check_level [BASE [TIP]] — the check a change needs, from the files it touches (default: work tree and
+# untracked files vs HEAD; with TIP: the commit TIP vs BASE). Prints light | full | batch with the deciding files; exit 0.
 #   light: build, clippy, unit tests (+ tools/android_check for Android/JNI code); no arch_check.
 #   full:  arch_check (game crates, the settings / host that configure them, the session tools or render changed).
 #   batch: full + the external replay batch (core logic, dependencies, build flags or toolchain changed).
@@ -8,16 +8,16 @@
 #   `pixels: …` after the level.
 # A core / formats source whose changed lines are all comments or blank is full, not batch.
 cd "$(dirname "$0")/.." || exit 1
-base=${1:-HEAD}
-untracked=$(git ls-files --others --exclude-standard)
-files=$( { git diff --name-only "$base"; echo "$untracked"; } | grep -v '^$' | sort -u)
+base=${1:-HEAD} tip=${2:-}
+untracked=; [[ -n $tip ]] || untracked=$(git ls-files --others --exclude-standard)
+files=$( { git diff --name-only "$base" $tip; echo "$untracked"; } | grep -v '^$' | sort -u)
 # th08-core modules that only draw (src/emit/), trace or test; they need the full check but not the replay batch.
 draw='^crates/th08-core/src/((anmdebug|trace|testdata|worldclone)\.rs|emit/.*)$'
 # True when every changed line of tracked .rs file $1 is a // comment or blank.
 comment_only() {
   [[ $1 == *.rs ]] && ! grep -qxF "$1" <<<"$untracked" || return 1
   local body
-  body=$(git diff -U0 "$base" -- "$1" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ')
+  body=$(git diff -U0 "$base" $tip -- "$1" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ')
   [[ -n $body ]] && ! grep -qvE '^[-+][[:space:]]*(//.*)?$' <<<"$body"
 }
 batch=$(grep -E '^(Cargo\.lock|Cargo\.toml|\.cargo/|rust-toolchain|crates/th08-(core|formats|out)/Cargo\.toml)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |

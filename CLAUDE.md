@@ -53,3 +53,9 @@ same checks directly, without the queue: [CONTRIBUTING.md](CONTRIBUTING.md#check
   replay batch: core logic, dependencies, build flags or toolchain); a `pixels:` line for th08-render changes names
   the hirescmp check (arch_check does not compare pixels). Recipes: CONTRIBUTING "Changing game logic / the renderer".
 
+- Agent branches land without the maintainer re-running checks: the agent commits on its `t3/…` branch, runs
+  `git rebase master`, then `tools/check NAME` in its worktree (the check_level check as one q job, exit 75 = still
+  running → `tools/check --wait ID`; on PASS a stamp `devdata/checks/<tree>.pass` in the main checkout). The
+  maintainer runs `tools/land BRANCH` in the main checkout: fast-forward when the stamp covers the branch's tree,
+  else rebase + `tools/check` + fast-forward; it removes the worktree and branch and never pushes. A batch-level
+  branch is appended to `devdata/batch_due`. `tools/merge_wt` stays for agents without git.

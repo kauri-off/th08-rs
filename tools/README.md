@@ -21,7 +21,7 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `lint_subset` | all | per-file counts of the `[workspace.lints.clippy]` subset |
 | `offscreen CMD…` | all | runs a windowed binary under xvfb with Wayland hidden, with a throwaway config dir |
 | `wine_headless CMD…` | all | wine with no window on your display; use a throwaway `WINEPREFIX` |
-| `i18n_font_subset` | all | rebuilds the web launcher's CJK font subset after editing `i18n/ja.toml` |
+| `i18n_font_subset` | all | rebuilds the web launcher's CJK font subset after editing `i18n/ja.toml`; `--merge` is the git merge driver for it |
 | `arch_check freeze\|run DIR` | data | port-vs-port regression check: builds, lints, tests, replays every session / demo / pilot replay and compares traces and draw hashes with a reference |
 | `xplat_replays [OUT]` | data | plays `xplat_replays.list` with `th08-replay` on x86_64, aarch64, wasm32-wasip1 and windows-gnu and compares the per-row hashes |
 | `batch_run SET OUT` | data + replay sets | one replay set (`$TH08_EXT_REPLAYS/SET`) against `batch/SET.identical` |
@@ -31,6 +31,8 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots) |
 | `arch_job NAME` | maintainer | `arch_check run devdata/arch_ref` as a `q` job |
 | `batch_job NAME` | maintainer | the replay batch (sets `ref500`, `ref_b2`) as a `q` job |
+| `check NAME` | maintainer | runs the `check_level` check of a worktree's committed HEAD as a `q` job; on PASS writes a stamp in `devdata/checks/` |
+| `land BRANCH` | maintainer | lands an agent branch on master: fast-forward with a pass stamp, else rebase, `check`, fast-forward; removes the worktree; `--setup` registers the merge drivers of `.gitattributes`, `--selftest` |
 | `merge_wt WT NAME` | maintainer | applies an agent worktree's changes to this checkout and removes the worktree |
 
 `batch/*.identical` lists the replays of each set that match the original; `xplat_replays.list` the replays the

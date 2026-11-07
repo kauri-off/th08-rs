@@ -1,0 +1,162 @@
+#!/bin/bash
+# usage: tools/land BRANCH — lands an agent branch on master in this (main) checkout: fast-forward when it is based on
+#   master and its tree has a tools/check pass stamp at the level tools/check_level names; otherwise rebase it onto
+#   master in its worktree (stops on a conflict), run tools/check there (q job, waits) and fast-forward on PASS. Then
+#   removes the worktree and branch and prints the landed commits; a batch-level branch is appended to devdata/batch_due.
+#   Never pushes.  tools/land --setup: register the merge drivers of .gitattributes in the repo config (land does too).
+#   tools/land --selftest: ff, rebase, conflict, stale stamp and font driver cases in a throwaway repo.
+set -u
+M=$(cd "$(dirname "$0")/.." && pwd)
+die() { echo "tools/land: $*"; exit 1; }
+rank() { case $1 in light) echo 1 ;; full) echo 2 ;; batch) echo 3 ;; *) echo 0 ;; esac; }
+
+setup() {
+  git -C "$M" config merge.th08-font.name "regenerate the i18n font subset (tools/i18n_font_subset)"
+  git -C "$M" config merge.th08-font.driver 'tools/i18n_font_subset --merge %O %A %B'
+}
+
+# 0 when the tree of commit $1 has a pass stamp at the level it needs against master; else says why.
+stamp_ok() {
+  local tree need f lv
+  tree=$(git rev-parse "$1^{tree}")
+  need=$(tools/check_level master "$1" | head -1)
+  f=devdata/checks/$tree.pass
+  [[ -f $f ]] || { echo "tools/land: no pass stamp for tree ${tree:0:12} (needs $need)"; return 1; }
+  lv=$(sed -n 's/^level: //p' "$f")
+  (( $(rank "$lv") >= $(rank "$need") )) || { echo "tools/land: stamp of tree ${tree:0:12} is $lv, needs $need"; return 1; }
+  LEVEL=$lv
+}
+
+land() {
+  local br=$1 wt old tries u
+  cd "$M" || exit 2
+  [[ $(git rev-parse --path-format=absolute --git-dir) == "$(git rev-parse --path-format=absolute --git-common-dir)" ]] ||
+    die "run it in the main checkout"
+  [[ $(git branch --show-current) == master ]] || die "the main checkout is not on master"
+  [[ -z $(git status --porcelain) ]] || { git status --short | head; die "the main checkout has uncommitted or untracked files"; }
+  [[ $br != master ]] && git rev-parse -q --verify "refs/heads/$br" > /dev/null || die "no branch $br"
+  setup
+  wt=$(git worktree list --porcelain | awk -v b="branch refs/heads/$br" '/^worktree /{w=substr($0, 10)} $0 == b {print w}')
+  old=$(git rev-parse master)
+  for tries in 1 2 3; do
+    if git merge-base --is-ancestor master "$br" && stamp_ok "$br"; then
+      git merge --ff-only -q "$br" || die "fast-forward failed"
+      echo "tools/land: $br landed ($LEVEL):"
+      git log --oneline "$old..master"
+      if [[ $LEVEL == batch ]]; then
+        echo "$(git rev-parse master) $br" >> devdata/batch_due
+        echo "tools/land: replay batch due (devdata/batch_due: $(wc -l < devdata/batch_due) entries)"
+      fi
+      if [[ -n $wt ]]; then
+        if [[ -n $(git -C "$wt" status --porcelain 2> /dev/null) ]]; then
+          echo "tools/land: $wt has uncommitted files; worktree and branch kept"; return 0
+        fi
+        git worktree remove --force "$wt" || { echo "tools/land: could not remove $wt; branch kept"; return 0; }
+      fi
+      git branch -q -d "$br" && echo "tools/land: removed ${wt:+worktree $wt and }branch $br"
+      return 0
+    fi
+    [[ -n $wt ]] || die "$br has no worktree to rebase and check in"
+    [[ -z $(git -C "$wt" status --porcelain) ]] || die "$wt has uncommitted or untracked files"
+    if ! git merge-base --is-ancestor master "$br"; then
+      echo "tools/land: rebasing $br onto master in $wt"
+      if ! git -C "$wt" rebase -q master; then
+        u=$(git -C "$wt" diff --name-only --diff-filter=U)
+        git -C "$wt" rebase --abort
+        echo "tools/land: conflict rebasing $br onto master in:"; echo "$u" | sed 's/^/  /'
+        die "stopped; nothing landed (resolve with git -C $wt rebase master)"
+      fi
+      stamp_ok "$br" > /dev/null && continue
+    fi
+    (cd "$wt" && "$M/tools/check" --block "${br##*/}") || die "check failed; nothing landed"
+  done
+  die "master kept moving; run tools/land $br again"
+}
+
+selftest() {
+  local T R fails=0 out
+  T=$(mktemp -d "${TMPDIR:-/tmp}/land_selftest.XXXXXX"); [[ -n ${LAND_KEEP:-} ]] || trap "rm -rf $T" EXIT
+  R=$T/main
+  ok() { if eval "$1"; then echo "ok   $2"; else echo "FAIL $2"; fails=$((fails + 1)); fi; }
+  g() { git -C "$1" "${@:2}"; }
+  commit() { g "$1" add -A && g "$1" commit -qm "$2"; }
+  export TH08_CHECK_FAKE=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+  git init -q -b master "$R"
+  mkdir -p "$R/tools" "$R/i18n/fonts" "$R/src"
+  cp "$M"/tools/{check,check_level,land,i18n_font_subset} "$R/tools/"
+  cp "$M/.gitattributes" "$R/"
+  printf '/devdata/\n/target/\n' > "$R/.gitignore"
+  printf 'a = "日本"\n\n\n\n\n\nz = "語"\n' > "$R/i18n/ja.toml"
+  printf 'r = "ру"\n' > "$R/i18n/ru.toml"
+  echo '// s' > "$R/src/settings.rs"
+  printf '1\n2\n3\n' > "$R/shared.txt"
+  local font=
+  if command -v pyftsubset > /dev/null && [[ -f ${TH08_CJK_TTC:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc} ]]; then
+    font=1; "$R/tools/i18n_font_subset" > /dev/null
+  fi
+  commit "$R" init
+  wt() { g "$R" worktree add -q -b "$1" "$T/wt-$1" master; }
+
+  wt a; echo a > "$T/wt-a/a.txt"; commit "$T/wt-a" a
+  touch "$T/wt-a/junk"
+  ok '! (cd "$T/wt-a" && tools/check a > /dev/null)' "check refuses an untracked file"
+  rm "$T/wt-a/junk"
+  ok '(cd "$T/wt-a" && tools/check a > /dev/null) && ls "$R"/devdata/checks/*.pass > /dev/null' "check writes a stamp"
+  local ah=$(g "$T/wt-a" rev-parse HEAD)
+  out=$("$R/tools/land" a)
+  ok '[[ $(g "$R" rev-parse master) == "$ah" && ! -d $T/wt-a ]] && ! g "$R" rev-parse -q --verify a > /dev/null' \
+    "ff path: landed, worktree and branch removed"
+  ok '[[ $out != *rebasing* ]]' "ff path: no rebase or new check"
+
+  wt b; echo b > "$T/wt-b/b.txt"; commit "$T/wt-b" b1
+  (cd "$T/wt-b" && tools/check b > /dev/null)
+  touch "$T/wt-b/CHECK_FAIL"; commit "$T/wt-b" b2
+  local m=$(g "$R" rev-parse master)
+  out=$("$R/tools/land" b)
+  ok '[[ $out == *"no pass stamp"* && $out == *"check failed"* && $(g "$R" rev-parse master) == "$m" && -d $T/wt-b ]]' \
+    "stale stamp rejected: rechecked, failing check lands nothing"
+  g "$T/wt-b" rm -q CHECK_FAIL; commit "$T/wt-b" b3
+  "$R/tools/land" b > /dev/null
+  ok '[[ -f $R/b.txt && ! -d $T/wt-b ]]' "land runs the check itself and lands on PASS"
+
+  wt c; echo c > "$T/wt-c/c.txt"; commit "$T/wt-c" c
+  (cd "$T/wt-c" && tools/check c > /dev/null)
+  echo m > "$R/m.txt"; commit "$R" m
+  out=$("$R/tools/land" c)
+  ok '[[ $out == *rebasing* && -f $R/c.txt && -f $R/m.txt && $(g "$R" rev-list --merges master | wc -l) == 0 ]]' \
+    "rebase path: rebased, checked, linear"
+
+  wt e; sed -i 's/^2$/e/' "$T/wt-e/shared.txt"; commit "$T/wt-e" e
+  sed -i 's/^2$/master/' "$R/shared.txt"; commit "$R" m2
+  m=$(g "$R" rev-parse master); local eh=$(g "$T/wt-e" rev-parse HEAD)
+  local rc=0; out=$("$R/tools/land" e 2> /dev/null) || rc=$?
+  ok '[[ $rc != 0 && $out == *"shared.txt"* && $(g "$R" rev-parse master) == "$m" && $(g "$T/wt-e" rev-parse HEAD) == "$eh" && -z $(g "$T/wt-e" status --porcelain) ]]' \
+    "conflict: stops, nothing landed, worktree untouched"
+
+  wt h; mkdir -p "$T/wt-h/specs/data"; echo h > "$T/wt-h/specs/data/h"; commit "$T/wt-h" h
+  printf 'level: light\n' > "$R/devdata/checks/$(g "$T/wt-h" rev-parse 'HEAD^{tree}').pass"
+  out=$("$R/tools/land" h)
+  ok '[[ $out == *"is light, needs full"* && $out == *"h landed (full)"* ]]' "stamp below the needed level rejected"
+
+  if [[ -n $font ]]; then
+    wt f; sed -i 's/^z = .*/z = "語鬱"/' "$T/wt-f/i18n/ja.toml"; "$T/wt-f/tools/i18n_font_subset" > /dev/null; commit "$T/wt-f" f
+    sed -i 's/^a = .*/a = "日本麒"/' "$R/i18n/ja.toml"; "$R/tools/i18n_font_subset" > /dev/null; commit "$R" font-m
+    out=$("$R/tools/land" f)
+    cp "$R/i18n/fonts/NotoSansJP-launcher.otf" "$T/landed.otf"
+    "$R/tools/i18n_font_subset" > /dev/null
+    ok '[[ $out == *"f landed"* ]] && cmp -s "$T/landed.otf" "$R/i18n/fonts/NotoSansJP-launcher.otf"' \
+      "font driver: subset conflict regenerated, equals a fresh subset"
+  else
+    echo "skip font driver: no pyftsubset or Noto Sans CJK"
+  fi
+  (( fails == 0 )) && echo "selftest: PASS" || echo "selftest: $fails FAILED"
+  return $(( fails != 0 ))
+}
+
+case ${1:-} in
+  --setup) setup ;;
+  --selftest) selftest ;;
+  "" | -*) sed -n 2,7p "$0"; exit 2 ;;
+  *) land "$1" ;;
+esac

@@ -117,6 +117,10 @@ with `live: true` is shown in the in-game port menu, which only writes `Settings
 heavy runs go through the job queue `tools/q` (systemd user units sharing one machine between parallel worktrees),
 local state lives in the gitignored `devdata/`, and `tools/arch_job` / `tools/batch_job` queue arch_check and the
 replay batch. None of it is needed elsewhere: run the commands above directly.
+Agent branches land with `tools/check NAME` (in the worktree) and `tools/land BRANCH` (in the main checkout).
+
+The CJK font subset `i18n/fonts/*.otf` is generated (`tools/i18n_font_subset`); `.gitattributes` names a merge driver
+that regenerates it instead of conflicting. Register it once per clone with `tools/land --setup`.
 
 ## Game data and replays
 

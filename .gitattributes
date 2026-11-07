@@ -1,0 +1,2 @@
+# Generated CJK font subset: tools/land --setup registers the driver that regenerates it instead of conflicting.
+i18n/fonts/*.otf -text -diff merge=th08-font

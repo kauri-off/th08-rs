@@ -1,0 +1,89 @@
+#!/bin/bash
+# usage: tools/check NAME — runs the check tools/check_level names for this worktree's committed HEAD vs master as one
+#   q job (light: fmt, clippy -D warnings for linux and windows-gnu, cargo deny, rule scripts, unit tests; full and
+#   batch: the same lints, then arch_check; batch also marks the replay batch due) and waits up to ~8 min; exit 75 =
+#   still running, continue with `tools/check --wait ID`. On PASS writes devdata/checks/<tree>.pass in the main checkout,
+#   which tools/land reads. Refuses uncommitted or untracked files. --block NAME waits until the job ends.
+set -u
+TOOLS=$(cd "$(dirname "$0")" && pwd)
+SELF=$TOOLS/check
+W=$(git rev-parse --show-toplevel 2> /dev/null) || { echo "tools/check: not in a git work tree"; exit 2; }
+MAIN=$(cd "$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+Q=$MAIN/tools/q
+cd "$W" || exit 2
+
+# Waits for job $1 (all of it with $2 = block); passes through q wait's exit code.
+wait_job() {
+  local rc
+  while :; do
+    "$Q" wait "$1" --max 480 --tail 30; rc=$?
+    [[ $rc == 75 && ${2:-} == block ]] || break
+  done
+  [[ $rc == 75 ]] && echo "tools/check: job $1 still running; continue with: tools/check --wait $1"
+  return $rc
+}
+
+clean() { [[ -z $(git status --porcelain) ]]; }
+rank() { case $1 in light) echo 1 ;; full) echo 2 ;; batch) echo 3 ;; *) echo 0 ;; esac; }
+
+if [[ ${1:-} == run ]]; then
+  level=$2 head=$3 name=$4
+  clean && [[ $(git rev-parse HEAD) == "$head" ]] || { echo "FAIL: $W changed since the check was queued"; exit 1; }
+  job=$(readlink /proc/$$/fd/1 | sed -n 's#.*/jobs/\([^/]*\)/out\.log$#\1#p')
+  [[ -n ${J:-} ]] && export CARGO_BUILD_JOBS=$J
+  step() { echo "== $*"; "$@" || { echo "== check $name: FAIL: $*"; exit 1; }; }
+  if [[ -n ${TH08_CHECK_FAKE:-} ]]; then
+    # Selftest stand-in for the cargo steps.
+    step test ! -e CHECK_FAIL
+  else
+    step cargo fmt --all --check
+    step cargo clippy -q --locked --workspace --all-targets -- -D warnings
+    step cargo clippy -q --locked --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+    step cargo deny check
+    step python3 tools/spec_refs.py
+    step tools/core_deps
+    step tools/emit_rule
+    step tools/doc_pointers
+    if [[ $level == light ]]; then
+      step env -u TH08_DIR -u TH08_REQUIRE_DATA cargo test -q --locked --workspace
+    else
+      step tools/arch_check run "$MAIN/devdata/arch_ref"
+    fi
+  fi
+  clean && [[ $(git rev-parse HEAD) == "$head" ]] || { echo "FAIL: $W changed during the check"; exit 1; }
+  tree=$(git rev-parse "$head^{tree}")
+  mkdir -p "$MAIN/devdata/checks"
+  f=$MAIN/devdata/checks/$tree.pass
+  { echo "level: $level"; echo "tree: $tree"; echo "head: $head"; echo "branch: $(git branch --show-current)"
+    echo "name: $name"; echo "jobs: ${job:--}"; echo "time: $(date -Is)"; if [[ $level == batch ]]; then echo "batch_due: yes"; fi
+  } > "$f.tmp" && mv "$f.tmp" "$f"
+  echo "== check $name: PASS ($level), stamp $f"
+  exit 0
+fi
+
+if [[ ${1:-} == --wait ]]; then
+  [[ -n ${2:-} ]] || { sed -n 2,7p "$0"; exit 2; }
+  wait_job "$2"; exit
+fi
+block=
+[[ ${1:-} == --block ]] && { block=block; shift; }
+name=${1:-}
+[[ -n $name && $name != -* ]] || { sed -n 2,7p "$0"; exit 2; }
+clean || { echo "tools/check: uncommitted or untracked files in $W; commit first (the stamp describes a commit):"; git status --short | head; exit 2; }
+head=$(git rev-parse HEAD); tree=$(git rev-parse "HEAD^{tree}")
+git merge-base --is-ancestor master HEAD ||
+  echo "tools/check: note: not based on the current master; tools/land will rebase and check again (git rebase master first)"
+level=$("$TOOLS/check_level" "$(git merge-base master HEAD)" "$head" | head -1)
+case $level in light | full | batch) ;; *) echo "tools/check: check_level said '$level'"; exit 2 ;; esac
+f=$MAIN/devdata/checks/$tree.pass
+if [[ -f $f ]] && (( $(rank "$(sed -n 's/^level: //p' "$f")") >= $(rank "$level") )); then
+  echo "tools/check: tree $tree already passed: $f"; exit 0
+fi
+echo "tools/check: $name at ${head:0:12}, level $level"
+if [[ -n ${TH08_CHECK_FAKE:-} ]]; then
+  "$SELF" run "$level" "$head" "$name"; exit
+fi
+kind=full; [[ $level == light ]] && kind=check
+id=$("$Q" submit --kind "$kind" --label "check-$name" -C "$W" -- "$SELF" run "$level" "$head" "$name") || exit 2
+echo "tools/check: job $id"
+wait_job "$id" $block

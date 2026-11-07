@@ -2,13 +2,32 @@
 # Web launcher CJK font: Noto Sans CJK JP (OFL 1.1) cut down to the glyphs of i18n/ja.toml
 # and the language names. Rerun after editing ja.toml; `cargo test i18n` fails while a glyph is missing.
 # usage: tools/i18n_font_subset [NotoSansCJK-Regular.ttc]
+#        tools/i18n_font_subset --merge BASE OURS THEIRS — git merge driver (tools/land --setup registers it): writes
+#        into OURS the subset of the work tree's texts plus every glyph of OURS and THEIRS.
 set -euo pipefail
+merge=()
+if [[ ${1:-} == --merge ]]; then
+  ours=$(realpath "$3") theirs=$(realpath "$4")
+  merge=("$ours" "$theirs"); set --
+fi
 cd "$(dirname "$0")/.."
-src=${1:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc}
-text=$(mktemp)
-trap 'rm -f "$text"' EXIT
-cat i18n/ja.toml i18n/ru.toml src/settings.rs > "$text"
+src=${1:-${TH08_CJK_TTC:-/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc}}
+out=i18n/fonts/NotoSansJP-launcher.otf
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+cat i18n/ja.toml i18n/ru.toml src/settings.rs > "$tmp/text"
+extra=()
+if (( ${#merge[@]} )); then
+  python3 -I -c '
+import sys
+from fontTools.ttLib import TTFont
+cps = set()
+for p in sys.argv[1:]: cps |= set(TTFont(p).getBestCmap())
+print("\n".join(f"U+{c:04X}" for c in sorted(cps)))' "${merge[@]}" > "$tmp/unicodes"
+  extra=(--unicodes-file="$tmp/unicodes")
+  out=$tmp/merged.otf
+fi
 # Face 0 of the collection is the JP face.
-pyftsubset "$src" --font-number=0 --text-file="$text" --layout-features='' --no-hinting \
-    --desubroutinize --name-IDs='*' --output-file=i18n/fonts/NotoSansJP-launcher.otf
-ls -l i18n/fonts/NotoSansJP-launcher.otf
+pyftsubset "$src" --font-number=0 --text-file="$tmp/text" "${extra[@]}" --layout-features='' --no-hinting \
+    --desubroutinize --name-IDs='*' --output-file="$out"
+if (( ${#merge[@]} )); then cp "$out" "${merge[0]}"; else ls -l "$out"; fi
