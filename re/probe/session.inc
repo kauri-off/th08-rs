@@ -471,6 +471,8 @@ static void sess_load_rec(void) {
         }
         fclose(f);
     }
+    /* file order is causal; a loader-thread event can read the poll counter one past the main-thread release */
+    for (uint32_t a = g_nrs_ev; a-- > 1;) if (g_rs_ev[a - 1].poll > g_rs_ev[a].poll) g_rs_ev[a - 1].poll = g_rs_ev[a].poll;
     for (uint32_t a = 1; a < g_nrs_ev; a++) for (uint32_t b = a; b > 0 && g_rs_ev[b - 1].poll > g_rs_ev[b].poll; b--) { RecSync t = g_rs_ev[b]; g_rs_ev[b] = g_rs_ev[b - 1]; g_rs_ev[b - 1] = t; }
     lg("# play: %u polls, anchor %u, seed %s %08x, %u joyraw, %u loader syncs\n", g_nrp, g_rp_anchor, g_have_seed ? "yes" : "no", g_rec_seed_full, g_nrj, g_nrs_ev);
 }

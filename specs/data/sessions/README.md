@@ -6,6 +6,7 @@ Draw logs are large and stay outside git in `sessions/<name>/draw_*.drawlog.xz` 
 - `golden`: human play, 25 634 frames (~7 min): menu → stage 1 → stage 2 → start of stage 3 → back to the menu. Replay in the original is identical (trace and draw log).
 - `selftest1`: scripted, 1 922 frames: title → stage 1 → pause → quit → title → quit.
 - `gameover_save`, `musicroom_practice`, `options_cfg`: scripted (RE-Q22), see "Scripted reference sessions" below.
+- `continue_retry`, `hiscore_entry`, `title_demo`: scripted (RE_SESS_GAPS), see "Scripted sessions for uncovered paths" below.
 - `fullrun_noclip`: human play with `--noclip` (`noclip: 1`, 2 733 absorbed hits logged as `noclip_hit` in events.txt), 124 705 frames (~35 min): menu → stages 1–6 → ending/staff roll. Re-verified by a full replay in the original after RE-Q22: 124 708 trace rows, 0 differ, events identical (see `fullrun_noclip/verify.txt`).
 
 ## Scripted reference sessions (RE-Q22)
@@ -80,3 +81,87 @@ Spec sections: 16 §5, §6.1–6.5, 12 §2.2, §2.6, §4, 11 §4.2, 09 §6.1, 14
 +0x28 80 → 65; the pad table is unchanged (Reset restores the same values). A pad-button remap needs a joystick,
 which the headless recorder does not have. Slow mode stays on in the end cfg (it is cleared for practice/difficulty ≥ 4
 only at stage start, 11 §3.2). Spec sections: 12 §2.7, 15 §1.1–1.3.
+
+## Scripted sessions for uncovered paths (RE_SESS_GAPS)
+
+Same recipe as RE-Q22 (Xvfb, `xkeys.py`, music and SE on to a pulse null sink, work game copy, standard th08.cfg
+`6fe6bd78…` with windowed / WAV / SE patched by `record_session.sh`). The three were recorded one after the other
+without resetting score.dat, so each `start/score.dat` is the previous session's `end/score.dat`: `title_demo` starts
+from `dd5aa0ef…` (= `fullrun_noclip/end`), `continue_retry` from `84fdc6a8…`, `hiscore_entry` from `ab62b80c…` (no
+file was crafted). Frames are input frames as above. Verification in the original (`play_session.sh`, draw log on):
+
+| session | trace | draw log |
+|---|---|---|
+| `title_demo` | 0 differ | 1 221 of 11 278 frames differ: the playback-fps digits (15 §3.3, host time), one stage quad per frame in demo 1 whose vertex colours are uninitialised memory (alpha ≈ 0, alpha-tested away), and a 48×16 sprite at (241.5, 463.5) in the last ~130 frames of demo 0 (both variants also occur in `drawlog/demos/demo0_*`) |
+| `continue_retry` | 0 differ | 0 differ |
+| `hiscore_entry` | 0 differ | 0 differ |
+
+`session.py compare` skips the loader-timed columns on loading rows; `boss` and `input` are among them (the boss flag
+is cleared and the demo's first input word appears on a loading row that moves by ±1 between plays: `title_demo`
+rows 9304/9314–9316, `continue_retry` row 8233). `continue_retry` needs the probe build that orders the loader syncs
+of `events.txt` by file order (its stage-1 load logged `loader gauge poll 1423` after `release stage poll 1422`).
+
+### `continue_retry` — 13 369 frames, Normal, Reimu & Yukari
+| frames | scene | what happens |
+|---|---|---|
+| 1–1374 | 1 menu 0 / 4 / 5 | Start, Normal, team 0 |
+| 1375–1422 | 2 (loading) | stage 1 load |
+| 1423–3719 | 2 | idle; deaths at gm 680, 1084, 1412 → game over (gm 1443); continue prompt (default "No"): Up at 3678 |
+| 3720 | 2, game over | confirm "Yes" → continue 1 (12 §4 state 3, 11 §4.2): score := continues = 1, lives 2 |
+| 3721–6500 | 2 | idle; deaths at gm 1720, 2043, 2346 → game over; Up at 6459, "Yes" at 6501 → continue 2 (score 2) |
+| 6502–7134 | 2 | Shot + Left / Right |
+| 7135–7556 | 2, paused | Esc → pause (12 §3); Shot on Resume at 7537 → state 4, unpause after 20 frames |
+| 7557–7694 | 2 | play; death at gm 2994 (lives 0) |
+| 7695–8222 | 2, paused | Esc; Up → Retry (7773); Shot → "no" (7809); Up → "yes" (8166); Shot (8202) → state 10, scene 10 after 20 frames |
+| 8223–8271 | 2 (loading) | retry = fresh start (gm 0, score 0, lives 2, 11 §3.2) |
+| 8272–9346 | 2 | play; Esc at 8852, Down → Quit, Shot, Up → "yes", Shot (9326) → state 9 → title |
+| 9347–11022 | 1 menu 0 / 8 / 9 / 11 | Down ×3 → Practice Start; Normal, team 0, Stage1 |
+| 11023–11079 | 2 (loading) | stage practice load |
+| 11080–11523 | 2 | play; Esc at 11299, Up → Retry, Shot, Up → "yes", Shot (11503) → state 10 → scene 11 |
+| 11524–11554 | 2 (loading) | practice reload (scene 11) |
+| 11555–12292 | 2 | play; Esc at 12068, Down → Quit, Shot, Up → "yes", Shot (12272) |
+| 12293–12719 | 1 menu 0 → 8 → 9 → 11 | top menu forwards back to the stage select (12 §2.2) |
+| 12720–13369 | 1 menu 9 / 8 / 0 | Bomb ×3 to the title; Bomb → Quit, Shot |
+
+Spec sections: 12 §3, §4, 11 §4, §4.2, §3.2, 12 §2.2–2.5.
+
+### `hiscore_entry` — 18 261 frames, Normal, Reimu & Yukari
+`start/replay/th8_01.rpy` = `gameover_save/replays/th8_02.rpy` (name "PO"), so slot No.01 is occupied. The
+Normal / team-0 ranking in `start/score.dat` has one HSCR entry (34292650) and DMYS defaults below it (15 §2.3), so
+any score ≥ 200 000 ranks (the 11th node, the 100 000 default, is dropped).
+
+| frames | scene | what happens |
+|---|---|---|
+| 1–986 | 1 menu 0 / 4 / 5, 2 (loading 934–986) | Start, Normal, team 0 |
+| 987–4967 | 2 | Shot held, Left / Right zigzag; deaths at gm 1065, 1958, 2293 → game over at gm 2325 (score 306 620); continue prompt, Shot released |
+| 4968 | 2, game over | confirm "No" |
+| 4989–8270 | 6 result 9 | hi-score name entry (16 §2.2), rank 9 (row "9"), cursor starts on END: Down → `P`, Shot; Left ×3 → `M`, Shot; Bomb = backspace; Right → `N`, Shot; Up / Down / Up / Right / Down / Right → END; Shot at 8271 → name "PN" |
+| 8271–8657 | 6 result 0xF / 0x10 | end panel; Shot at 8628 |
+| 8658–9071 | 6 result 10 | "save replay?" "Yes" |
+| 9072–9523 | 6 result 12 | slot list, cursor on No.01 ("PO", occupied), Shot |
+| 9524–10019 | 6 result 14 | "overwrite?" (16 §2.6) "Yes" |
+| 10020–10462 | 6 result 13 | replay name entry, cursor on END, name "PN" from LSNM; Shot → saves `replay/th8_01.rpy` |
+| 10463–10483 | 6 result 2 | fade out |
+| 10484–11098 | 1 menu 0 | Down ×5 → Result |
+| 11099–11691 | 5 result 1 | Player Data top menu (16 §2.4) |
+| 11692–14465 | 5 result 3 / 4 / 5 | ranking: difficulty list (Right ×2 no effect, Down → Hard, Up → Normal), team list, Normal / team 0 table (row 9 "PN"); Right → team 1 table; Down; Bomb ×3 back |
+| 14466–16770 | 5 result 6 / 7 / 8 | spell cards: "all difficulties", "all characters", page 1; Right → page 2 (No.11–20); Down → team 1; Bomb ×3 back |
+| 16771–17520 | 5 result 1 / 19 / 20 / 21 | Down → other stats (play counts, times, clears, continues, practice); Bomb |
+| 17521–17643 | 5 result 1 / 2 | Down → back to title, Shot |
+| 17644–18261 | 1 menu 0 | Bomb → Quit, Shot |
+
+Files: `replays/th8_01.rpy` (the overwritten slot), `end/score.dat` (new HSCR "PN" 306620, LSNM "PN"). Spec sections:
+16 §2.1–2.6, 15 §2.3, 12 §2.2, 12 §4.
+
+### `title_demo` — 11 260 frames
+| frames | scene | what happens |
+|---|---|---|
+| 1–1550 | 1 menu 0 | title, no input; idle counter reaches 1500 (12 §2.2 "Demo") → `demorpy0.rpy` |
+| 1551–1631 | 2 (loading), demo 0 | demo load |
+| 1632–7751 | 2, demo 0 | attract demo 0 runs to its limit (fade at 6000, scene 1 at 6120, 11 §4 step 6) |
+| 7752–9301 | 1 menu 0 | title again, no input → `demorpy1.rpy` |
+| 9302–9382 | 2 (loading), demo 1 | |
+| 9383–10496 | 2, demo 1 | demo 1; Shot at 10496 (demo frame 1114) → scene 1 |
+| 10497–11260 | 1 menu 0 | title; Bomb → Quit, Shot |
+
+Spec sections: 12 §2.2 (demo counter), 11 §4 step 6, 11 §2 (demo index), 15 §3.3 (playback fps text).

@@ -1,0 +1,3 @@
+# TH08_INPUT for this session: frames:mask, frame 1 = first presented main-menu frame (present 20); 11260 frames
+# frames without an Input_Poll call (value repeated): 0; presents with >1 poll (last one written): 0; exact per-poll list: polls.txt
+10495:0x0,5:0x1,632:0x0,5:0x2,61:0x0,5:0x1,57:0x0

@@ -1,0 +1,25 @@
+seed 01460a94 present 3 poll 0
+loader boot poll 0 present 21
+release boot calc 19 present 21
+loader menu poll 39 present 60
+release menu poll 39 present 60
+loader gauge poll 1423 present 1443 asciicalc 1422
+loader lwait poll 1423 present 1443
+loader stage poll 1423 present 1443
+release stage poll 1422 present 1443
+loader gauge poll 8271 present 8292 asciicalc 8271
+loader lwait poll 8271 present 8292
+loader stage poll 8271 present 8292
+release stage poll 8271 present 8292
+loader menu poll 9379 present 9400
+release menu poll 9379 present 9400
+loader gauge poll 11079 present 11100 asciicalc 11079
+loader lwait poll 11079 present 11100
+loader stage poll 11079 present 11100
+release stage poll 11079 present 11100
+loader gauge poll 11525 present 11546 asciicalc 11525
+loader lwait poll 11554 present 11575
+loader stage poll 11554 present 11575
+release stage poll 11554 present 11575
+loader menu poll 12329 present 12350
+release menu poll 12329 present 12350

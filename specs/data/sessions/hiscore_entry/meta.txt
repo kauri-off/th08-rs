@@ -1,0 +1,23 @@
+name: hiscore_entry
+recorded: 2026-11-07T17:24:39+03:00
+wine: wine
+prefix: /home/anon/Projects/th_08/re/work/wine
+display: :79
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 1
+noclip: 0
+sound: on
+score_source: re/work/game/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 310
+replays_saved: th8_01.rpy
+menu_base_present: 17
+boot_presents: 16
+boot_polls: 0
+first_menu_poll: 0
+polls: 18261
+last_present: 18277
+frames_without_poll: 0
+presents_with_multiple_polls: 0
+boot_seed: 0160b790
+rng_state_after_seed: b790

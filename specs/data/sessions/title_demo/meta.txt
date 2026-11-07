@@ -1,0 +1,23 @@
+name: title_demo
+recorded: 2026-11-07T16:36:39+03:00
+wine: wine
+prefix: /home/anon/Projects/th_08/re/work/wine
+display: :79
+renderer: wined3d (wine builtin d3d8 behind the probe)
+drawlog: 1
+noclip: 0
+sound: on
+score_source: re/work/game/score.dat
+cfg_patch: +0x22 windowed=1, +0x1F music=1 (WAV), +0x20 SE=1
+elapsed_seconds: 230
+replays_saved: 
+menu_base_present: 20
+boot_presents: 19
+boot_polls: 0
+first_menu_poll: 0
+polls: 11260
+last_present: 11279
+frames_without_poll: 0
+presents_with_multiple_polls: 0
+boot_seed: 0134c60c
+rng_state_after_seed: c60c
