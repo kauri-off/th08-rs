@@ -830,10 +830,23 @@ pub fn value_ctl(
                     );
                 }
             };
+            // The number column fits its text (a word such as "Normal" is wider than a number).
+            let numw = {
+                let n = p.layout_no_wrap(text.clone(), sans(st.num), TEXT).size().x;
+                let u = if unit.is_empty() {
+                    0.0
+                } else {
+                    p.layout_no_wrap(unit.clone(), sans(st.num * 0.78), HELP)
+                        .size()
+                        .x
+                        + 3.0
+                };
+                st.numw.max(n + u + 12.0)
+            };
             if st.cells {
                 out = stepper(ui, p, id, rect, st, focused, |p, r| {
-                    let tr = egui::Rangef::new(r.min.x + 22.0, r.max.x - st.numw - 12.0);
-                    if tr.span() > 30.0 {
+                    let tr = egui::Rangef::new(r.min.x + 22.0, r.max.x - numw - 12.0);
+                    if tr.span() > 60.0 {
                         track(p, tr, cy, *frac, focused);
                         num(p, r.max.x - 8.0);
                     } else {
@@ -847,7 +860,7 @@ pub fn value_ctl(
                     }
                 });
                 let tr = Rect::from_x_y_ranges(
-                    rect.min.x + st.cell_w + 22.0..=rect.max.x - st.cell_w - st.numw - 12.0,
+                    rect.min.x + st.cell_w + 22.0..=rect.max.x - st.cell_w - numw - 12.0,
                     rect.y_range(),
                 );
                 if let Some(f) = drag(ui, id, tr) {
@@ -855,19 +868,7 @@ pub fn value_ctl(
                 }
             } else {
                 let ah = st.size * 0.5;
-                // The number column fits its text; the track gives way so the slider stays inside its rect.
-                let numw = {
-                    let n = p.layout_no_wrap(text.clone(), sans(st.num), TEXT).size().x;
-                    let u = if unit.is_empty() {
-                        0.0
-                    } else {
-                        p.layout_no_wrap(unit.clone(), sans(st.num * 0.78), HELP)
-                            .size()
-                            .x
-                            + 3.0
-                    };
-                    st.numw.max(n + u + 12.0)
-                };
+                // The track gives way so the slider stays inside its rect.
                 let fixed = ah + 16.0 + 16.0 + ah + numw;
                 let track_len = st.track.min(rect.width() - fixed).max(24.0);
                 let w = fixed + track_len;
@@ -989,12 +990,34 @@ pub fn ctl_height(p: &Painter, ctl: &Ctl, st: &CtlStyle, w: f32) -> f32 {
     }
 }
 
+// The pieces a label never breaks inside: words, and single CJK characters (those wrap anywhere).
+pub fn unbreakable(text: &str) -> Vec<&str> {
+    let cjk = |c: char| matches!(u32::from(c), 0x2e80..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef);
+    let mut out = Vec::new();
+    for w in text.split_whitespace() {
+        let mut start = 0;
+        for (i, c) in w.char_indices() {
+            if cjk(c) {
+                if start < i {
+                    out.push(&w[start..i]);
+                }
+                out.push(&w[i..i + c.len_utf8()]);
+                start = i + c.len_utf8();
+            }
+        }
+        if start < w.len() {
+            out.push(&w[start..]);
+        }
+    }
+    out
+}
+
 // The label column (16 points of it the gap to the control): at least `base`, wide enough for the widest single
 // word of `labels` (labels wrap only between words), at most `max`.
 pub fn label_width(p: &Painter, labels: &[&str], font: &FontId, base: f32, max: f32) -> f32 {
     let widest = labels
         .iter()
-        .flat_map(|l| l.split_whitespace())
+        .flat_map(|l| unbreakable(l))
         .map(|w| p.layout_no_wrap(w.to_string(), font.clone(), TEXT).size().x)
         .fold(0.0, f32::max);
     (widest + 24.0).max(base).min(max)

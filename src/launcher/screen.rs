@@ -471,7 +471,7 @@ impl Model {
             y += if compact { 46.0 } else { 58.0 };
             theme::rule(&p, egui::Rangef::new(x, right), y);
         }
-        y += if compact { 2.0 } else { 6.0 };
+        y += if compact { 8.0 } else { 10.0 };
         // Bottom: help line (as tall as its text), hints, device.
         let shown = if self.nav.input.bar() {
             self.nav.focus
@@ -531,7 +531,7 @@ impl Model {
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         text_in(
             p,
-            Rect::from_min_size(r.min, vec2(LABEL_W, r.height())),
+            Rect::from_min_size(r.min, vec2(LABEL_W.min(r.width() * 0.3), r.height())),
             i18n::ui(lang, "game_folder").trim_end_matches([':', '：']),
             theme::serif(ROW + 1.0),
             color,
@@ -560,7 +560,7 @@ impl Model {
             color,
         );
         let cw = if native { change.size().x + 16.0 } else { 0.0 };
-        let px = r.min.x + LABEL_W;
+        let px = r.min.x + LABEL_W.min(r.width() * 0.3);
         let pw = r.max.x - px - cw;
         let pg = p.layout_no_wrap(fit_path(p, &path, pw), theme::sans(SMALL), theme::HELP_HI);
         let ph = pg.size().y;

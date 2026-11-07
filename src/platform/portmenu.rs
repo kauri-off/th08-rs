@@ -1192,8 +1192,8 @@ fn label_galley(
         font.size *= w / one;
     } else {
         // A word wider than the column is set smaller (to 70 %) rather than broken.
-        let widest = text
-            .split_whitespace()
+        let widest = theme::unbreakable(&text)
+            .into_iter()
             .map(|t| {
                 p.layout_no_wrap(t.to_string(), font.clone(), color)
                     .size()
@@ -1379,6 +1379,65 @@ fn item_input(it: Item, o: CtlOut, m: &MenuState<'_>, model: &mut launcher::Mode
     }
 }
 
+// The height a card item's control needs in a row `w` points wide (choice words that wrap make the row taller).
+#[expect(clippy::too_many_arguments, reason = "the inputs of item_row's layout")]
+fn item_ctl_h(
+    p: &Painter,
+    w: f32,
+    it: Item,
+    size: f32,
+    cm: &CardMetrics,
+    m: &MenuState<'_>,
+    model: &launcher::Model,
+    words: &Words,
+) -> f32 {
+    let ctl = item_ctl(it, m, model, words.lang);
+    let (st, off) = item_ctl_layout(p, w, it, size, cm, &ctl, words);
+    theme::ctl_height(p, &ctl, &st, w - off)
+}
+
+// A card item's control style and its x offset in a row `w` points wide.
+fn item_ctl_layout(
+    p: &Painter,
+    w: f32,
+    it: Item,
+    size: f32,
+    cm: &CardMetrics,
+    ctl: &Ctl,
+    words: &Words,
+) -> (CtlStyle, f32) {
+    let label_w = if matches!(ctl, Ctl::None) {
+        w - size
+    } else {
+        w * 0.42
+    };
+    let st = CtlStyle {
+        size: size * 0.93,
+        num: size * 0.8,
+        cells: false,
+        right: true,
+        indent: 0.0,
+        track: cm.track,
+        numw: cm.numw,
+        gap: size * 0.93,
+        cell_w: 0.0,
+        cell_h: 48.0,
+    };
+    // The control starts a word's gap after the label when the label is wider than its column; right-aligned
+    // choice words may use the whole width after the label.
+    let lw = p
+        .layout_no_wrap(words.item(it).to_string(), theme::serif(size), theme::TEXT)
+        .size()
+        .x
+        .min(label_w);
+    let off = if matches!(ctl, Ctl::Choices { .. }) {
+        lw + size
+    } else {
+        label_w.max(lw + size)
+    };
+    (st, off.min(w - 10.0))
+}
+
 // One item row: focus band (or the 4:3 gradient), label, its control, the › on Settings / Touch layout.
 #[expect(clippy::too_many_arguments, reason = "one painted row")]
 fn item_row(
@@ -1458,26 +1517,8 @@ fn item_row(
             theme::HELP,
         );
     }
-    let st = CtlStyle {
-        size: size * 0.93,
-        num: size * 0.8,
-        cells: false,
-        right: true,
-        indent: 0.0,
-        track: cm.track,
-        numw: cm.numw,
-        gap: size * 0.93,
-        cell_w: 0.0,
-        cell_h: 48.0,
-    };
-    // The control starts a word's gap after the label when the label is wider than its column.
-    let lw = p
-        .layout_no_wrap(words.item(it).to_string(), theme::serif(size), color)
-        .size()
-        .x
-        .min(label_w);
-    let cx = rect.min.x + label_w.max(lw + size);
-    let crect = Rect::from_min_max(pos2(cx.min(rect.max.x - 10.0), rect.min.y), rect.max);
+    let (st, off) = item_ctl_layout(p, rect.width(), it, size, cm, &ctl, words);
+    let crect = Rect::from_min_max(pos2(rect.min.x + off, rect.min.y), rect.max);
     if !dimmed && let Some(o) = theme::value_ctl(ui, p, id, crect, &ctl, focused, &st) {
         focus.item = it;
         out.push(item_input(it, o, m, model));
@@ -1767,6 +1808,14 @@ fn list_card(
     };
     let mut rh = cm.row_h;
     let min_rh = if short { cm.row * 1.35 } else { 48.0 };
+    // The question's two answers stay at least 48 dp tall on a touch screen.
+    let ask_rh = |rh: f32| {
+        if lay.touch {
+            rh.max(lay.font(0.0, 48.0))
+        } else {
+            rh
+        }
+    };
     // The question's block replaces the two danger rows while asked.
     let ask_h = focus.ask.map_or(0.0, |a| {
         confirm_height(
@@ -1774,7 +1823,7 @@ fn list_card(
             w,
             a,
             &CardMetrics {
-                row_h: min_rh,
+                row_h: ask_rh(min_rh),
                 ..*cm
             },
             words,
@@ -1785,11 +1834,19 @@ fn list_card(
         let room = rule_y - 12.0 - y - tall(Item::Resume, cm.resume_h) - gaps;
         // Japanese danger rows carry the original's Latin caption and are a third taller.
         let tall_k = tall(Item::Retry, 1.0);
+        // Rows whose choice words wrap are taller than `rh`.
+        let grow = |rh: f32| -> f32 {
+            items
+                .iter()
+                .filter(|i| !matches!(i, Item::Resume) && !i.danger())
+                .map(|&it| (item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0 - rh).max(0.0))
+                .sum()
+        };
         let need = |rh: f32| {
             if focus.ask.is_some() {
-                mids * rh + ask_h
+                mids * rh + ask_h + grow(rh)
             } else {
-                mids * rh + dangers * rh * tall_k
+                mids * rh + dangers * rh * tall_k + grow(rh)
             }
         };
         if need(rh) > room {
@@ -1835,7 +1892,10 @@ fn list_card(
         .iter()
         .filter(|i| !matches!(i, Item::Resume) && !i.danger() && !hide_mids)
     {
-        let r = row(y, rh);
+        let r = row(
+            y,
+            rh.max(item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0),
+        );
         item_row(
             ui,
             &op,
@@ -1852,7 +1912,7 @@ fn list_card(
             dimmed,
             out,
         );
-        y += rh;
+        y += r.height();
     }
     if dangers > 0.0 {
         y += gk * if pillar { 22.0 } else { 14.0 };
@@ -1860,7 +1920,10 @@ fn list_card(
         y += gk * if pillar { 10.0 } else { 6.0 };
         if let Some(ask) = focus.ask {
             y += 6.0;
-            let cmr = CardMetrics { row_h: rh, ..*cm };
+            let cmr = CardMetrics {
+                row_h: ask_rh(rh),
+                ..*cm
+            };
             y += confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
         } else {
             for &it in items.iter().filter(|i| i.danger()) {

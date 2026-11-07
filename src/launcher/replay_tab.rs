@@ -435,8 +435,9 @@ impl Model {
                 let text = if *k == "rp_delete" {
                     format!("{}…", i18n::ui(lang, k))
                 } else {
-                    theme::latin_ellipsis(i18n::ui(lang, k)).into_owned()
+                    i18n::ui(lang, k).to_string()
                 };
+                let text = theme::latin_ellipsis(&text).into_owned();
                 p.layout_no_wrap(text, theme::serif(theme::BODY), theme::TEXT)
             })
             .collect();
