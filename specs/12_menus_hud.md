@@ -144,7 +144,7 @@ on-remove callback 0x471662 releases anm slots 0x14 and 0x16 and surface 0, **re
 VM array and the object. So in the frame of the return nothing of the menu is drawn — no surface copy, no VMs, no
 description, no per-screen text (only the fps counter remains in the log). Handlers returning 0: every **game-start
 confirm** — character select confirm of screens 5/13 (Start / Extra, scene 2, §2.4), practice stage confirm (screen 11,
-§2.5), spell-card confirm (screen 17, 16 §6.2), replay speed confirm (screen 7 sub-state 3, 15 §3.8) — the replay file
+§2.5), spell-card confirm (screen 17, 16 §6.2), replay speed confirm (screen 7 sub-state 3, 15 §3.8), the top menu's attract-demo start (§2.2 "Demo") — the replay file
 with no recorded stage (15 §3.8), and a failed `title/select00.png` load in the entry blocks of screens 4/8/12, 15 and 16.
 The returns come before the handler's counter increments (+0xC294, +0x10, +0x1442C). Next frame the Supervisor switches
 the scene (loading screen).
@@ -356,9 +356,19 @@ frames, interrupt 2 = fade out 60); only the current one (+0xC2BC) is run/drawn 
   +0x14430 := 0, and the sub-state-1 code runs in the same call: cursor (`Menu_CursorUpDown`), highlight (only when
   the cursor moved, see "Highlight"), demo counter and the change test from call 9; confirm/cancel only when +0x1442C ≥ 10, i.e. from call 19.
   Confirm: sfx 10 (+ sound flush). Cancel: cursor jumps to Quit (sfx 11).
-- **Demo**: idle counter +1 per frame, reset by any raw input; after 1500 frames load
-  `demo/demorpy((n+1) mod 4).rpy`; on success: flags = replay | demo (bits 3, 1), difficulty/shot from the
-  replay header (+0x6B / +0x6A), byte 0x164D0B2 = shot % 2 (changelog/answers_phase7.md §3), stage = first stage with a record, scene 2. (Demo exit: 11 §4.)
+- **Demo** (VERIFIED `MainMenu_Top` 0x4674E0, RE-Q72): idle counter +0x14430, only touched by this function. Every
+  sub-state-1 call (from call 9 on; sub-states 0, 2, 3 skip it), after the cursor / highlight code and before the
+  description change test: (1) +0x14430 += 1 (0x467A9C); (2) if the raw input word 0x164D528 ≠ 0 (any bit, held keys
+  too) +0x14430 := 0 (0x467AAC); (3) if +0x14430 **> 1500** (`cmp 0x5DC; jle`, 0x467AC4) load the demo. Call 9's
+  reset (0x467959) comes before (1), so call 9 leaves the counter at 1 and with no input the demo loads in entry call
+  **1509** (counter 1501); input in call k delays it to call k + 1501. Every top-menu entry (+0x0C = 0) runs call 9
+  again, so the counter restarts after a demo, a game or any other screen.
+  Demo load: 0x164D0BC := (0x164D0BC + 1) mod 4 (11 §2), open and `Replay_Load` `demo/demorpy<n>.rpy`. On success:
+  flags = flags & ~8 | 8 | 2 (replay | demo, bits 3, 1), 0x164D0C0 := 0, difficulty := header +0x6B, byte 0x164D0B2 =
+  shot % 2 (changelog/answers_phase7.md §3), shot := header +0x6A, stage = first stage with a record (+0x20 + 4·i ≠ 0),
+  replay freed, scene := 2, playback speed byte 0x164D0BD := 0, flags &= ~0x4000, **return 0** (the change test,
+  confirm / cancel and the end-of-call increments are skipped; "Handlers that return 0" above). On failure: debug log
+  "error : Demo Play is not ready", +0x14430 := 0, and the call goes on with the change test etc. (Demo exit: 11 §4.)
 
 **What the top menu draws** (menu draw 0x47087F, every frame while quit state +0x14434 = 0; VERIFIED, changelog/answers_bugs2.md
 §C1; ref `c1_menu_practice_sel.png`):
