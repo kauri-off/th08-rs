@@ -54,6 +54,7 @@ const IDLE_EXIT: u32 = 3600;
 // Top menu: sub-state 1 from call 9, confirm / cancel from call 19 of each entry (12 §2.2 "Input timing").
 const TOP_INPUT: u32 = 9;
 const TOP_CONFIRM: u32 = 19;
+const DEMO_IDLE: u32 = 1500;
 
 // Key config rows 0–8 (15 §1.3): the pad field (file order, +0x00…+0x10) each row edits; Skip is 4th.
 const KEY_ROWS: [usize; 9] = [0, 1, 2, 8, 3, 4, 5, 6, 7];
@@ -525,6 +526,14 @@ impl MainMenu {
         if !input {
             return;
         }
+        // Demo counter after cursor / highlight and before the change test; a started demo returns 0 (12 §2.2).
+        if self.quitting.is_none() && demo_tick(&mut self.idle, ctx.w.input.held) {
+            if Self::top_demo(ctx) {
+                self.remove = true;
+                return;
+            }
+            self.idle = 0;
+        }
         self.desc_follow_cursor();
 
         if let Some(f) = &mut self.quitting {
@@ -534,19 +543,6 @@ impl MainMenu {
                 ctx.w.game.request(SceneId::Quit);
             }
             return;
-        }
-        self.idle = if ctx.w.input.held != 0 {
-            0
-        } else {
-            self.idle + 1
-        };
-        // Demo (12 §2.2): idle counter reset by any raw input; after 1500 frames load demorpy((n+1) mod 4).
-        // SPEC-GAP: compare / increment order of +0x14430 (title_demo: the original loads one call later than `>= 1500`).
-        if self.idle >= 1500 {
-            self.idle = 0;
-            if Self::top_demo(ctx) {
-                return;
-            }
         }
         // Confirm / cancel only while +0x1442C ≥ 10 after its reset in call 9, i.e. from call 19 (12 §2.2).
         if self.frames < TOP_CONFIRM {
@@ -661,8 +657,11 @@ impl MainMenu {
     }
 
     // Demo start (12 §2.2): demorpy((n+1) mod 4) from the archive; true when its playback started.
+    // Demo load (12 §2.2): 0x164D0BC advances before the load, also when it fails.
     fn top_demo(ctx: &mut Ctx) -> bool {
         let n = (ctx.w.game.demo + 1) % 4;
+        ctx.w.game.demo = n;
+        let flags = ctx.w.game.flags;
         let r = ctx
             .archive
             .read(&format!("demorpy{n}.rpy"))
@@ -670,13 +669,18 @@ impl MainMenu {
             .and_then(|b| Ok(crate::replay::parse(&b, ctx.w.game.ver_list.get())?));
         match r {
             Ok(r) => {
-                if crate::replay::start_playback(&mut ctx.w.game, r, None, Some(n)) {
+                let g = &mut ctx.w.game;
+                if crate::replay::start_playback(g, r, None, Some(n)) {
+                    // flags | 8 | 2 keeps the other bits, then bit 14 cleared; 0x164D0BD := 0.
+                    g.flags = (flags | F_REPLAY | F_DEMO) & !F_SPELL_PRACTICE;
+                    g.replay_speed = 0;
                     ctx.w.bgm.stop_bgm();
                     return true;
                 }
             }
             Err(e) => log::warn!("demorpy{n}.rpy: {e:#}"),
         }
+        log::debug!("error : Demo Play is not ready");
         false
     }
 
@@ -1477,11 +1481,20 @@ fn last_difficulty(g: &gamemgr::Game) -> i32 {
     }
 }
 
+// +0x14430 per sub-state-1 call: += 1, any raw input word zeroes it, demo when > 1500 (12 §2.2 "Demo").
+fn demo_tick(idle: &mut u32, raw: u16) -> bool {
+    *idle += 1;
+    if raw != 0 {
+        *idle = 0;
+    }
+    *idle > DEMO_IDLE
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        INFO_FADE_OUT, assign_key, centred_x, final_notice, info_fade_alpha, info_files, info_step,
-        title_music, volume_step,
+        INFO_FADE_OUT, TOP_INPUT, assign_key, centred_x, demo_tick, final_notice, info_fade_alpha,
+        info_files, info_step, title_music, volume_step,
     };
     use crate::types::SceneId;
 
@@ -1489,6 +1502,27 @@ mod tests {
 
     fn ctx() -> Option<crate::game::Ctx> {
         crate::testdata::ctx(crate::coreconfig::CoreConfig::default())
+    }
+
+    // Top-menu call at which the demo loads, with one input in call `input` (12 §2.2 "Demo").
+    fn demo_call(input: Option<u32>) -> u32 {
+        let mut idle = 7;
+        (TOP_INPUT..)
+            .find(|&c| {
+                if c == TOP_INPUT {
+                    idle = 0;
+                }
+                demo_tick(&mut idle, if Some(c) == input { 0x10 } else { 0 })
+            })
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn top_demo_counter() {
+        assert_eq!(demo_call(None), 1509);
+        for k in [9, 10, 500, 1508] {
+            assert_eq!(demo_call(Some(k)), k + 1501);
+        }
     }
 
     // 12 §2.2 "Back from a replay": bit 3 survives register (screen 0, previous-scene cursor), the Top entry block
