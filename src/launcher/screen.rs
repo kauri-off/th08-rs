@@ -694,6 +694,7 @@ impl Model {
                 theme::shadowed(ui.painter(), rr.min, g, theme::HELP);
             });
         crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body);
+        theme::scroll_edges(ui, &out);
         self.nav.moved = false;
         if self.nav.input.end() {
             ui.ctx().request_repaint();
@@ -935,6 +936,7 @@ impl Model {
                 ui.add_space(12.0);
             });
         crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, ui.max_rect());
+        theme::scroll_edges(ui, &out);
         act
     }
 
@@ -1463,6 +1465,7 @@ impl Model {
                 r
             });
         crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, space);
+        theme::scroll_edges(ui, &out);
         out.inner
     }
 }

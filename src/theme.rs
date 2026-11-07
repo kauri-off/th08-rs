@@ -1156,6 +1156,60 @@ pub fn soft_rect(p: &Painter, rect: Rect, feather: f32, color: Color32) {
     p.add(m);
 }
 
+// A scroll area's edges: the rows fade into the panel over 38 points where more content lies beyond the edge, with
+// a small ▴ / ▾ mark, so no glyph ends sliced at the edge.
+pub fn scroll_edges<R>(ui: &Ui, out: &egui::scroll_area::ScrollAreaOutput<R>) {
+    const FADE: f32 = 28.0;
+    // A solid strip at the edge, then the fade, so a cut line of text is fully hidden.
+    const SOLID: f32 = 10.0;
+    let r = out.inner_rect;
+    let off = out.state.clamped_offset().y;
+    let more_below = off + r.height() < out.content_size.y - 0.5;
+    let p = ui.painter().with_clip_rect(r);
+    let fade = |y0: f32, y1: f32, top_solid: bool| {
+        let (a, b) = if top_solid {
+            (PANEL, Color32::TRANSPARENT)
+        } else {
+            (Color32::TRANSPARENT, PANEL)
+        };
+        let mut m = egui::Mesh::default();
+        m.colored_vertex(pos2(r.min.x, y0), a);
+        m.colored_vertex(pos2(r.max.x, y0), a);
+        m.colored_vertex(pos2(r.max.x, y1), b);
+        m.colored_vertex(pos2(r.min.x, y1), b);
+        m.add_triangle(0, 1, 2);
+        m.add_triangle(0, 2, 3);
+        p.add(m);
+    };
+    let mark = |y: f32, down: bool| {
+        let (cx, h) = (r.max.x - 22.0, 6.0);
+        let (tip, base) = if down { (y + h, y) } else { (y - h, y) };
+        p.add(egui::Shape::convex_polygon(
+            vec![pos2(cx - h, base), pos2(cx + h, base), pos2(cx, tip)],
+            HELP,
+            egui::Stroke::NONE,
+        ));
+    };
+    if off > 0.5 {
+        p.rect_filled(
+            Rect::from_x_y_ranges(r.x_range(), r.min.y..=r.min.y + SOLID),
+            0.0,
+            PANEL,
+        );
+        fade(r.min.y + SOLID, r.min.y + SOLID + FADE, true);
+        mark(r.min.y + 10.0, false);
+    }
+    if more_below {
+        p.rect_filled(
+            Rect::from_x_y_ranges(r.x_range(), r.max.y - SOLID..=r.max.y),
+            0.0,
+            PANEL,
+        );
+        fade(r.max.y - SOLID - FADE, r.max.y - SOLID, false);
+        mark(r.max.y - 14.0, true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
