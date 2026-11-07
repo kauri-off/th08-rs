@@ -11,7 +11,7 @@ TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 BIN=$TARGET/release
 # Binary names (cargo --bin, in crates/th08-tools); these names must stay.
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
-SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
+SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg continue_retry hiscore_entry title_demo"
 SESSION_SRC=$ROOT/specs/data/sessions
 # packaging/local/local.env (through re/tools/localenv.sh) may set TH08_GAME_SRC and TH08_EXT_REPLAYS; both optional.
 [[ -f $ROOT/re/tools/localenv.sh ]] && source "$ROOT/re/tools/localenv.sh"
