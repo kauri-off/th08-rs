@@ -924,18 +924,14 @@ impl Model {
                 act
             }
             View::Waiting => {
-                let wait = i18n::ui(lang, "waiting_shift");
-                match cheats_note(lang, &self.active_cheats()) {
-                    Some(note) => message_ui(ui, &format!("{wait}\n\n{note}")),
-                    None => message_ui(ui, wait),
-                }
-                None
+                let note = cheats_note(lang, &self.active_cheats());
+                self.status_screen(ui, &screen::Status::Waiting(note))
             }
-            View::Loading => {
-                message_ui(ui, i18n::ui(lang, "loading"));
-                None
+            View::Loading => self.status_screen(ui, &screen::Status::Loading),
+            View::Error(msg) => {
+                let msg = msg.clone();
+                self.status_screen(ui, &screen::Status::Error(&msg))
             }
-            View::Error(msg) => error_ui(ui, lang, msg),
         }
     }
 
@@ -1491,87 +1487,6 @@ fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
         }
         None => {}
     }
-}
-
-// A waiting / loading screen: the serif message in the middle of the panel.
-fn message_ui(ui: &mut egui::Ui, text: &str) {
-    let r = ui.max_rect();
-    let p = ui.painter();
-    p.rect_filled(ui.ctx().viewport_rect(), 0.0, theme::PANEL);
-    let g = p.layout(
-        theme::latin_ellipsis(text).into_owned(),
-        theme::serif(theme::TITLE),
-        theme::TEXT,
-        (r.width() - 2.0 * theme::XL).max(40.0),
-    );
-    let pos = r.center() - g.size() / 2.0;
-    theme::outlined(p, pos, g, theme::TEXT, false);
-}
-
-// The start failure: heading, the message (scrolling when long), Back and Quit as text actions.
-fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
-    let mut act = None;
-    let r = ui.max_rect();
-    ui.painter()
-        .rect_filled(ui.ctx().viewport_rect(), 0.0, theme::PANEL);
-    let x = r.min.x + theme::XL.max(r.width() * 0.06);
-    let w = r.max.x - theme::XL.max(r.width() * 0.06) - x;
-    let h = theme::heading(
-        ui.painter(),
-        egui::pos2(x, r.min.y + 26.0),
-        i18n::ui(lang, "start_failed"),
-        "",
-        theme::HEADING + 4.0,
-        0.0,
-    );
-    let actions_h = 56.0;
-    let body = egui::Rect::from_x_y_ranges(
-        x..=x + w,
-        r.min.y + 26.0 + h + 20.0..=r.max.y - actions_h - 12.0,
-    );
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-    let out = egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(&mut child, |ui| {
-            let g = ui.painter().layout(
-                msg.to_string(),
-                theme::sans(theme::BODY),
-                theme::DANGER,
-                w - 16.0,
-            );
-            let (rr, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
-            theme::shadowed(ui.painter(), rr.min, g, theme::DANGER);
-        });
-    crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body);
-    theme::rule(
-        ui.painter(),
-        egui::Rangef::new(x, x + w),
-        r.max.y - actions_h - 6.0,
-    );
-    let bar = egui::Rect::from_x_y_ranges(x..=x + w, r.max.y - actions_h..=r.max.y);
-    let mut row = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(bar)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    row.spacing_mut().item_spacing.x = theme::XL;
-    if row
-        .add(theme::button(i18n::ui(lang, "back"), theme::Kind::Primary))
-        .clicked()
-    {
-        act = Some(Action::Back);
-    }
-    if cfg!(not(target_arch = "wasm32"))
-        && row
-            .add(theme::button(
-                i18n::ui(lang, "quit"),
-                theme::Kind::Secondary,
-            ))
-            .clicked()
-    {
-        act = Some(Action::Quit);
-    }
-    act
 }
 
 // The values an Enum row offers: the unset value first when the entry has no default, then the table's

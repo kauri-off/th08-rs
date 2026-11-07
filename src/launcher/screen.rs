@@ -38,6 +38,18 @@ pub(super) enum Target {
     Choice(&'static str),
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     Replay(usize),
+    // The start-failure screen's Back and Quit.
+    Back,
+    Exit,
+}
+
+// What the status screen shows instead of the settings.
+pub(super) enum Status<'a> {
+    // Starting the game; the cheats note when cheats are on.
+    Waiting(Option<String>),
+    Loading,
+    // The start failure's own message.
+    Error(&'a str),
 }
 
 // Keyboard focus, the targets of the last pass in order, the reset question, the title art.
@@ -250,6 +262,8 @@ impl Model {
     fn activate_target(&mut self) -> Option<Action> {
         match self.nav.focus? {
             Target::Play => self.can_play().then_some(Action::Play),
+            Target::Back => Some(Action::Back),
+            Target::Exit => Some(Action::Quit),
             Target::Folder => {
                 self.change_folder();
                 None
@@ -329,6 +343,8 @@ impl Model {
             Target::Row(k) => i18n::help(lang, self.row(k).e),
             Target::Developer => i18n::ui(lang, "developer_hint"),
             Target::Reset => i18n::ui(lang, "reset"),
+            Target::Back => i18n::ui(lang, "help_error_back"),
+            Target::Exit => i18n::ui(lang, "help_error_quit"),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             Target::Choice("rp_sort") => i18n::ui(lang, "rp_hint"),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -376,13 +392,8 @@ impl Model {
         (self.nav.input.bar() && self.nav.focus == Some(t)) || self.nav.input.lit(t)
     }
 
-    pub(super) fn settings_screen(&mut self, ui: &mut Ui) -> Option<Action> {
-        let lang = self.lang();
-        self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
-        let mut act = self.keys(ui);
-        let full = ui.max_rect();
-        let screen = ui.ctx().viewport_rect();
-        let p = ui.painter().with_clip_rect(screen);
+    // The title art column (on windows 760 pt and wider) and the lacquer panel: art width, panel, text x and right.
+    fn frame(&mut self, ui: &Ui, p: &Painter, full: Rect, screen: Rect) -> (f32, Rect, f32, f32) {
         let art_w = if full.width() >= 760.0 {
             (full.width() * 0.344).round()
         } else {
@@ -390,12 +401,23 @@ impl Model {
         };
         if art_w > 0.0 {
             let r = Rect::from_x_y_ranges(screen.min.x..=full.min.x + art_w, screen.y_range());
-            self.art_ui(ui.ctx(), &p, r);
+            self.art_ui(ui.ctx(), p, r);
         }
         let panel = Rect::from_x_y_ranges(full.min.x + art_w..=screen.max.x, screen.y_range());
-        theme::lacquer(&p, panel, Edge::Left);
+        theme::lacquer(p, panel, Edge::Left);
         let x = panel.min.x + if art_w > 0.0 { 42.0 } else { 24.0 };
         let right = full.max.x - if art_w > 0.0 { 38.0 } else { 24.0 };
+        (art_w, panel, x, right)
+    }
+
+    pub(super) fn settings_screen(&mut self, ui: &mut Ui) -> Option<Action> {
+        let lang = self.lang();
+        self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
+        let mut act = self.keys(ui);
+        let full = ui.max_rect();
+        let screen = ui.ctx().viewport_rect();
+        let p = ui.painter().with_clip_rect(screen);
+        let (art_w, panel, x, right) = self.frame(ui, &p, full, screen);
         let w = right - x;
         let band_x = panel.min.x + 6.0..=screen.max.x;
         if self.nav.focus.is_none() {
@@ -523,6 +545,216 @@ impl Model {
             ui.ctx().request_repaint();
         }
         act
+    }
+
+    // Starting / loading / start failure in the launcher's frame: title art, heading, the status, and on a failure
+    // a short cause, the message as helper text and Choose folder / Back / Quit as rows.
+    pub(super) fn status_screen(&mut self, ui: &mut Ui, status: &Status<'_>) -> Option<Action> {
+        let lang = self.lang();
+        let error = matches!(status, Status::Error(_));
+        if error {
+            self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
+        }
+        let dir = self.game_dir().to_string();
+        let mut act = if error { self.keys(ui) } else { None };
+        if self.game_dir() != dir {
+            act = Some(Action::Back);
+        }
+        let full = ui.max_rect();
+        let screen = ui.ctx().viewport_rect();
+        let p = ui.painter().with_clip_rect(screen);
+        let (_, panel, x, right) = self.frame(ui, &p, full, screen);
+        let w = right - x;
+        let compact = full.height() < 600.0;
+        let ver = i18n::ui_fmt(lang, "version", &[("version", &super::version_line())]);
+        let caption = i18n::ui_fmt(lang, "launcher_caption", &[("version", &ver)]);
+        let head = if error {
+            i18n::ui(lang, "start_failed")
+        } else {
+            i18n::ui(lang, "launcher_title")
+        };
+        let hh = theme::heading(
+            &p,
+            pos2(x, full.min.y + if compact { 12.0 } else { 26.0 }),
+            head,
+            if error { "" } else { &caption },
+            HEAD,
+            CAP,
+        );
+        let mut y =
+            full.min.y + if compact { 12.0 } else { 26.0 } + hh + if compact { 16.0 } else { 28.0 };
+        // Body text at most about 70 characters wide.
+        let measure = w.min(SMALL * 38.0);
+        let Status::Error(msg) = status else {
+            self.progress_body(ui, &p, status, x, w, measure, full);
+            return None;
+        };
+        let cause = p.layout(
+            i18n::ui(lang, "start_failed_body").to_string(),
+            theme::serif(ROW),
+            theme::TEXT,
+            measure,
+        );
+        let ch = cause.size().y;
+        theme::outlined(&p, pos2(x, y), cause, theme::TEXT, false);
+        y += ch + 14.0;
+        let band_x = panel.min.x + 6.0..=screen.max.x;
+        let native = matches!(self.folder, Folder::Native)
+            && cfg!(not(any(target_arch = "wasm32", target_os = "android")));
+        let mut rows: Vec<(Target, &str)> = Vec::new();
+        if native {
+            rows.push((Target::Folder, i18n::ui(lang, "choose_folder")));
+        }
+        rows.push((Target::Back, i18n::ui(lang, "back")));
+        if cfg!(not(target_arch = "wasm32")) {
+            rows.push((Target::Exit, i18n::ui(lang, "quit")));
+        }
+        if !self
+            .nav
+            .focus
+            .is_some_and(|f| rows.iter().any(|r| r.0 == f))
+        {
+            self.nav.focus = Some(rows[0].0);
+        }
+        // Bottom up: hints, help line, the rows, a rule; the message scrolls in what is left.
+        let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
+        let shown = if self.nav.input.bar() {
+            self.nav.focus
+        } else {
+            self.nav.input.hovered()
+        };
+        let help = match shown {
+            Some(Target::Folder) => i18n::ui(lang, "help_choose_folder").to_string(),
+            Some(t) => self.help_of(t, lang),
+            None => String::new(),
+        };
+        let help_g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
+        let help_h = help_g.size().y.max(SMALL * 1.3);
+        let help_y = hint_y - help_h - if compact { 10.0 } else { 20.0 };
+        // The rows follow the message; a long message scrolls above rows pinned over the help line.
+        let msg_h = p
+            .layout(
+                (*msg).to_string(),
+                theme::sans(SMALL),
+                theme::HELP,
+                measure - 16.0,
+            )
+            .size()
+            .y;
+        let rows_top = (help_y - 14.0 - rows.len() as f32 * ROW_H - 8.0)
+            .min(y + msg_h + if compact { 16.0 } else { 28.0 });
+        theme::rule(&p, egui::Rangef::new(x, right), rows_top);
+        self.nav.order.clear();
+        let mut ry = rows_top + 8.0;
+        for (t, text) in &rows {
+            let r = Rect::from_min_size(pos2(x, ry), vec2(w, ROW_H));
+            let resp = self.target(
+                ui,
+                &p,
+                Rect::from_x_y_ranges(band_x.clone(), r.y_range()),
+                *t,
+            );
+            let lit = self.shows(*t);
+            let color = if lit { theme::TEXT_HI } else { theme::TEXT };
+            text_in(&p, r, text, theme::serif(ROW + 1.0), color, lit);
+            if resp.clicked() {
+                act = match t {
+                    Target::Folder => {
+                        self.change_folder();
+                        (self.game_dir() != dir).then_some(Action::Back)
+                    }
+                    Target::Back => Some(Action::Back),
+                    _ => Some(Action::Quit),
+                };
+            }
+            ry += ROW_H;
+        }
+        theme::shadowed(&p, pos2(x, help_y), help_g, theme::HELP_HI);
+        let mut hints = vec![
+            ("↑↓", i18n::ui(lang, "hint_move")),
+            ("Z", i18n::ui(lang, "hint_select")),
+        ];
+        if cfg!(not(target_arch = "wasm32")) {
+            hints.push(("Esc", i18n::ui(lang, "hint_quit")));
+        }
+        theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
+        let body = Rect::from_x_y_ranges(x..=x + measure, y..=rows_top - 12.0);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
+        child.set_clip_rect(body);
+        let out = egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                let g = ui.painter().layout(
+                    (*msg).to_string(),
+                    theme::sans(SMALL),
+                    theme::HELP,
+                    measure - 16.0,
+                );
+                let (rr, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                theme::shadowed(ui.painter(), rr.min, g, theme::HELP);
+            });
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body);
+        self.nav.moved = false;
+        if self.nav.input.end() {
+            ui.ctx().request_repaint();
+        }
+        act
+    }
+
+    // The loading / starting line, a sweeping hairline, the Shift hint and the cheats note.
+    #[expect(clippy::too_many_arguments, reason = "one painted block")]
+    fn progress_body(
+        &self,
+        ui: &Ui,
+        p: &Painter,
+        status: &Status<'_>,
+        x: f32,
+        w: f32,
+        measure: f32,
+        full: Rect,
+    ) {
+        let lang = self.lang();
+        let (line, hint) = match status {
+            Status::Loading => (i18n::ui(lang, "loading"), None),
+            Status::Waiting(_) => (
+                i18n::ui(lang, "starting"),
+                Some(i18n::ui(lang, "waiting_hint")),
+            ),
+            Status::Error(_) => unreachable!(),
+        };
+        let mid = full.min.y + full.height() * 0.42;
+        let g = p.layout(
+            theme::latin_ellipsis(line).into_owned(),
+            theme::serif(PLAY),
+            theme::TEXT,
+            w,
+        );
+        let gh = g.size().y;
+        theme::outlined(p, pos2(x, mid - gh), g, theme::TEXT, false);
+        // A lavender segment sweeping along a hairline: the game is still working.
+        let ly = mid + 18.0;
+        let lw = measure.min(w);
+        p.hline(x..=x + lw, ly, egui::Stroke::new(1.0, theme::TRACK));
+        let t = ui.input(|i| i.time) as f32;
+        let seg = lw * 0.18;
+        let sx = x + (t * 0.6).fract() * (lw + seg) - seg;
+        p.hline(
+            sx.max(x)..=(sx + seg).min(x + lw),
+            ly,
+            egui::Stroke::new(2.0, theme::FILL),
+        );
+        ui.ctx().request_repaint();
+        let mut hy = ly + 22.0;
+        if let Some(h) = hint
+            && cfg!(not(any(target_arch = "wasm32", target_os = "android")))
+        {
+            theme::key_hints(p, pos2(x, hy), &[("Shift", h)], SMALL);
+            hy += SMALL * 2.2;
+        }
+        if let Status::Waiting(Some(note)) = status {
+            let g = p.layout(note.clone(), theme::sans(SMALL), theme::WARN, measure);
+            theme::shadowed(p, pos2(x, hy), g, theme::WARN);
+        }
     }
 
     // "Game folder", the path and its state, "Change…".
