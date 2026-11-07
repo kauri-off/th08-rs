@@ -1,4 +1,4 @@
-//! Pack font chain (I18N G3): the translation's own fonts (patch.js `fonts`, th08.js `font` face) ordered for the
+//! Pack font chain: the translation's own fonts (patch.js `fonts`, th08.js `font` face) ordered for the
 //! pack's `[fonts]`: the th08 face first, then each other declared font that adds glyphs the text still lacks; the
 //! system font stays the last fallback at run time. Also the per-script glyph report.
 

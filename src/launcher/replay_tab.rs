@@ -604,8 +604,8 @@ mod tests {
     // The launcher's export job runs on its own thread: 60 frames of demo 0 as PNG + WAV, then a job cancelled at once.
     #[test]
     fn video_job_runs_and_cancels() {
-        let Some(dir) = crate::settings::test_game_dir() else {
-            eprintln!("skipped: no game data (TH08_DIR unset)");
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
         let out = std::env::temp_dir().join(format!("th08-videojob-{}", std::process::id()));

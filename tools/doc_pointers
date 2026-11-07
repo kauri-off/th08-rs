@@ -1,0 +1,9 @@
+#!/bin/bash
+# usage: tools/doc_pointers — fail when code or build files point at plan documents (ARCH_*, I18N plan sections,
+# docs/arch/…) instead of stating the fact; CLAUDE.md "no process history in code". Exit 1 on any.
+cd "$(dirname "$0")/.." || exit 2
+hits=$(grep -rnE 'ARCH_[A-Z]|I18N(_STRINGS)? ?(G[0-9]|§)|ASSETS_FORMAT|docs/arch(ive)?/|STEP ?[0-9]+ ?§' \
+  --include='*.rs' --include='*.toml' --include='*.kt' --include='*.kts' --include='*.js' --include='*.html' \
+  src crates xtask android web build.rs Cargo.toml clippy.toml 2> /dev/null | grep -v '^crates/[^/]*/target/')
+[[ -z $hits ]] && { echo "doc pointers ok"; exit 0; }
+echo "doc pointers FAILED (state the fact instead):"; echo "$hits"; exit 1

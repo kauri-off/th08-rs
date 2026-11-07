@@ -1,20 +1,7 @@
 //! Test-only access to the original th08.dat (TH08_DIR); tests that need it skip without it.
 
 use crate::archive::Archive;
-use std::path::PathBuf;
-
-// TH08_DIR; when unset, says so on stderr with the test's name.
-fn game_dir() -> Option<PathBuf> {
-    let dir = std::env::var_os("TH08_DIR").map(PathBuf::from);
-    if dir.is_none() {
-        let t = std::thread::current();
-        eprintln!(
-            "skipped: no game data (TH08_DIR unset): {}",
-            t.name().unwrap_or("?")
-        );
-    }
-    dir
-}
+use th08_testkit::game_dir;
 
 // Case-insensitive file lookup in the game directory.
 pub fn game_file(name: &str) -> Option<Vec<u8>> {

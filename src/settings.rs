@@ -188,6 +188,7 @@ pub struct Entry {
     // Saved to port.cfg / localStorage when edited on a screen; false = this run only.
     pub persist: bool,
     // Shown in the in-game port menu and applied to the held game; only presentation rows that need no restart.
+    // The menu only writes `Settings`: the row must also be wired in `app::apply_live` (test `live_rows_are_wired`).
     pub live: bool,
     pub help: &'static str,
     set: Setter,
@@ -387,6 +388,7 @@ impl Default for Settings {
 }
 
 impl Settings {
+    // Every field at its table default (`empty_holds_table_defaults`), without the origin map.
     fn empty() -> Self {
         Self {
             values: std::collections::BTreeMap::default(),
@@ -401,7 +403,10 @@ impl Settings {
             update_check: true,
             discord: false,
             pause_unfocused: true,
-            blit: th08_render::gfx::BlitOptions::default(),
+            blit: th08_render::gfx::BlitOptions {
+                filter: th08_render::gfx::ScaleFilter::Sharp,
+                ..Default::default()
+            },
             render_scale: th08_render::gfx::RenderScale::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
             keys: crate::platform::keymap::KeyMap::default(),
@@ -3159,6 +3164,31 @@ fn set_cfg_line(old: &str, key: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `Settings::empty()` (the parse scratch) must already hold every table default, so `Entry.default` is the one
+    // source: applying an entry's default to `empty()` changes nothing but the origin map.
+    #[test]
+    fn empty_holds_table_defaults() {
+        let plain = |mut s: Settings| {
+            s.values.clear();
+            format!("{s:?}")
+        };
+        let empty = plain(Settings::empty());
+        let differ: Vec<_> = ENTRIES
+            .iter()
+            .filter(|e| !e.default.is_empty())
+            .filter(|e| {
+                let mut s = Settings::empty();
+                s.apply(Origin::Default, e.key, e, e.default);
+                plain(s) != empty
+            })
+            .map(|e| (e.key, e.default))
+            .collect();
+        assert!(
+            differ.is_empty(),
+            "Settings::empty() differs from the table default of {differ:?}"
+        );
+    }
 
     fn args(a: &[&str]) -> Settings {
         Settings::from_args(PlatformDirs::default(), a.iter().map(ToString::to_string)).unwrap()

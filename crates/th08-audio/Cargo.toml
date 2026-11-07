@@ -31,3 +31,6 @@ cpal = { version = "0.18.2", features = ["realtime"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cpal = { version = "0.18.2", features = ["wasm-bindgen"] }
 wasm-bindgen-futures = "0.4.79"
+
+[dev-dependencies]
+th08-testkit = { path = "../th08-testkit" }

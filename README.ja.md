@@ -109,7 +109,8 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 |---|---|
 | `specs/` | 仕様書。挙動についての唯一の正解 |
 | `src/` | アプリ本体：ゲームウィンドウ、ランチャー、設定、プラットフォーム（パッケージ `th08`、実行ファイル `th08`） |
-| `crates/` | `th08-formats`（ファイル形式）、`th08-core`（ゲームロジック）、`th08-render`（wgpu）、`th08-audio`（cpal、MIDI）、`th08-tools`（トレース・描画ログのツール、`src/bin/` に実行ファイル） |
+| `crates/` | ライブラリ：ファイル形式、ゲームロジック、描画、音声、翻訳、ツール（[クレート一覧](docs/ARCHITECTURE.md#crates)） |
+| `tools/` | 検査・保守用スクリプト（[一覧](tools/README.md)） |
 | `re/` | リバースエンジニアリング用ツール：フォーマットのダンプ、Ghidra スクリプト、実行時プローブ、プレイの録画 |
 | `docs/` | 進捗、設計判断、現在のアーキテクチャ（[目次](docs/README.md)） |
 | `android/` | Android 用ランチャー（Kotlin、Compose）と Gradle wrapper |

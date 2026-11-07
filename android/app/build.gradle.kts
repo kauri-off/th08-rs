@@ -78,7 +78,7 @@ abstract class SettingsSchema : DefaultTask() {
     }
 }
 
-// Optional bundled game data: th08.pak / thbgm.pak (repack, ASSETS_FORMAT §3.5) or th08.dat / thbgm.dat (any letter
+// Optional bundled game data: th08.pak / thbgm.pak (repack) or th08.dat / thbgm.dat (any letter
 // case) copied as lowercase assets; the source folder is only read. Up to date while the two files are unchanged.
 abstract class GameData : DefaultTask() {
     @get:InputFiles abstract val files: ConfigurableFileCollection
@@ -200,7 +200,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // Stored .so (extractNativeLibs=false) and stored .dat / .pak assets (AAsset fds, ARCH_D §2.1, ASSETS_FORMAT §3.5).
+    // Stored .so (extractNativeLibs=false) and stored .dat / .pak assets (read through AAsset fds).
     packaging { jniLibs { useLegacyPackaging = false } }
     androidResources { noCompress += listOf("dat", "pak") }
 

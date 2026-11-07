@@ -1,5 +1,5 @@
-//! pack-check (I18N G3): a presentation pack against its font, the G2 text layout and the vanilla key set — glyphs
-//! the pack font lacks, per-site overflow (`Raster::render_layout` rules, I18N §2.3), unknown and unmapped keys.
+//! pack-check: a presentation pack against its font, the translated text layout and the vanilla key set — glyphs
+//! the pack font lacks, per-site overflow (`Raster::render_layout` rules), unknown and unmapped keys.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

@@ -1,4 +1,4 @@
-//! thpatch patches for th08 (I18N G3, I18N §1.2 server file list): the server's language list, a language patch and
+//! thpatch patches for th08: the server's language list, a language patch and
 //! its dependency chain (`patch.js` `dependencies`, repos found through `repo.js` neighbours), and the cached download
 //! `<cache>/<lang>/<revision>/` of its th08 text, images and declared fonts. Downloads are untrusted data: names are
 //! checked, sizes capped, CRC32 checked against `files.js`, full `.end` scripts never fetched, only JSON is parsed.
@@ -23,8 +23,8 @@ const MAX_TOTAL: u64 = 512 << 20;
 // Parallel requests of one download.
 const WORKERS: usize = 8;
 
-// Text inputs of the importer (I18N §1.2): stringdefs + themes at the patch root; jdiff and the three spell/music
-// tables under th08/. Full `th08/*.end` replacements are logic keys (I18N §2.1) and are skipped.
+// Text inputs of the importer: stringdefs + themes at the patch root; jdiff and the three spell/music
+// tables under th08/. Full `th08/*.end` replacements are logic keys and are skipped.
 pub fn is_text(name: &str) -> bool {
     if !safe_name(name) {
         return false;
@@ -39,7 +39,7 @@ pub fn is_text(name: &str) -> bool {
     l.ends_with(".jdiff") || matches!(l.as_str(), "spells.js" | "spellcomments.js" | "musiccmt.js")
 }
 
-// Texture replacements under th08/ (I18N §2.4).
+// Texture replacements under th08/.
 pub fn is_image(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     safe_name(name) && l.starts_with("th08/") && (l.ends_with(".png") || l.ends_with(".jpg"))

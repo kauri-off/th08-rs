@@ -17,4 +17,5 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
+th08-testkit = { path = "../th08-testkit" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

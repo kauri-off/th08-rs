@@ -113,7 +113,8 @@ the options; channels, versions and CI signing are in [CONTRIBUTING.md](CONTRIBU
 |---|---|
 | `specs/` | the specifications: the only source of truth for behaviour |
 | `src/` | the app: game window, launcher, settings, platform (package `th08`, binary `th08`) |
-| `crates/` | `th08-formats` (file formats), `th08-core` (game logic), `th08-render` (wgpu), `th08-audio` (cpal, MIDI), `th08-tools` (trace / draw-log tools, bins in `src/bin/`) |
+| `crates/` | the libraries: file formats, game logic, renderer, audio, translations, tools ([crate table](docs/ARCHITECTURE.md#crates)) |
+| `tools/` | check and maintenance scripts ([index](tools/README.md)) |
 | `re/` | reverse-engineering tools: format dumpers, Ghidra scripts, the runtime probe, the session recorder ([index](re/README.md)) |
 | `docs/` | status, decisions, the architecture as built ([index](docs/README.md)) |
 | `android/` | the Android launcher (Kotlin, Compose) and its Gradle wrapper |

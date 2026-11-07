@@ -26,4 +26,5 @@ zstd = ["dep:zstd"]
 device = ["zstd", "dep:vorbis_rs", "dep:serde_json"]
 
 [dev-dependencies]
+th08-testkit = { path = "../th08-testkit" }
 th08-repack = { path = ".", features = ["device"] }

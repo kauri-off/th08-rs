@@ -233,9 +233,7 @@ fn pack_stamp(data: &Path) -> Result<String> {
 fn packed(data: &Path, _name: &str) -> Result<Game> {
     let root = util::root();
     if !root.join(REPACK_SOURCES[0]).is_file() {
-        bail!(
-            "--assets packed needs the `repack` bin (docs/arch/ASSETS_FORMAT.md AS1/AS2); use --assets raw"
-        );
+        bail!("--assets packed needs the `repack` bin; use --assets raw");
     }
     let cache = util::personal_target().join("pack");
     util::inside_target(&cache)?;

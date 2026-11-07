@@ -21,8 +21,10 @@ Reference documents for the port. Behaviour itself is described only in the numb
 
 Elsewhere in the repository:
 
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md): how to contribute, the clean-room rule, checks, commit style.
-- [`../CLAUDE.md`](../CLAUDE.md): code comment rules and the source-of-truth rules (for people and AI agents).
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md): how to contribute, the clean-room rule, checks and recipes, commit style.
+- [`../tools/README.md`](../tools/README.md): every script and tool bin, and who can run it.
+- [`../CLAUDE.md`](../CLAUDE.md): code comment rules and the source-of-truth rules (for people and AI agents), and the
+  maintainer machine's workflow.
 - [`../specs/`](../specs/): the specifications, the only source of truth for behaviour.
 - [`../re/README.md`](../re/README.md): the reverse-engineering tools and where the findings live.
 - [`../sessions/README.md`](../sessions/README.md): recording and replaying play sessions of the original.

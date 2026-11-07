@@ -2226,16 +2226,49 @@ fn open_drawlog(v: &str) -> Option<th08_core::drawfmt::Writer> {
 mod tests {
     use super::*;
 
+    // A new `live` row must reach the held game: through `apply_live` / `refresh_overlays`, or by being read from
+    // `Running.settings` where it is used. Listed here once that is done.
+    #[test]
+    fn live_rows_are_wired() {
+        const WIRED: &[&str] = &[
+            "language",              // refresh_overlays, menus
+            "pause_unfocused",       // pauses_unfocused
+            "scale_filter",          // apply_live: blit options
+            "integer_scale",         // apply_live: blit options
+            "render_scale",          // apply_live
+            "volume_master",         // apply_live: port volume
+            "volume_bgm",            // apply_live: port volume
+            "volume_se",             // apply_live: port volume
+            "mute_unfocused",        // focus handling
+            "now_playing",           // refresh_overlays, toasts
+            "color_filter",          // apply_live: blit options
+            "brightness",            // apply_live: blit options
+            "screenshot_size",       // screenshot path
+            "input_display",         // input display overlay
+            "input_display_opacity", // input display overlay
+            "touch_opacity",         // apply_live: touch config
+        ];
+        for e in crate::settings::ENTRIES.iter().filter(|e| e.live) {
+            assert!(
+                WIRED.contains(&e.key),
+                "live row `{}` is not applied to the held game: wire it in app::apply_live (or read it from \
+                 Running.settings where it is used) and list it in WIRED",
+                e.key
+            );
+        }
+        for k in WIRED {
+            assert!(
+                crate::settings::ENTRIES
+                    .iter()
+                    .any(|e| e.live && e.key == *k),
+                "`{k}` is no longer a live row"
+            );
+        }
+    }
+
     // A `Running` over the game files that plays demo 0's record as an ordinary replay; None without TH08_DIR.
     fn running(tag: &str) -> Option<Running> {
-        let Some(dir) = crate::settings::test_game_dir() else {
-            let t = std::thread::current();
-            eprintln!(
-                "skipped: no game data (TH08_DIR unset): {}",
-                t.name().unwrap_or(tag)
-            );
-            return None;
-        };
+        let dir = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)?;
         let src = crate::sources::native(dir);
         let base = crate::settings::get().clone();
         let load = |s: &Settings| {
@@ -2280,12 +2313,14 @@ mod tests {
     // `<save dir>/screenshots/`, equal to the frame `capture` renders; the window-size variant scales it.
     #[test]
     fn screenshot_saves_frame() {
-        let Some(dir) = crate::settings::test_game_dir() else {
-            eprintln!("skipped: no game data (TH08_DIR unset)");
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
-        let Ok(g) = pollster::block_on(Gfx::headless()) else {
-            eprintln!("skipped: no GPU adapter");
+        let Some(g) = th08_testkit::need(
+            pollster::block_on(Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let src = crate::sources::native(dir);
@@ -2360,8 +2395,8 @@ mod tests {
     // score.dat keeps every record.
     #[test]
     fn quit_to_title() {
-        let Some(dir) = crate::settings::test_game_dir() else {
-            eprintln!("skipped: no game data (TH08_DIR unset)");
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
         let src = crate::sources::native(dir);

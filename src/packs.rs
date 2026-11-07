@@ -1,6 +1,6 @@
 //! Presentation packs: `packs/<id>` (a folder or a .zip) chosen by `game_text` or the `pack`
 //! setting, read into the renderer's `PackText` (texts, FileFont, overflow per site) and core's image `Overlay`.
-//! Port-only; nothing here reaches logic (logic keys are refused by `Overlay::add`, I18N §2.1).
+//! Port-only; nothing here reaches logic (logic keys are refused by `Overlay::add`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -452,7 +452,7 @@ pub fn read_files(p: &std::path::Path) -> anyhow::Result<Vec<(String, Vec<u8>)>>
     Ok(out)
 }
 
-// Pack layout (I18N §2.5): `pack.toml`; `text/*.json` = flat `{"<TextRef key>": "<text>"}` objects; `fonts/*.ttf|otf`;
+// Pack layout: `pack.toml`; `text/*.json` = flat `{"<TextRef key>": "<text>"}` objects; `fonts/*.ttf|otf`;
 // `images/<chunk image name>` and `files/<name>` textures; ATTRIBUTION / LICENSE / README files are skipped.
 pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<Mounted> {
     let manifest: toml::Table = match files.iter().find(|f| f.0.eq_ignore_ascii_case("pack.toml")) {
@@ -479,7 +479,7 @@ pub fn mount(files: &[(String, Vec<u8>)], fallback_id: &str) -> anyhow::Result<M
             }
         }
     }
-    // `[fonts] text` = the first font of the chain, `fallback` = the next ones in order (I18N G3).
+    // `[fonts] text` = the first font of the chain, `fallback` = the next ones in order.
     let fonts_t = manifest.get("fonts").and_then(toml::Value::as_table);
     let mut chain_names: Vec<String> = fonts_t
         .and_then(|t| t.get("text"))

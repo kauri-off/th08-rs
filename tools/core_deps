@@ -1,0 +1,8 @@
+#!/bin/bash
+# usage: tools/core_deps — fail when th08-core or th08-out depends (normal deps) on wgpu, cpal, winit, egui, rfd, clap
+# or liblzma. Prints "core deps ok" or the offending crates; exit 1 on any.
+cd "$(dirname "$0")/.." || exit 2
+tree=$(cargo tree -q --locked -p th08-core -p th08-out -e normal --prefix none 2>&1) || { echo "core deps FAILED: cargo tree"; echo "$tree" | tail -5; exit 1; }
+bad=$(grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' <<< "$tree" | sort -u | tr '\n' ' ')
+[[ -z $bad ]] && { echo "core deps ok"; exit 0; }
+echo "core deps FAILED: $bad"; exit 1

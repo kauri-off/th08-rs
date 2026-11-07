@@ -1,5 +1,5 @@
-//! thcrap / Touhou Patch Center import (I18N G3; file list I18N §1.2, key rules I18N_STRINGS §3): a `lang_xx`
-//! folder of JSON patch files → the flat `{"<TextRef key>": "<text>"}` tables of a presentation pack (I18N §2.5).
+//! thcrap / Touhou Patch Center import: a `lang_xx` folder of JSON patch files → the flat
+//! `{"<TextRef key>": "<text>"}` tables of a presentation pack.
 //! Patch files are untrusted data: only JSON is parsed, images are only decoded, nothing is executed.
 
 use std::collections::{BTreeMap, HashMap};
@@ -123,7 +123,7 @@ impl Vanilla {
     }
 }
 
-// Entries in index order, each offset once (the lowest index keys a shared offset, 10 §2, I18N_STRINGS §3.1).
+// Entries in index order, each offset once (the lowest index keys a shared offset, 10 §2).
 fn unique_entries(f: &MsgFile) -> Vec<usize> {
     (0..f.entries.len())
         .filter(|&i| f.entries.iter().position(|&o| o == f.entries[i]) == Some(i))
@@ -169,7 +169,7 @@ pub struct MsgBox {
     pub slots: Vec<u16>,
 }
 
-// thcrap `msg08` box keys of one entry (I18N_STRINGS §3.1): ops 4/15 close the box; ops 16/19/20 open one when none is
+// thcrap `msg08` box keys of one entry: ops 4/15 close the box; ops 16/19/20 open one when none is
 // open or the time differs, else append; op 3 opens one on line 0, else appends to the current box; key =
 // `<start time>_<k>` with k = boxes already started at that time. Op 8 keys (`_h1_`) are returned separately: msg08
 // has no op 8 and its string is ignored (10 §5.1), so they take no slot.
@@ -239,7 +239,7 @@ fn end_lines(d: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-// A text line of an .end script: not a command, not empty (16 §1.3; I18N_STRINGS §3.2).
+// A text line of an .end script: not a command, not empty (16 §1.3).
 fn is_end_text(l: &[u8]) -> bool {
     !l.is_empty() && l[0] != b'@' && l[0] != 0
 }
@@ -260,7 +260,7 @@ pub fn end_blocks(d: &[u8]) -> Vec<(usize, Vec<usize>)> {
     out
 }
 
-// thcrap layout markup flattened to plain text (I18N §5: flatten at import): `<tag$a$b…>` → `a`; an empty first field
+// thcrap layout markup flattened to plain text at import: `<tag$a$b…>` → `a`; an empty first field
 // (a continuation tab stop, `<l$$…>`) → the width of the last label in spaces; tabs → one space.
 pub fn flatten(s: &str, last_label: &mut usize) -> String {
     let mut out = String::new();
@@ -428,7 +428,7 @@ impl Lang {
         })
     }
 
-    // Texture replacements (I18N §1.2, §2.4): `th08/data/**.png|jpg` → `images/<path under data>`, `th08/*.jpg|png`
+    // Texture replacements: `th08/data/**.png|jpg` → `images/<path under data>`, `th08/*.jpg|png`
     // → `files/<name>`. Each must decode as an image; names are restricted to [A-Za-z0-9_.-/].
     // A later layer's image replaces an earlier one of the same name.
     pub fn images(&self, report: &mut Report) -> Vec<(String, Vec<u8>)> {
@@ -493,7 +493,7 @@ pub fn images(dir: &Path, report: &mut Report) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-// `title02.v1.00d.png` → `title02.png` (thcrap per-version files, I18N §2.4).
+// `title02.v1.00d.png` → `title02.png` (thcrap per-version files).
 fn strip_version(p: &str) -> String {
     match p.find(".v1.") {
         Some(i) => {
@@ -546,7 +546,7 @@ fn str_lines(v: &Value) -> Option<Vec<String>> {
     }
 }
 
-// Fill `slots` (keys of fixed line slots) with `lines` (I18N §2.1: a translation never adds or drops ops): extra lines
+// Fill `slots` (keys of fixed line slots) with `lines` (a translation never adds or drops ops): extra lines
 // are joined into the last slot with a space, missing ones become " " so no Japanese is left beside the translation.
 fn fit_lines(
     table: &mut BTreeMap<String, String>,
@@ -589,7 +589,7 @@ fn fit_lines(
     }
 }
 
-// The whole mapping: thcrap lang files + vanilla th08.dat → pack tables (I18N §2.3, I18N_STRINGS §3).
+// The whole mapping: thcrap lang files + vanilla th08.dat → pack tables.
 pub fn import(lang: &Lang, v: &Vanilla, report: &mut Report) -> Tables {
     let mut t = Tables::new();
     t.insert("msg.json", import_msg(lang, v, report));
@@ -759,7 +759,7 @@ fn import_spells(lang: &Lang, report: &mut Report) -> BTreeMap<String, String> {
 fn import_music(lang: &Lang, v: &Vanilla, report: &mut Report) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let n = v.music.len();
-    // themes.js `th08_NN`: NN = music-room entry + 1 (I18N_STRINGS §3.4).
+    // themes.js `th08_NN`: NN = music-room entry + 1.
     let mut titles: HashMap<usize, String> = HashMap::new();
     for (k, val) in &lang.themes {
         let Some(nn) = k.strip_prefix("th08_") else {
@@ -841,7 +841,7 @@ fn import_music(lang: &Lang, v: &Vanilla, report: &mut Report) -> BTreeMap<Strin
 }
 
 // stringlocs id of a builtin: the `Def::thcrap` column, plus the 1-based `th08 Spell Condition Line L N…` ids of the
-// Last Word hints (card number = card id + 1, I18N_STRINGS §3.5).
+// Last Word hints (card number = card id + 1).
 fn builtin_id(b: Builtin, defs: &serde_json::Map<String, Value>) -> Option<&str> {
     if let Builtin::SpHint { card, line } = b {
         let prefix = format!("th08 Spell Condition Line {} ", line + 1);
@@ -859,7 +859,7 @@ fn builtin_id(b: Builtin, defs: &serde_json::Map<String, Value>) -> Option<&str>
 }
 
 // Equivalent for our values: a vanilla literal whose ASCII numbers the translation writes as `%d` conversions (Last
-// Word hints: `No.138` vs thcrap's `No.%.3d`, I18N_STRINGS §3.5). Each conversion must print its number's digits
+// Word hints: `No.138` vs thcrap's `No.%.3d`). Each conversion must print its number's digits
 // exactly; the translation is then filled in at import.
 fn fill_numbers(vanilla: &str, tr: &str) -> Option<String> {
     use th08_core::textref::{FmtArg, sprintf};

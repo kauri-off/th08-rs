@@ -324,8 +324,7 @@ mod tests {
 
     #[test]
     fn game_data_names() {
-        let Some(dir) = std::env::var_os("TH08_DIR").map(std::path::PathBuf::from) else {
-            eprintln!("skipped: no game data (TH08_DIR unset)");
+        let Some(dir) = th08_testkit::game_dir() else {
             return;
         };
         let n = ecl_names(&dir);

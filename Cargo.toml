@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-out", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "crates/th08-replay", "xtask"]
+members = [".", "crates/th08-formats", "crates/th08-out", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "crates/th08-replay", "crates/th08-testkit", "xtask"]
 resolver = "3"
 exclude = ["vendor"]
 
@@ -76,6 +76,7 @@ gilrs = "0.11.2"
 gilrs = { version = "0.11.2", optional = true }
 
 [dev-dependencies]
+th08-testkit = { path = "crates/th08-testkit" }
 # i18n.rs test: the web CJK subset font covers ja.toml.
 ab_glyph = "0.2"
 

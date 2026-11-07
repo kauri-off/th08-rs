@@ -1,9 +1,10 @@
 #!/bin/bash
 # usage: tools/arch_check freeze DIR | run DIR — port-vs-port reference traces and draw hashes.
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
-# run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core / th08-out), emit rule, wasm + android
+# run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core / th08-out), emit rule, doc pointers, wasm + android
 # check, cargo test, then rerun every item (plus emit-off session replays) and compare with DIR; exit 1 on any diff.
 # Env: J, CARGO_TARGET_DIR, RUN_OUT, ONLY (item regex), FAST=1 (traces only), SCOPE=logic (LOGIC_ITEMS), PACK (pack mounted, same results).
+# Needs TH08_DIR (or TH08_GAME_SRC in packaging/local/local.env); pilot replays: PILOT_SRC or $TH08_EXT_REPLAYS/ref, else none.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
@@ -12,8 +13,10 @@ BIN=$TARGET/release
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
 SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg"
 SESSION_SRC=$ROOT/specs/data/sessions
-source "$ROOT/re/tools/localenv.sh"
-PILOT_SRC=${PILOT_SRC:-$TH08_EXT_REPLAYS/ref}
+# packaging/local/local.env (through re/tools/localenv.sh) may set TH08_GAME_SRC and TH08_EXT_REPLAYS; both optional.
+[[ -f $ROOT/re/tools/localenv.sh ]] && source "$ROOT/re/tools/localenv.sh"
+# Pilot replays: PILOT_SRC, else $TH08_EXT_REPLAYS/ref; none when neither exists.
+PILOT_SRC=${PILOT_SRC:-${TH08_EXT_REPLAYS:+$TH08_EXT_REPLAYS/ref}}
 LOGIC_ITEMS="s_golden s_gameover_save s_options_cfg f_fullrun_noclip d_0 d_3 p_gensokyou_th8_udAr02 p_gensokyou_th8_udDn14 n_s_golden n_p_gensokyou_th8_udAr02"
 FULLRUN_TO=${FULLRUN_TO:-80000}
 # Default J: half the hardware threads (SMT gives no more), capped by MemAvailable / JOB_MB (measured item peak RSS ≤ 0.6 GB).
@@ -22,7 +25,7 @@ J=${J:-$(awk -v c="$(nproc)" -v m="$JOB_MB" '/^MemAvailable/ {j = int($2 / 1024 
 # A replay batch (systemd unit th-b-*) grows after we start: leave it room (headless GPU allocs fail first).
 { systemctl --user list-units 'th-b-*' --state=active --no-legend 2>/dev/null | grep -q . || [[ -e $ROOT/target/queue/batch.running ]]; } && (( J > 6 )) && J=6
 TIME=; [[ -x /usr/bin/time ]] && TIME=/usr/bin/time
-export TH08_DIR="${TH08_DIR:-$TH08_GAME_SRC/}"
+export TH08_DIR="${TH08_DIR:-${TH08_GAME_SRC:+$TH08_GAME_SRC/}}"
 export XDG_CONFIG_HOME=$ROOT/devdata/arch_cfg
 export CARGO_TARGET_DIR=$TARGET
 if [[ -n ${PACK:-} ]]; then export TH08_PACK=$(realpath "$PACK") RUST_LOG=th08::packs=info; echo "pack $TH08_PACK"; else unset TH08_PACK; fi
@@ -32,13 +35,17 @@ mode=${1:-} dir=${2:-}
 FAST=${FAST:-}; SCOPE=${SCOPE:-}; [[ $mode == freeze ]] && FAST= SCOPE=
 [[ -z $SCOPE || $SCOPE == logic ]] || { echo "unknown SCOPE=$SCOPE"; exit 2; }
 [[ $SCOPE == logic ]] && FAST=1
-[[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,6p "$0"; exit 2; }
+[[ ($mode == freeze || $mode == run) && -n $dir ]] || { sed -n 2,7p "$0"; exit 2; }
+[[ -n $TH08_DIR ]] || { echo "arch_check: no game data: set TH08_DIR (or TH08_GAME_SRC in packaging/local/local.env)"; exit 2; }
+[[ $mode == freeze || -f $dir/digests.txt ]] || { echo "arch_check: no reference in $dir: make one with \`tools/arch_check freeze $dir\` on the commit before the change"; exit 2; }
+find "$TH08_DIR" -maxdepth 1 -iname th08.dat 2> /dev/null | grep -q . || { echo "arch_check: no th08.dat in TH08_DIR=$TH08_DIR"; exit 2; }
 dir=$(realpath -m "$dir")
 cd "$ROOT" || exit 2
 
 items() {
   for s in $SESSIONS; do echo "s_$s"; done
   for n in 0 1 2 3; do echo "d_$n"; done
+  [[ -n $PILOT_SRC && -d $PILOT_SRC ]] || return 0
   for d in "$PILOT_SRC"/*/; do echo "p_$(basename "$d")"; done
 }
 
@@ -126,15 +133,16 @@ elif cl=$("$ROOT/tools/lint_subset" 2>&1); then
   read -r cw cp < <(awk -v p=" $CLIPPY_PENDING " '$2 != "total" {if (index(p, " " $2 " ")) n += $1; else w += $1} END {print w + 0, n + 0}' <<< "$cl")
   [[ $cw == 0 ]] && echo "clippy ok, 0 warnings ($cp in pending files)" || { echo "clippy: $cw warnings"; grep -vE "total|${CLIPPY_PENDING// /|}" <<< "$cl" | head; fail=1; }
 else echo "clippy FAILED"; tail -5 <<< "$cl"; fail=1; fi
-cdeps=$(cargo tree -q -p th08-core -p th08-out -e normal --prefix none 2>&1 | grep -E '^(wgpu|cpal|winit|egui|rfd|clap|liblzma) ' | sort -u | tr '\n' ' ')
-[[ -z $cdeps ]] && echo "core deps ok" || { echo "core deps FAILED: $cdeps"; fail=1; }
+"$ROOT/tools/core_deps" || fail=1
 "$ROOT/tools/emit_rule" | head -20; [[ ${PIPESTATUS[0]} == 0 ]] || fail=1
+"$ROOT/tools/doc_pointers" | head -20; [[ ${PIPESTATUS[0]} == 0 ]] || fail=1
 srefs=$(python3 "$ROOT/tools/spec_refs.py" 2>&1 | grep "^spec_refs:")
 [[ $srefs == *" 0 broken"* ]] && echo "spec refs ok" || { echo "spec refs FAILED: $srefs"; fail=1; }
 cargo check -q --release --workspace --lib --target wasm32-unknown-unknown > /dev/null 2>&1 && echo "wasm ok" || { echo "wasm FAILED"; fail=1; }
 ta=$SECONDS; a=$("$ROOT/tools/android_check"); ar=$?; echo "$a ($((SECONDS - ta)) s)"; [[ $ar == 0 ]] || fail=1
 # A hung test (GPU driver) must not hold the queue: 30 min covers the build and every test.
-t=$(timeout -k 10 1800 cargo test -q --release --workspace 2>&1); trc=$?
+# TH08_REQUIRE_DATA=1: a test that would skip for missing game data or GPU fails instead.
+t=$(TH08_REQUIRE_DATA=1 timeout -k 10 1800 cargo test -q --release --workspace 2>&1); trc=$?
 if (( trc == 124 || trc == 137 )); then echo "cargo test TIMED OUT (30 min)"; fail=1
 elif grep -qE 'FAILED|panicked|error(\[|:)' <<< "$t"; then echo "cargo test FAILED"; grep -E 'FAILED|panicked' <<< "$t" | head; fail=1
 else echo "cargo test ok ($(grep -oE '[0-9]+ passed' <<< "$t" | awk '{s+=$1} END{print s+0}') passed)"; fi

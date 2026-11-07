@@ -6,13 +6,13 @@ plans in [arch/](arch/ARCH_SUMMARY.md); behaviour itself is described only by th
 ## Crates
 
 ```
-th08-formats ─► th08-out ─┬──────────────► th08-render ─┐
-  (parsers)     (output)  │                               │
-                          └─► th08-core ─┬─► th08-audio ──┼─► th08 (app: src/) ─► th08-tools (debug bins)
-                               (logic)   ├─► th08-thcrap ─┘        ▲
-                                         ├─► th08-repack ──────────┘ (Android import only)
+th08-formats ─► th08-out ─┬──────────────────────► th08-render ─┬──────────────┐
+  (parsers)     (output)  │                                     ▼              │
+                          └─► th08-core ─┬──────────────► th08-thcrap ─────────┤
+                               (logic)   ├─► th08-audio ─┬─────────────────────┼─► th08 (app: src/) ─► th08-tools
+                                         │               └─► th08-repack ──────┘   (repack: Android import only)
                                          └─► th08-replay (headless runner, core only)
-xtask (packaging, no game crates)
+th08-testkit: dev-dependency of the tests only.  xtask: packaging, no game crates.
 ```
 
 | Crate | Owns | Does not touch |
@@ -27,6 +27,7 @@ xtask (packaging, no game crates)
 | `th08-replay` | sessions and demos played on `th08-core` alone (`MemHost`, no render / audio), per-row trace hashes | — |
 | `th08` (`src/`) | winit window and event loop, launcher, settings, `Host` implementation, data sources, pacer, input, port menu, touch overlay; wasm and Android entries | logic |
 | `th08-tools` | trace, draw-log and comparison tools (`session`, `drawrun`, `demosync`, viewers, `repack`) | — |
+| `th08-testkit` | test support: tests that need game data or a GPU print `skipped: <test>: <why>`, or fail under `TH08_REQUIRE_DATA=1` | everything else |
 | `xtask` | `cargo xtask dist`: AppImage, Windows exe / installer, APK (through `android/gradlew`), web | — |
 
 The Android launcher UI is Kotlin / Compose in `android/` and talks to Rust through small JNI bridges (settings
@@ -55,7 +56,12 @@ end is `web/` (wasm-bindgen).
 - **Game data** (`th08-core/src/assets.rs` traits, `src/sources.rs`): a game folder, the Android import folder or
   files picked in the browser; `.dat` or the repacked `.pak` ([arch/ASSETS_FORMAT.md](arch/ASSETS_FORMAT.md)).
 - **Settings** (`src/settings.rs`): one typed table, command line > env / URL > `port.cfg` > defaults; the launchers
-  (egui and Compose) are generated from it. The core gets only `CoreConfig`.
+  (egui and Compose) and the port menu are generated from it. The core gets only `CoreConfig`. A `live` row reaches
+  the held game only through `app::apply_live` (or where the app reads `Running.settings`).
+- **Renderer and port overlays**: the core owns the renderer as `Ctx.renderer: Box<dyn Renderer>` (handed in
+  through `Io`); the app gets its `Gfx` back by a downcast (`gfx(&mut ctx)` in `src/app.rs`) to set blit options
+  and render scale and to install the port's egui layers in `Gfx.hud` / `Gfx.overlay`, which draw on the window
+  after the blit, never into the frame.
 - **Saves**: `score.dat`, `th08.cfg` and replays go through `Host`; `src/saves.rs` zips and restores them.
 - **Translations** (`src/packs.rs`, `th08-render/src/textdb.rs`, `th08-thcrap`): a pack replaces presentation text,
   fonts and images only; logic keys are refused ([arch/I18N.md](arch/I18N.md)).
@@ -64,14 +70,18 @@ end is `web/` (wasm-bindgen).
 
 - Logic floats use only `th08-core/src/fmath.rs` (pinned transcendentals, the AMD `rsqrtss` model).
   `crates/th08-core/clippy.toml` bans the std `sin` / `cos` / `atan2` / … and interior-mutability types, so an emit
-  holding `&World` cannot change logic state. `tools/arch_check` fails when `th08-core` or `th08-out` depends on wgpu, cpal,
-  winit, egui, rfd, clap or liblzma.
+  holding `&World` cannot change logic state. `tools/core_deps` (CI, arch_check) fails when `th08-core` or `th08-out`
+  depends on wgpu, cpal, winit, egui, rfd, clap or liblzma; `tools/emit_rule` when core logic names the emit side.
 - `tools/fmath_xplat/run.sh` (CI) checks `fmath` bit for bit on x86_64, wasm32 and aarch64.
 - `tools/xplat_replays` plays recorded replays with `th08-replay` on x86_64, aarch64 (qemu), wasm32-wasip1
   (wasmtime) and windows-gnu (wine) and compares the per-row hashes.
 - `tools/arch_check freeze DIR` / `run DIR`: port against port. It replays every recorded session, the four demos
   and the pilot replays (also with emits off) and compares traces and draw hashes with a reference from the commit
-  before the change.
+  before the change. Draw hashes are taken from the recorded draw commands (`th08-out`), not from GPU output.
+- Pixels: `hirescmp --scale 1 --save` / `--ref` compares the 640×480 frames of two builds; the th08-render GPU
+  tests check that blit options stay out of the frame and that render scale k averages down to 1×.
+- `session` on `specs/data/sessions/*` and `demosync 0..3`: port against the original's own traces (recipe in
+  [CONTRIBUTING](../CONTRIBUTING.md#changing-game-logic)).
 - The replay batch (`tools/batch_job`): port against the original. Third-party replays recorded in the original
   under wine must give the same whole trace ([../sessions/README.md](../sessions/README.md)).
 - `tools/check_level` says which of these a change needs ([../CONTRIBUTING.md](../CONTRIBUTING.md#checks)).

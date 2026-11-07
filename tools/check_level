@@ -4,6 +4,8 @@
 #   light: build, clippy, unit tests (+ tools/android_check for Android/JNI code); no arch_check.
 #   full:  arch_check (game crates, the settings / host that configure them, the session tools or render changed).
 #   batch: full + the external replay batch (core logic, dependencies, build flags or toolchain changed).
+# th08-render changed: also a pixel check (arch_check hashes the draw commands, not the GPU output), printed as
+#   `pixels: …` after the level.
 # A core / formats source whose changed lines are all comments or blank is full, not batch.
 cd "$(dirname "$0")/.." || exit 1
 base=${1:-HEAD}
@@ -24,3 +26,6 @@ full=$(grep -E '^crates/th08-(core|formats|out|tools|render)/|^specs/data/|^src/
 if [[ -n $batch ]]; then echo batch; echo "$batch" | sed 's/^/  /' | head -20
 elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
 else echo light; fi
+grep -q '^crates/th08-render/' <<<"$files" &&
+  echo "pixels: hirescmp SRC --scale 1 --save OLD on the old build, --ref OLD on the new one (TH08_DIR, GPU); cargo test -p th08-render"
+exit 0

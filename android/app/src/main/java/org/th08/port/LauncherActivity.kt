@@ -1,7 +1,7 @@
 // Android settings screen (MATERIAL2): the Compose screen of LauncherUi.kt built from the settings table, Play starts
 // the Rust NativeActivity in the ":game" process. Player rows are saved to port.cfg on change (as the egui launcher's
 // `Model::changes`) when the table marks them `persist`; the other rows go to launch.cfg for the next start only.
-// Texts follow the `language` row (docs/arch/I18N.md §3.3).
+// Texts follow the `language` row.
 package org.th08.port
 
 import android.app.ActivityManager

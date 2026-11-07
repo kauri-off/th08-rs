@@ -58,7 +58,7 @@ pub struct Texture {
     label: Option<LogTex>,
 }
 
-// Port-only (ARCH_D_MOBILE §5): how slot `TexId.0` was made and changed since, replayed by `Gfx::rebuild` after a
+// Port-only: how slot `TexId.0` was made and changed since, replayed by `Gfx::rebuild` after a
 // device loss. ANM entries arrive as `ResCmd::Create` pixels, .jpg / .png as `ResCmd::CreateImage` decoded here
 // once; both keep the uploaded `rgba`.
 #[cfg_attr(
@@ -123,7 +123,7 @@ fn decode_image(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     }
 }
 
-// A presentation-pack image override (I18N G2, ARCH_B §1.7): decoded and scaled to the vanilla `w` × `h` (HD
+// A presentation-pack image override: decoded and scaled to the vanilla `w` × `h` (HD
 // overrides keep the logical size and UVs); undecodable → transparent like `decode_image`.
 fn decode_fitted(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     match image::load_from_memory(bytes) {
@@ -144,7 +144,7 @@ fn decode_fitted(bytes: &[u8], w: u32, h: u32) -> Arc<[u8]> {
     }
 }
 
-// `ResCmd::CreateAnmOver` (I18N §2.4): the pack image at the THTX size `w` × `h` (same size, or the same aspect at
+// `ResCmd::CreateAnmOver`: the pack image at the THTX size `w` × `h` (same size, or the same aspect at
 // a larger size → scaled; any other size is a partial sheet placed 1:1 at the top left), then per sprite rect: a
 // rect with no visible pixel in the image keeps `base`. Undecodable → `base`.
 fn decode_over(bytes: &[u8], base: &Arc<[u8]>, rects: &[[u32; 4]], w: u32, h: u32) -> Arc<[u8]> {
@@ -217,7 +217,7 @@ struct Batch {
     end: u32,
 }
 
-// Port-only UI drawn onto the window target after the blit, never into the 640×480 frame (ARCH_D §3.5): the
+// Port-only UI drawn onto the window target after the blit, never into the 640×480 frame: the
 // frame texture is what `capture_screen` (12 §1) copies, so overlay pixels must stay out of it.
 pub trait Overlay {
     fn paint(&mut self, gfx: OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder);
@@ -448,7 +448,7 @@ pub struct Gfx {
     scale: u32,
     // Tools: with no window, Present still renders the frame and captures copy it.
     pub offscreen: bool,
-    // Makes the surface again after a lifecycle detach and the device after a loss (ARCH_D §5).
+    // Makes the surface again after a lifecycle detach and the device after a loss.
     instance: wgpu::Instance,
     // No window: `attach` fails, `rebuild` asks for any adapter.
     headless: bool,
@@ -481,7 +481,7 @@ pub struct Gfx {
     pub persistent: bool,
     // `ResCmd::Text` rasteriser (10 §6), made with `font` at the first text command.
     text: Option<crate::text::Raster>,
-    // Translations for `TextCmd` keys, pack font, overflow per site; empty = vanilla text (I18N §2.3).
+    // Translations for `TextCmd` keys, pack font, overflow per site; empty = vanilla text.
     pack: crate::textdb::PackText,
     font: Option<String>,
 }
@@ -1311,7 +1311,7 @@ impl Gfx {
         self.generation
     }
 
-    // Port debug: destroys the device as a driver reset would; the next submit rebuilds (ARCH_D §5 manual check).
+    // Port debug: destroys the device as a driver reset would; the next submit rebuilds (manual check of the loss path).
     pub fn force_device_loss(&mut self) {
         log::warn!("forcing a device loss");
         self.device.destroy();
@@ -1334,7 +1334,7 @@ impl Gfx {
         self.lost.load(Ordering::Acquire)
     }
 
-    // Device loss (ARCH_D_MOBILE §5): a new device and surface on the same instance and window, pipelines and frame
+    // Device loss: a new device and surface on the same instance and window, pipelines and frame
     // made again, every live slot uploaded from its provenance with its edits replayed. Captures come back black.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn rebuild(&mut self) -> anyhow::Result<()> {
@@ -1439,7 +1439,7 @@ impl Gfx {
         self.reconfigure();
     }
 
-    // App `Suspended` (ARCH_D §5): the native window goes away; the device and textures stay.
+    // App `Suspended`: the native window goes away; the device and textures stay.
     pub fn detach(&mut self) {
         self.surface = None;
         self.window = None;
@@ -2246,7 +2246,7 @@ impl Gfx {
         self.clear_batches();
     }
 
-    // Port UI over a held game (port menu, ARCH_D_MOBILE §5): the last rendered 640×480 frame blitted again, then
+    // Port UI over a held game (port menu): the last rendered 640×480 frame blitted again, then
     // `paint` on the window target; no batches run, the frame texture is untouched. False: no frame was presented.
     pub fn present_last(
         &mut self,
@@ -2810,7 +2810,7 @@ impl Gfx {
         &self.pack
     }
 
-    // A mounted presentation pack's text side (I18N G2): texts, FileFont, overflow modes.
+    // A mounted presentation pack's text side: texts, FileFont, overflow modes.
     pub fn set_pack(&mut self, pack: crate::textdb::PackText) {
         self.pack = pack;
         self.text = None;
@@ -3077,8 +3077,10 @@ mod tests {
     #[test]
     fn rebuild_restores_bytes_writes_and_copies() {
         let _gpu = gpu_lock();
-        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
-            eprintln!("no GPU adapter; skipped");
+        let Some(mut gfx) = th08_testkit::need(
+            pollster::block_on(Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let mut rec = Recorder::new();
@@ -3150,7 +3152,7 @@ mod tests {
             }))
         };
         let (Some(one), Some(two)) = (shot(1), shot(2)) else {
-            eprintln!("no GPU adapter; skipped");
+            th08_testkit::skip(th08_testkit::NO_GPU);
             return;
         };
         let diff = one
@@ -3164,8 +3166,10 @@ mod tests {
     #[test]
     fn copy_within_one_texture() {
         let _gpu = gpu_lock();
-        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
-            eprintln!("no GPU adapter; skipped");
+        let Some(mut gfx) = th08_testkit::need(
+            pollster::block_on(Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let mut rec = Recorder::new();
@@ -3197,8 +3201,10 @@ mod tests {
     #[test]
     fn blit_options_window_only() {
         let _gpu = gpu_lock();
-        let Ok(mut gfx) = pollster::block_on(Gfx::headless()) else {
-            eprintln!("no GPU adapter; skipped");
+        let Some(mut gfx) = th08_testkit::need(
+            pollster::block_on(Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let mut rec = Recorder::new();

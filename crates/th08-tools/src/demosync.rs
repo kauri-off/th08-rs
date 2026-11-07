@@ -172,10 +172,14 @@ mod tests {
     // Records a scripted Lunatic stage-1 run, saves/loads the .rpy and plays it back: every frame must match.
     #[test]
     fn record_playback() {
-        let Some(dir) = th08::settings::test_game_dir() else {
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
+        let Some(gfx) = th08_testkit::need(
+            pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let src = th08::sources::native(dir.clone());
@@ -256,11 +260,14 @@ mod tests {
 
     #[test]
     fn demo_sync() {
-        let Some(dir) = th08::settings::test_game_dir() else {
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
-            eprintln!("no GPU adapter; demo sync skipped");
+        let Some(gfx) = th08_testkit::need(
+            pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let mut gfx = Some(gfx);

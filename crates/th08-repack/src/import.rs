@@ -706,7 +706,7 @@ mod tests {
     // The real game files (TH08_DIR): the full device import, then removal.
     #[test]
     fn real_files_import() {
-        let Some(dir) = std::env::var_os("TH08_DIR").map(PathBuf::from) else {
+        let Some(dir) = th08_testkit::game_dir() else {
             return;
         };
         let find = |n: &str| {

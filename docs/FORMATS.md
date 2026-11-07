@@ -87,8 +87,25 @@ that implements it. The numbered specs stay the source of truth.
 - File names carry `data/` or `data/end/` prefixes; the port strips directories for the archive lookup. 14 files: `end0N{a,b,c}.end` (bad / 6A / 6B, N = team), `staff00.end` (6B), `staff00b.end` (6A). Pictures are 640×480 (`end*.jpg`) or 640×720 (`staff*.jpg`, scrolled by `@v` / `@V`).
 - `@F` falls through into `@R`, so the loaded file's first line is skipped; both staff files start with a dummy `@R`.
 
-## Draw log — source: specs/data/drawlog/FORMAT.md (crates/th08-tools/src/drawlog.rs)
+## Draw log — source: specs/data/drawlog/FORMAT.md (writer crates/th08-out/src/drawfmt.rs; reader, diff and reports crates/th08-tools/src/drawlog.rs)
 - Writer: one `F` per presented frame (sampled after the draw), `T`/`S`/`V` before a primitive when changed in the frame; `R` exactly when the formatted values satisfy the rectangle rule, else `Q`; untextured = `T -` + `-` UVs; numbers: xy 2, z/rhw 4, uv 5 decimals, trailing zeros removed. Port vertices are converted back from clip space: x = (ndc.x + 1)·320 − 0.5 (the port's +0.5 wgpu shift removed), z = z/w, rhw = 1/w.
 - Labels: `AnmManager::load` labels each entry `<file>#<index>` with the ANM header size; `Recorder::load_image(name, …)` (crates/th08-out/src/drawlist.rs) labels images by file name. Unlabelled textures log as `?<id hex> 0 0`.
 - Port specifics: atest always `ge4`, ztest `le` (stage) / `always`, blend `alpha` / `add` only; Clear → `C tz <colour>` / `C z ff000000`.
 - Fans (`Recorder::fan`, spell-practice pies): one `T -` + `S` with zwrite 0 and `P fan <n>` with untextured vertices; screen captures (`Recorder::capture_screen`, logo before stage / music-room exit) log `K screen <label> 0 0 640 480 0 0`.
+
+## Port-only files
+
+Formats the port defines itself; no spec behind them, the code is the reference.
+
+- `th08.pak` / `thbgm.pak` (crates/th08-formats/src/pack.rs; written by the `repack` bin): LE, 32-byte header (`T8PK`,
+  version 1, kind 1 content / 2 BGM, manifest length + offset, first 8 bytes of the manifest's sha256), frame data,
+  manifest (frames: codec Store / Zstd / Vorbis, offset, stored length, decoded size; entries: name, layer Logic /
+  Present, frame, offset, size, sha256 of the `Archive::read` bytes). Logic entries are checked against the vanilla
+  table in crates/th08-core/src/vanilla.rs. The BGM pack holds one Ogg Vorbis stream per track and the thbgm.dat
+  trailer. Background and measurements: [arch/ASSETS_FORMAT.md](arch/ASSETS_FORMAT.md).
+- `port.cfg` (src/settings.rs): `key = value` lines, `#` comments; keys and values are those of the settings table
+  (`th08 --help`). Precedence: command line > env / URL > `port.cfg` > table defaults.
+- `stats.jsonl` (src/stats.rs) in the save folder: one JSON object per line, append-only, `{"v": version, "t": unix
+  seconds, "ev": "start" | "stage" | "death" | "bomb" | "spell" | "spell_end" | "continue" | "end", …}`.
+- `settings_schema.json` (the `settings_schema` bin, run by the Android Gradle build): the settings table with its
+  ja / ru texts, read by the Compose launcher.

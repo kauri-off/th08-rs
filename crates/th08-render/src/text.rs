@@ -1,5 +1,5 @@
 //! Text_RenderToVm 0x4663B0 rasteriser (10 §6): 2× work surface, 4-offset black outline, colour at the centre, exact D3DX TRIANGLE 2:1 into A4R4G4B4.
-//! Renderer side (ARCH_SUMMARY decision 7): `Gfx` runs it for `ResCmd::Text`; core never rasterises or reads fonts.
+//! Renderer side: `Gfx` runs it for `ResCmd::Text`; core never rasterises or reads fonts.
 //! SPEC-GAP: GDI "ＭＳ ゴシック" pixels are not reproducible; a system Japanese font (native) or the browser's canvas font (web) is used.
 
 use th08_out::drawlist::Align;
@@ -12,7 +12,7 @@ const BASELINE: f32 = 0.86;
 #[derive(Default)]
 pub struct Raster {
     font: Option<Face>,
-    // Presentation-pack FileFont chain (ARCH_B §1.6, I18N §2.3): translated text only, first font with the glyph
+    // Presentation-pack FileFont chain: translated text only, first font with the glyph
     // wins, the system font last.
     pack: Vec<Face>,
     // Output texels per strip texel (render scale); 0 is taken as 1.
@@ -32,7 +32,7 @@ pub const FONT_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    // Android system CJK fonts (ARCH_D_MOBILE §6.2): AOSP 7+, older AOSP, some OEM builds.
+    // Android system CJK fonts: AOSP 7+, older AOSP, some OEM builds.
     "/system/fonts/NotoSansCJK-Regular.ttc",
     "/system/fonts/NotoSansCJKjp-Regular.otf",
     "/system/fonts/NotoSansJP-Regular.otf",
@@ -122,7 +122,7 @@ impl Raster {
         glyph_width(&fonts, s, cell)
     }
 
-    // pack-check (I18N G3): the first pack-chain font with a glyph for `ch` (index), and whether the system font has
+    // pack-check: the first pack-chain font with a glyph for `ch` (index), and whether the system font has
     // one (None = no system font).
     pub fn has_glyph(&self, ch: char) -> (Option<usize>, Option<bool>) {
         use ab_glyph::Font;
@@ -241,7 +241,7 @@ pub struct Raster {
         web_sys::HtmlCanvasElement,
         web_sys::CanvasRenderingContext2d,
     )>,
-    // Presentation-pack FileFont chain: the same pixels as native for translated text (ARCH_B §1.6).
+    // Presentation-pack FileFont chain: the same pixels as native for translated text.
     pack: Vec<Face>,
     pub scale: usize,
 }
@@ -336,7 +336,7 @@ impl Raster {
     }
 }
 
-// Overflow mode of translated text that is wider than its strip (I18N §2.3, ARCH_B §1.5); port-only presentation.
+// Overflow mode of translated text that is wider than its strip; port-only presentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Overflow {
     // Cut at the strip edge.
@@ -432,7 +432,7 @@ impl Raster {
         finish(&mask, color, w, size, outline, k)
     }
 
-    // Translated text (I18N §2.3): placed by its measured width (`align`, `x` for Left) and fitted by `overflow` to
+    // Translated text: placed by its measured width (`align`, `x` for Left) and fitted by `overflow` to
     // the visible sprite (`edge`, not the texture row); the 2× surface, outline, gradient and 2:1 filter are the vanilla ones (10 §6).
     #[expect(
         clippy::too_many_arguments,

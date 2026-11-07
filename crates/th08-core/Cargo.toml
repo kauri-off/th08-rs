@@ -12,7 +12,7 @@ workspace = true
 # Counts NaNs made in logic (nanprobe.rs); off in every shipped build.
 nan-probe = []
 
-# No dev-dependencies: a dev-dep on render / audio would bring a second copy of core's types.
+# Only dependency-free dev-dependencies: a dev-dep on render / audio would bring a second copy of core's types.
 [dependencies]
 th08-formats = { path = "../th08-formats" }
 th08-out = { path = "../th08-out" }
@@ -22,3 +22,6 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 encoding_rs = "0.8"
 libm = "=0.2.16"
 log = "0.4.34"
+
+[dev-dependencies]
+th08-testkit = { path = "../th08-testkit" }

@@ -1,4 +1,4 @@
-//! Translated game text (I18N §2.3): `TextRef` key → UTF-8 text. A miss renders the vanilla Shift-JIS bytes exactly
+//! Translated game text: `TextRef` key → UTF-8 text. A miss renders the vanilla Shift-JIS bytes exactly
 //! as before, so with nothing mounted every `TextCmd` rasterises the original string (10 §6).
 
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use th08_out::textref::{SjisString, TextRef, sprintf};
 
 use crate::text::Overflow;
 
-// The renderer half of a mounted presentation pack (I18N G2): its texts, its font file, overflow per site.
+// The renderer half of a mounted presentation pack: its texts, its font file, overflow per site.
 #[derive(Clone, Debug, Default)]
 pub struct PackText {
     pub db: TextDb,
@@ -43,7 +43,7 @@ impl TextDb {
         self.map.len()
     }
 
-    // Filled by a presentation pack mount (I18N G2); an empty text means "keep vanilla".
+    // Filled by a presentation pack mount; an empty text means "keep vanilla".
     pub fn insert(&mut self, key: String, text: String) {
         if !text.is_empty() {
             self.map.insert(key, text);

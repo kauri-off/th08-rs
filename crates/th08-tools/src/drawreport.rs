@@ -389,12 +389,13 @@ mod tests {
     #[test]
     fn result_shots() {
         let want = &th08::settings::get().result_shots;
-        let Some(dir) = th08::settings::test_game_dir() else {
-            return;
-        };
         if want.is_empty() {
             return;
         }
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
+            return;
+        };
         let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).expect("no GPU adapter");
         let src = th08::sources::native(dir);
         let mut ctx = pollster::block_on(th08_core::game::Ctx::load_with(

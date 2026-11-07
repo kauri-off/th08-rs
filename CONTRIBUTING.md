@@ -32,33 +32,102 @@ agents alike. Parity rules for logic and drawing: [docs/PARITY_POLICY.md](docs/P
 
 ## Checks
 
-- `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test` for ordinary changes.
-- `python3 tools/spec_refs.py`: every `NN §x.y` citation in the code must point at an existing spec heading.
-- `tools/arch_check run DIR`: the full regression check. It builds, runs clippy, the wasm and Android checks and the
-  tests, then replays every recorded session, demo and pilot replay and compares traces and draw hashes with a
-  reference made by `tools/arch_check freeze DIR` on the commit before your change. Any difference fails it.
-- Heavy runs (arch_check, tests with game data, the emulator, replay batches) can be run directly. The job queue
-  `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…` (then `tools/q wait ID`) is optional:
-  it shares one machine between parallel runs and needs a systemd user session. Plain cargo works everywhere.
-- Windowed binaries in automated runs go through `tools/offscreen <cmd>`.
-- Replay batch (port vs the original on third-party replays): `tools/batch_job NAME` queues a `batch` job that builds
-  `session` (release) once and runs `tools/batch_run` on the replay sets `ref500` and `ref_b2` under
-  `$TH08_EXT_REPLAYS` (from `packaging/local/local.env`, like the game dir `TH08_GAME_SRC`). A replay passes when its
-  whole trace matches the recording; a port trace that ends early fails. The job prints the replays that left
-  `tools/batch/<set>.identical` and fails on any of them, or when fewer replays ran than expected.
-  `TH08_BATCH_LIMIT=N` runs only the first N replays of each set; outputs go to `target/batch_NAME/`.
+`tools/check_level` reads your diff and names the check it needs; [tools/README.md](tools/README.md) lists every
+tool and who can run it.
 
-CI (`.github/workflows/check.yml`, on every push to `master` and every pull request) runs `cargo fmt --check`,
-clippy with `-D warnings`, `cargo test --workspace`, the wasm and aarch64 Android `cargo check` and
-`tools/spec_refs.py`. It has no game data, so tests that need `TH08_DIR` skip there, and arch_check, the replay
-batches and the emulator stay local: `tools/check_level` says which of them a change needs.
+| Level | When | What to run | Needs |
+|---|---|---|---|
+| `light` | app, launcher, platform, docs, xtask | the CI set below | nothing |
+| `full` | th08-core / -formats / -out / -render / -tools, `specs/data/`, settings | the CI set plus `tools/arch_check` | your game files |
+| `batch` | core logic, dependencies, build flags, toolchain | `full` plus the replay batch | the replay sets (maintainer) |
+
+A th08-render change also prints a `pixels:` line: see [Changing the renderer](#changing-the-renderer).
+
+**The CI set** (`.github/workflows/check.yml`, every push to `master` and every pull request; run it locally the same
+way): `cargo fmt --check`, `cargo deny check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace`, `cargo check --workspace --lib --target wasm32-unknown-unknown`, `tools/android_check`,
+`tools/fmath_xplat/run.sh`, `python3 tools/spec_refs.py`, `tools/core_deps`, `tools/emit_rule` and
+`tools/doc_pointers`. CI has no game data and no GPU: tests that need them print `skipped: <test>: <why>` on stderr
+and pass. With `TH08_DIR=/path/to/game` they run; `TH08_REQUIRE_DATA=1` turns every such skip into a failure
+(arch_check sets it).
+
+**arch_check** (`tools/arch_check freeze DIR` on the commit before your change, then `tools/arch_check run DIR`)
+is a port-vs-port check: it builds, runs the CI set's lints and the tests with game data, then replays the six
+sessions in `specs/data/sessions/`, the four attract demos and the pilot replays (also with emits off) and compares
+traces and draw hashes with the reference. It needs `TH08_DIR` (or `TH08_GAME_SRC` in `packaging/local/local.env`,
+see `packaging/local.env.example`); pilot replays (`PILOT_SRC`, else `$TH08_EXT_REPLAYS/ref`) are optional and
+skipped when absent. Draw hashes cover the draw commands, not the GPU output.
+
+**The replay batch** plays third-party replays recorded in the original (sets `ref500` and `ref_b2` under
+`$TH08_EXT_REPLAYS`, not published) and fails on any replay that leaves `tools/batch/<set>.identical`. Only the
+maintainer can run it (`tools/batch_job NAME`); a pull request that needs it says so and the maintainer runs it.
+
+Windowed binaries in automated runs go through `tools/offscreen <cmd>`, wine through `tools/wine_headless` with a
+throwaway `WINEPREFIX`.
+
+### Changing game logic
+
+Logic must stay identical to the original, so the proof is port against the original, not port against itself:
+
+1. **Sessions and demos of the original** (committed, need only your game files):
+   ```sh
+   cargo build --release -p th08-tools
+   for s in golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg; do
+     TH08_DIR=/path/to/game target/release/session specs/data/sessions/$s --no-drawlog --out /tmp/s_$s | grep -E 'differing row|ended at'
+   done
+   for n in 0 1 2 3; do TH08_DIR=/path/to/game target/release/demosync $n; done
+   ```
+   Every session must say `no differing row` and every demo `in sync for every frame`, before and after your change.
+   `fullrun_noclip` takes a few minutes. These are traces of the original: if one starts to differ, your change is
+   wrong (or the spec is incomplete: a `// SPEC-GAP:` and a question, never a fix fitted to the trace).
+2. **arch_check**: freeze on the parent commit, run on yours. A bug fix that changes behaviour is expected to make
+   items differ. A difference is accepted only for items whose `session` / `demosync` report against the original
+   is still identical (or improved, e.g. a pilot replay that now plays further); explain each differing item in the
+   pull request. Once accepted, the new reference is your commit's `tools/arch_check freeze DIR` (the maintainer's
+   reference lives in `devdata/arch_ref` and is re-frozen on the merged commit).
+3. **Replay batch** (maintainer): no replay may leave the `.identical` lists; a replay that newly matches is added.
+
+### Changing the renderer
+
+arch_check hashes the draw commands, so it cannot see a shader, sampler or rasteriser change. For a th08-render
+change that must keep the 640×480 picture identical:
+
+```sh
+# on the parent commit, then on yours (TH08_DIR set, a GPU or a software Vulkan adapter)
+target/release/hirescmp specs/data/sessions/golden --scale 1 --every 300 --events --save /tmp/px_old
+target/release/hirescmp specs/data/sessions/golden --scale 1 --every 300 --events --ref /tmp/px_old --out /tmp/px_cmp
+```
+
+`/tmp/px_cmp/1x/index.html` lists every frame worst first; for pixel identity the max difference must be 0 on every
+frame. `demo:N` works as a source too. `cargo test -p th08-render` (GPU) checks that window-only blit options never
+reach the frame and that render scale k averages down to the 1× picture.
+
+### Changing settings
+
+A port setting is one `Entry` in `ENTRIES` (`src/settings.rs`): its default lives only there (`Settings::empty()`
+must hold the same value; test `empty_holds_table_defaults`), and the CLI, `port.cfg`, both launchers and the port
+menu are generated from it. Add `[entry.<key>]` to `i18n/ja.toml` and `i18n/ru.toml` (test `tables_complete`). A row
+with `live: true` is shown in the in-game port menu, which only writes `Settings`: wire the value into the held game in
+`app::apply_live` (or read it from `Running.settings` where it is used) and list it in the test
+`live_rows_are_wired`.
+
+### The maintainer's machine
+
+[CLAUDE.md](CLAUDE.md) "Worktrees and heavy runs" describes the maintainer's setup, which its AI agents follow:
+heavy runs go through the job queue `tools/q` (systemd user units sharing one machine between parallel worktrees),
+local state lives in the gitignored `devdata/`, and `tools/arch_job` / `tools/batch_job` queue arch_check and the
+replay batch. None of it is needed elsewhere: run the commands above directly.
 
 ## Game data and replays
 
 The repository contains no game data. Everything that runs the game, including the tests with game data and the
 regression checks, needs your own copy of Touhou 8 (`th08.dat`, `thbgm.dat`; point `TH08_DIR` at the folder).
-Reference sessions are recorded in the original game (see [sessions/README.md](sessions/README.md)); third-party
-replays come from public Touhou replay sites. Neither is committed.
+
+Two `sessions` directories, two meanings: `specs/data/sessions/` holds the six committed reference sessions of the
+original (inputs, events and the state trace, ~6 MB; [README](specs/data/sessions/README.md)); `sessions/` is the
+gitignored local output of `re/tools/record_session.sh` with the large draw logs
+([sessions/README.md](sessions/README.md)). Third-party replays come from public Touhou replay sites and are not
+committed.
 
 ## Prerequisites per target
 

@@ -490,8 +490,11 @@ mod tests {
     }
 
     fn stage_ctx() -> Option<Ctx> {
-        let dir = crate::settings::test_game_dir()?;
-        let gfx = pollster::block_on(Gfx::headless()).ok()?;
+        let dir = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)?;
+        let gfx = th08_testkit::need(
+            pollster::block_on(Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        )?;
         let src = crate::sources::native(dir);
         let s = crate::settings::get();
         let mut core = s.core();
@@ -523,10 +526,10 @@ mod tests {
     // frame `capture_screen` reads stays the same, and only the scaled window picture shows the shapes.
     #[test]
     fn overlay_changes_neither_world_nor_frame() {
-        let (Some(mut a), Some(mut b)) = (stage_ctx(), stage_ctx()) else {
-            eprintln!("no TH08_DIR or GPU adapter; skipped");
+        let Some(mut a) = stage_ctx() else {
             return;
         };
+        let mut b = stage_ctx().expect("second stage ctx");
         let g = b.renderer.as_any_mut().downcast_mut::<Gfx>().expect("gfx");
         install(g, Hitboxes::All);
         let (mut shown, mut differs) = (0usize, false);

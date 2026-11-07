@@ -28,7 +28,8 @@
 ## Known differences from the original
 
 - Dialogue and spell-card text uses a system Japanese font (native) or the browser's font (web): the original's GDI
-  MS Gothic pixels cannot be reproduced (the only `SPEC-GAP` left in the code).
+  MS Gothic pixels cannot be reproduced (a `SPEC-GAP` in `th08-render/src/text.rs`; the only other one,
+  `th08-core/src/enemy.rs`, is a spec wording question; every session and replay matches).
 - Draw-log-only differences that are invisible on screen and accepted ([PARITY_POLICY.md](PARITY_POLICY.md)):
   sub-pixel float rounding of orbit stars, particles and glyph snapping; the frame on which a loader finishes; the
   host FPS digits; the HUD repaints the whole side panel instead of only the changed rows.

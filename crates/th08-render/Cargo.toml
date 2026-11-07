@@ -16,7 +16,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 log = "0.4.34"
 wgpu = { version = "30", features = ["webgl"] }
 winit = "0.30"
-# Text raster: system font (native) and the presentation pack's FileFont (every target, ARCH_B §1.6).
+# Text raster: system font (native) and the presentation pack's FileFont (every target).
 ab_glyph = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -25,3 +25,6 @@ pollster = "1.0.1"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.129"
 web-sys = { version = "0.3.106", features = ["Window", "Document", "HtmlCanvasElement", "HtmlInputElement", "Element", "File", "FileList", "Location", "UrlSearchParams", "Blob", "Event", "console", "CanvasRenderingContext2d", "ImageData", "TextMetrics", "Storage", "EventTarget"] }
+
+[dev-dependencies]
+th08-testkit = { path = "../th08-testkit" }

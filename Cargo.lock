@@ -3295,6 +3295,7 @@ dependencies = [
  "th08-formats",
  "th08-render",
  "th08-repack",
+ "th08-testkit",
  "th08-thcrap",
  "toml",
  "ureq",
@@ -3322,6 +3323,7 @@ dependencies = [
  "rustysynth",
  "th08-core",
  "th08-formats",
+ "th08-testkit",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -3338,6 +3340,7 @@ dependencies = [
  "log",
  "th08-formats",
  "th08-out",
+ "th08-testkit",
 ]
 
 [[package]]
@@ -3349,6 +3352,7 @@ dependencies = [
  "midly",
  "ruzstd",
  "sha2",
+ "th08-testkit",
  "thiserror 2.0.21",
 ]
 
@@ -3372,6 +3376,7 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "th08-out",
+ "th08-testkit",
  "wasm-bindgen",
  "web-sys",
  "wgpu",
@@ -3389,6 +3394,7 @@ dependencies = [
  "th08-core",
  "th08-formats",
  "th08-repack",
+ "th08-testkit",
  "thiserror 2.0.21",
  "vorbis_rs",
  "zstd",
@@ -3401,6 +3407,10 @@ dependencies = [
  "anyhow",
  "th08-core",
 ]
+
+[[package]]
+name = "th08-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "th08-thcrap"
@@ -3439,6 +3449,7 @@ dependencies = [
  "th08-render",
  "th08-repack",
  "th08-replay",
+ "th08-testkit",
  "th08-thcrap",
 ]
 

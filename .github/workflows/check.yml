@@ -1,7 +1,8 @@
 name: Check
 
-# What runs without game data: fmt, clippy, unit tests, the wasm and Android builds, fmath cross-target digests, spec
-# citations. arch_check, the replay batches and the emulator need th08.dat and stay local (tools/check_level).
+# What runs without game data: fmt, deny, clippy, unit tests, the wasm and Android builds, fmath cross-target digests,
+# spec citations, the static rules. arch_check, the replay batches and the emulator need th08.dat and stay local
+# (tools/check_level).
 on:
   push:
     branches: [master]
@@ -44,6 +45,18 @@ jobs:
       # Exits 1 on any broken `NN §x.y` citation.
       - run: python3 tools/spec_refs.py
 
+  # Static rules that need no game data: core boundary (no window / GPU / audio crates in th08-core / th08-out), the
+  # emit rule, no plan-doc pointers in code.
+  rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: rustup toolchain install
+      - run: tools/core_deps
+      - run: tools/emit_rule
+      - run: tools/doc_pointers
+
   clippy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -75,7 +88,7 @@ jobs:
         with:
           shared-key: check-test
           save-if: ${{ github.ref == 'refs/heads/master' }}
-      # No TH08_DIR here: tests that need th08.dat skip.
+      # No TH08_DIR here: tests that need th08.dat or a GPU print `skipped: <test>: <why>` and pass.
       - run: cargo test --locked --workspace
 
   wasm:

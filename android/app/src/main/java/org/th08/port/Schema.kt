@@ -14,7 +14,7 @@ sealed interface Kind {
     data class Text(val format: String) : Kind
 }
 
-// Launcher languages (settings.rs `language`, docs/arch/I18N.md §3.3); English is the table's own text.
+// Launcher languages (settings.rs `language`); English is the table's own text.
 val LANGS = listOf("ja", "en", "ru")
 
 // The `language` value resolved: "auto" (or unknown) = the device locale's language if ja / ru, else en.

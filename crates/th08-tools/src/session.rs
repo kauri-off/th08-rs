@@ -370,12 +370,15 @@ mod tests {
 
     #[test]
     fn session_sync() {
-        let Some(dir) = th08::settings::test_game_dir() else {
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
         for (name, min) in MIN_LEADING {
-            let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
-                eprintln!("no GPU adapter; session sync skipped");
+            let Some(gfx) = th08_testkit::need(
+                pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+                th08_testkit::NO_GPU,
+            ) else {
                 return;
             };
             let src = th08::sources::native(dir.clone());
@@ -429,11 +432,14 @@ mod tests {
     // SoundCmd stream of selftest1 (`session --sound-log`).
     #[test]
     fn sound_log_selftest1() {
-        let Some(dir) = th08::settings::test_game_dir() else {
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
-            eprintln!("no GPU adapter; sound log skipped");
+        let Some(gfx) = th08_testkit::need(
+            pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let src = th08::sources::native(dir);
@@ -468,11 +474,14 @@ mod tests {
     // Smoke test: the whole 124 705-frame noclip run (stages 1–6, ending) without panics or hangs (~12 s release).
     #[test]
     fn fullrun_smoke() {
-        let Some(dir) = th08::settings::test_game_dir() else {
+        let Some(dir) = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(th08_render::gfx::Gfx::headless()) else {
-            eprintln!("no GPU adapter; fullrun smoke skipped");
+        let Some(gfx) = th08_testkit::need(
+            pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        ) else {
             return;
         };
         let src = th08::sources::native(dir);

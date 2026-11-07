@@ -1,4 +1,4 @@
-//! pack-check (I18N G3): `pack-check <pack dir|zip> [--dat th08.dat] [--max N]` — missing glyphs, per-site overflow,
+//! `pack-check <pack dir|zip> [--dat th08.dat] [--max N]` — missing glyphs, per-site overflow,
 //! unknown / unmapped keys of a presentation pack. Exit 1 on unknown keys, mount warnings or glyphs no font has.
 
 use anyhow::{Context, Result, bail};

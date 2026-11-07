@@ -991,14 +991,7 @@ fn open_stream(
 // th08.dat from TH08_DIR for the audio / MIDI tests (core's testdata.rs is test-only in core).
 #[cfg(test)]
 pub(crate) fn test_archive() -> Option<th08_formats::archive::Archive> {
-    let Some(dir) = std::env::var_os("TH08_DIR").map(std::path::PathBuf::from) else {
-        let t = std::thread::current();
-        eprintln!(
-            "skipped: no game data (TH08_DIR unset): {}",
-            t.name().unwrap_or("?")
-        );
-        return None;
-    };
+    let dir = th08_testkit::game_dir()?;
     let path = std::fs::read_dir(&dir)
         .into_iter()
         .flatten()

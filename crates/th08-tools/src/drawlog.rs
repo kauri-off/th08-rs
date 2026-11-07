@@ -2019,8 +2019,11 @@ mod tests {
     }
 
     fn ctx() -> Option<th08_core::game::Ctx> {
-        let dir = th08::settings::test_game_dir()?;
-        let gfx = pollster::block_on(th08_render::gfx::Gfx::headless()).ok()?;
+        let dir = th08_testkit::need(th08::settings::test_game_dir(), th08_testkit::NO_DATA)?;
+        let gfx = th08_testkit::need(
+            pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
+            th08_testkit::NO_GPU,
+        )?;
         let src = th08::sources::native(dir);
         Some(
             pollster::block_on(th08_core::game::Ctx::load_with(
@@ -2249,7 +2252,6 @@ mod tests {
     fn menu(name: &str, clr: bool, min: (usize, f64)) {
         let reference = data(&format!("{name}.drawlog.xz"));
         let Some(mut ctx) = ctx() else {
-            eprintln!("no TH08_DIR / GPU: {name} skipped");
             return;
         };
         let Ok(r) = open(&[reference]) else {
@@ -2302,7 +2304,6 @@ mod tests {
                 continue;
             }
             let Some(mut ctx) = ctx() else {
-                eprintln!("no TH08_DIR / GPU: demos skipped");
                 return;
             };
             let mut m = DemoMerge::new(open(&[chunk]).unwrap(), Opts { playfield: true }, 4);

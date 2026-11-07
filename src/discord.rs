@@ -495,8 +495,8 @@ mod tests {
     #[test]
     fn replay_presence_sequence() {
         use th08_core::game::Ctx;
-        let Some(dir) = crate::settings::test_game_dir() else {
-            eprintln!("skipped: no game data (TH08_DIR unset)");
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
             return;
         };
         let src = crate::sources::native(dir);

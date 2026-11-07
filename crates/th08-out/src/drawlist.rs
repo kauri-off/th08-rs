@@ -309,7 +309,7 @@ pub enum ResCmd {
         h: u32,
         fit: bool,
     },
-    // ANM entry texture with a pack image over its vanilla THTX pixels `base` (I18N §2.4): per sprite rect (THTX
+    // ANM entry texture with a pack image over its vanilla THTX pixels `base`: per sprite rect (THTX
     // pixels), an override rect without one non-transparent pixel keeps the vanilla rect, as thcrap's patcher does.
     CreateAnmOver {
         id: TexId,

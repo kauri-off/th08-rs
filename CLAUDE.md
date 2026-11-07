@@ -33,7 +33,10 @@ Android checks run on an emulator (`adb -s emulator-NNNN`).
 Wine (Windows builds, the original exe) runs only through `tools/wine_headless <cmd>` with a throwaway
 `WINEPREFIX`: plain `wine` opens windows (prefix setup, Mono / Gecko prompts, the program) on the user's desktop.
 
-## Worktrees and heavy runs
+## Worktrees and heavy runs (the maintainer's machine)
+
+This section is the setup of the maintainer's machine, which its AI agents follow. An outside contributor runs the
+same checks directly, without the queue: [CONTRIBUTING.md](CONTRIBUTING.md#checks); tools: [tools/README.md](tools/README.md).
 
 - `target/` holds only output that a rebuild recreates; `cargo clean` must never lose anything. Local state that tools
   keep (arch_check reference and config, agent task log) lives in the gitignored `devdata/`; the Android debug key in
@@ -46,6 +49,7 @@ Wine (Windows builds, the original exe) runs only through `tools/wine_headless <
   foreground until it ends (exit 75 = not done yet). From a worktree, use the main checkout's `tools/q` so all jobs
   share one queue. Never take `target/.agents.lock` by hand.
 - `tools/check_level` says which check a change needs: `light` (build, clippy, unit tests; no arch_check),
-  `full` (arch_check: th08-core / th08-formats changed) or `batch` (plus the replay batch: core logic, dependencies,
-  build flags or toolchain).
+  `full` (arch_check: a game crate, th08-render / -tools, `specs/data/` or the settings changed) or `batch` (plus the
+  replay batch: core logic, dependencies, build flags or toolchain); a `pixels:` line for th08-render changes names
+  the hirescmp check (arch_check does not compare pixels). Recipes: CONTRIBUTING "Changing game logic / the renderer".
 
