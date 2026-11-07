@@ -66,11 +66,13 @@ pub fn sample(ctx: &mut Ctx, present: i64, poll: i64, scene_frame: i64) -> Row {
     r[32] = i64::from(ctx.w.input.held);
     r[33] = col(g2.stage);
     r[34] = i64::from(g2.loading);
-    r[35] = if g2.has(crate::gamemgr::GameFlags::DEMO) {
-        i64::from(g2.demo)
-    } else {
-        -1
-    };
+    // The probe's demo columns hold only in scene 2 with flags bit 1: a demo start leaves its call's row at −1 / 0.
+    let in_demo =
+        g2.scene == crate::types::SceneId::Game && g2.has(crate::gamemgr::GameFlags::DEMO);
+    r[35] = if in_demo { i64::from(g2.demo) } else { -1 };
+    if !in_demo {
+        r[1] = 0;
+    }
     r
 }
 
