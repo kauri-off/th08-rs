@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -155,11 +157,30 @@ private fun Card(content: @Composable () -> Unit) {
 @Composable
 private fun Title(t: String) = Text(t, style = MaterialTheme.typography.titleMedium)
 
+// Label left, value right; on a narrow screen the value moves under the label instead of squeezing it.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Line(left: String, right: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(left, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+    FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(left, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 12.dp))
         Text(right, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
+    }
+}
+
+// One row of a table: the first cell wider, the others equal and centred, so a header row lines up with its rows.
+@Composable
+private fun Cells(first: String, cells: List<String>, weak: Boolean = false) {
+    val style = if (weak) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    val color = if (weak) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(first, style = style, color = color, modifier = Modifier.weight(2f))
+        for (c in cells) {
+            Text(c, style = style, color = color, textAlign = TextAlign.Center, maxLines = 1, modifier = Modifier.weight(1f))
+        }
     }
 }
 
@@ -273,11 +294,11 @@ private fun LazyListScope.scoreDatItems(
             Weak(str(R.string.stats_clears_hint))
             val ranks = mutableListOf<String>()
             for (d in 0 until rankKeys.length()) ranks += w.of("rank", rankKeys.getString(d))
-            Weak(ranks.joinToString("  "))
+            Cells("", ranks, weak = true)
             sd.getJSONArray("clears").let { rowsA ->
                 for (s in 0 until rowsA.length()) {
                     val row = rowsA.getJSONArray(s)
-                    Line(w.of("player", shotKeys.getString(s)), (0 until row.length()).joinToString(" ") { "%-4s".format(row.getString(it)) })
+                    Cells(w.of("player", shotKeys.getString(s)), (0 until row.length()).map { row.getString(it) })
                 }
             }
         }
