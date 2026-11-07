@@ -976,8 +976,8 @@ fn choice_layout(p: &Painter, words: &[String], st: &CtlStyle, room: f32) -> (Ve
         x += w + gap;
     }
     let lines = if v.is_empty() { 0 } else { line + 1 };
-    // Right-aligned words end at the rect's right edge, line by line.
-    if st.right && !st.cells {
+    // Right-aligned words end at the rect's right edge when they fit one line; wrapped words stay left-aligned.
+    if st.right && !st.cells && lines == 1 {
         for l in 0..lines {
             let end = v
                 .iter()
