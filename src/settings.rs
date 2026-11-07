@@ -1340,25 +1340,61 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         key: "touch_move",
         env: "TH08_TOUCH_MOVE",
-        kind: Kind::Enum(&["drag", "stick"]),
+        kind: Kind::Enum(&["drag", "stick", "fixed"]),
         default: "stick",
         group: Group::Touch,
         label: "Movement",
         summary: "How your finger moves the player",
         unit: "",
-        words: &[("drag", "Drag"), ("stick", "Floating stick")],
+        words: &[
+            ("drag", "Drag"),
+            ("stick", "Floating stick"),
+            ("fixed", "Fixed stick"),
+        ],
         audience: Audience::Player,
         platforms: Platforms::ALL,
         persist: true,
         live: false,
-        help: "movement: drag (the player follows the finger's movement) or a floating stick",
+        help: "movement: drag (the player follows the finger's movement), a floating stick (centred where the finger \
+               lands) or a fixed stick (placed in the layout editor)",
         set: |s, v| {
             use crate::platform::touch::Movement;
             s.touch.movement = match v.trim() {
                 "drag" => Movement::Drag,
                 "stick" => Movement::Stick,
-                _ => return Err("expected drag or stick".into()),
+                "fixed" => Movement::Fixed,
+                _ => return Err("expected drag, stick or fixed".into()),
             };
+            Ok(())
+        },
+    },
+    Entry {
+        key: "touch_side",
+        env: "TH08_TOUCH_SIDE",
+        kind: Kind::Enum(&["right", "left"]),
+        default: "right",
+        group: Group::Touch,
+        label: "Button side",
+        summary: "Where the default layout puts SHOT, FOCUS and BOMB",
+        unit: "",
+        words: &[("right", "Right"), ("left", "Left")],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        live: false,
+        help: "side of the action buttons in the default layout (left: movement on the right); an edited layout \
+               keeps its places until Reset in the layout editor",
+        set: |s, v| {
+            use crate::platform::touch::{Preset, TouchLayout};
+            let p = match v.trim() {
+                "right" => Preset::Right,
+                "left" => Preset::Left,
+                _ => return Err("expected right or left".into()),
+            };
+            if s.touch.layout == TouchLayout::preset(s.touch.preset) {
+                s.touch.layout = TouchLayout::preset(p);
+            }
+            s.touch.preset = p;
             Ok(())
         },
     },
@@ -1464,7 +1500,7 @@ pub const ENTRIES: &[Entry] = &[
         live: false,
         help: "overlay layout per orientation (empty = default; written by the layout editor)",
         set: |s, v| {
-            s.touch.layout = crate::platform::touch::TouchLayout::parse(v)?;
+            s.touch.layout = crate::platform::touch::TouchLayout::parse(v, s.touch.preset)?;
             Ok(())
         },
     },

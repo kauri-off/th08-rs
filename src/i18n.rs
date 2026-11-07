@@ -193,6 +193,7 @@ pub const UI: &[(&str, &str)] = &[
     ("touch_opacity", "Opacity"),
     ("touch_shown", "Shown"),
     ("touch_reset", "Reset layout"),
+    ("touch_mirror", "Mirror"),
     ("touch_move", "MOVE"),
     ("touch_shot", "SHOT"),
     ("touch_bomb", "BOMB"),

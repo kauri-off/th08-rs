@@ -30,7 +30,7 @@ pub(crate) fn label(lang: Lang, c: Ctl, s: Screen) -> &'static str {
         (Ctl::Shot, Screen::Menu) => "touch_ok",
         (Ctl::Bomb, Screen::Menu) => "touch_back",
         (Ctl::Shot, Screen::Dialogue) => "touch_next",
-        (Ctl::Move, _) => "touch_move",
+        (Ctl::Move | Ctl::Stick, _) => "touch_move",
         (Ctl::Shot, _) => "touch_shot",
         (Ctl::Bomb, _) => "touch_bomb",
         (Ctl::Focus, _) => "touch_focus",
@@ -193,6 +193,17 @@ fn touch_shapes(p: &egui::Painter, v: &TouchView, lang: Lang) {
         let centre = pos(c.centre);
         if c.ctl == Ctl::Move {
             // The movement zone is invisible (it covers part of the game picture); only the finger / stick shows.
+            continue;
+        }
+        if c.ctl == Ctl::Stick {
+            // The ring always shows; the knob comes with the finger.
+            p.circle(
+                centre,
+                c.half[0],
+                white(a * 0.12),
+                Stroke::new(2.0, white(a * 0.6)),
+            );
+            p.circle_filled(centre, c.half[0] * 0.3, white(a * 0.25));
             continue;
         }
         button(p, centre, c.half[0], label(lang, c.ctl, v.screen), a, *lit);

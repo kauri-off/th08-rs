@@ -61,6 +61,7 @@ touch_size = "大きさ"
 touch_opacity = "不透明度"
 touch_shown = "表示"
 touch_reset = "配置を元に戻す"
+touch_mirror = "左右反転"
 touch_move = "移動"
 touch_shot = "ショット"
 touch_bomb = "ボム"
@@ -597,11 +598,21 @@ off = "オフ"
 [entry.touch_move]
 label = "移動方法"
 summary = "指で自機を動かす方法"
-help = "移動方法: ドラッグ（自機が指の動きについてくる）またはフローティングスティック"
+help = "移動方法: ドラッグ（自機が指の動きについてくる）、フローティングスティック（指を置いた所が中心）、固定スティック（レイアウトエディタで配置）"
 
 [entry.touch_move.words]
 drag = "ドラッグ"
 stick = "フローティングスティック"
+fixed = "固定スティック"
+
+[entry.touch_side]
+label = "ボタンの位置"
+summary = "初期配置で SHOT・FOCUS・BOMB を置く側"
+help = "初期配置のアクションボタンの側（左: 移動は右側）。編集した配置はレイアウトエディタの「配置を元に戻す」まで変わりません"
+
+[entry.touch_side.words]
+right = "右"
+left = "左"
 
 [entry.touch_sens]
 label = "ドラッグ感度 %"

@@ -1,6 +1,7 @@
 //! Touch overlay input: fingers on the overlay controls → the keyboard's input word bits; core never sees touches.
 
 use th08_core::input::*;
+use th08_core::player::CLAMP;
 use th08_render::gfx::SafeArea;
 use winit::event::TouchPhase;
 
@@ -15,8 +16,9 @@ const TAP_MM: f32 = 3.0;
 // Stick: dead zone as a fraction of its radius.
 const STICK_DEAD: f32 = 0.3;
 const SCREEN: [f32; 2] = [640.0, 480.0];
-// Button diameter range of the layout editor (mm).
+// Diameter range of the layout editor (mm): buttons, the fixed stick.
 pub const BUTTON_MM: [f32; 2] = [6.0, 30.0];
+pub const STICK_MM: [f32; 2] = [12.0, 40.0];
 // Gesture exclusion: the most Android honours per vertical edge, and how near an edge a control must reach (dp).
 const EXCLUSION_DP: f32 = 200.0;
 const EDGE_DP: f32 = 48.0;
@@ -25,6 +27,8 @@ const EDGE_DP: f32 = 48.0;
 pub enum Ctl {
     // Movement zone (relative drag or floating stick).
     Move,
+    // Fixed stick (movement `fixed`): a ring placed like a button.
+    Stick,
     Shot,
     Bomb,
     Focus,
@@ -37,8 +41,9 @@ pub enum Ctl {
 }
 
 impl Ctl {
-    pub const ALL: [Ctl; 8] = [
+    pub const ALL: [Ctl; 9] = [
         Ctl::Move,
+        Ctl::Stick,
         Ctl::Shot,
         Ctl::Bomb,
         Ctl::Focus,
@@ -51,6 +56,7 @@ impl Ctl {
     pub fn name(self) -> &'static str {
         match self {
             Ctl::Move => "move",
+            Ctl::Stick => "stick",
             Ctl::Shot => "shot",
             Ctl::Bomb => "bomb",
             Ctl::Focus => "focus",
@@ -69,7 +75,7 @@ impl Ctl {
             Ctl::Focus => FOCUS,
             Ctl::Pause => PAUSE,
             Ctl::Skip => SKIP,
-            Ctl::Move | Ctl::Auto | Ctl::Menu => 0,
+            Ctl::Move | Ctl::Stick | Ctl::Auto | Ctl::Menu => 0,
         }
     }
 
@@ -81,7 +87,7 @@ impl Ctl {
     // Order in which controls near an edge get the limited gesture exclusion height.
     fn edge_rank(self) -> u8 {
         match self {
-            Ctl::Move => 0,
+            Ctl::Move | Ctl::Stick => 0,
             Ctl::Shot => 1,
             Ctl::Bomb => 2,
             Ctl::Focus => 3,
@@ -89,6 +95,15 @@ impl Ctl {
             Ctl::Auto => 5,
             Ctl::Pause => 6,
             Ctl::Menu => 7,
+        }
+    }
+
+    // Size range in the layout editor (mm); the Move zone is sized in fractions instead.
+    pub fn mm_range(self) -> [f32; 2] {
+        if self == Ctl::Stick {
+            STICK_MM
+        } else {
+            BUTTON_MM
         }
     }
 }
@@ -135,6 +150,15 @@ pub struct TouchLayout {
     pub portrait: Vec<Control>,
 }
 
+// Which side the default layout puts the action buttons on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Preset {
+    #[default]
+    Right,
+    // Mirrored: SHOT / FOCUS / BOMB on the left, movement on the right.
+    Left,
+}
+
 impl Default for TouchLayout {
     // Laid out for a 20:9 phone: landscape = movement on the left part, buttons in the right letterbox bar;
     // portrait = both under the game picture.
@@ -142,6 +166,7 @@ impl Default for TouchLayout {
         Self {
             landscape: vec![
                 c(Ctl::Move, 0.30, 0.50, 0.60, 1.00),
+                c(Ctl::Stick, 0.10, 0.70, 24.0, 24.0),
                 c(Ctl::Shot, 0.935, 0.75, 15.0, 15.0),
                 c(Ctl::Bomb, 0.94, 0.47, 11.0, 11.0),
                 c(Ctl::Focus, 0.835, 0.90, 12.0, 12.0),
@@ -152,6 +177,7 @@ impl Default for TouchLayout {
             ],
             portrait: vec![
                 c(Ctl::Move, 0.275, 0.835, 0.55, 0.33),
+                c(Ctl::Stick, 0.22, 0.85, 24.0, 24.0),
                 c(Ctl::Shot, 0.84, 0.85, 15.0, 15.0),
                 c(Ctl::Bomb, 0.84, 0.70, 11.0, 11.0),
                 c(Ctl::Focus, 0.62, 0.93, 12.0, 12.0),
@@ -165,6 +191,23 @@ impl Default for TouchLayout {
 }
 
 impl TouchLayout {
+    pub fn preset(p: Preset) -> Self {
+        let mut l = Self::default();
+        if p == Preset::Left {
+            l.mirror(true);
+            l.mirror(false);
+        }
+        l
+    }
+
+    // Flips one orientation left ↔ right.
+    pub fn mirror(&mut self, landscape: bool) {
+        // Rounded like `TouchSource::fit`, so mirroring twice gives the layout back.
+        for c in self.controls_mut(landscape) {
+            c.x = ((1.0 - c.x) * 1e4).round() / 1e4;
+        }
+    }
+
     pub fn controls(&self, landscape: bool) -> &[Control] {
         if landscape {
             &self.landscape
@@ -181,9 +224,9 @@ impl TouchLayout {
         }
     }
 
-    // `to_cfg()`, or "" for the defaults.
-    pub fn cfg_value(&self) -> String {
-        if *self == Self::default() {
+    // `to_cfg()`, or "" for the layout of `preset`.
+    pub fn cfg_value(&self, preset: Preset) -> String {
+        if *self == Self::preset(preset) {
             String::new()
         } else {
             self.to_cfg()
@@ -212,10 +255,11 @@ impl TouchLayout {
         format!("L:{}|P:{}", side(&self.landscape), side(&self.portrait))
     }
 
-    pub fn parse(v: &str) -> Result<Self, String> {
+    // "" = the layout of `preset`, which also fills in controls a saved layout lacks.
+    pub fn parse(v: &str, preset: Preset) -> Result<Self, String> {
         let v = v.trim();
         if v.is_empty() {
-            return Ok(Self::default());
+            return Ok(Self::preset(preset));
         }
         let mut out = Self {
             landscape: Vec::new(),
@@ -235,7 +279,7 @@ impl TouchLayout {
             }
         }
         // A layout saved before a control existed gets that control at its default place.
-        let def = Self::default();
+        let def = Self::preset(preset);
         for (dst, d) in [
             (&mut out.landscape, &def.landscape),
             (&mut out.portrait, &def.portrait),
@@ -292,6 +336,8 @@ pub enum Movement {
     // Floating 8-way stick centred where the finger went down.
     #[default]
     Stick,
+    // 8-way stick at the layout's `Ctl::Stick` place.
+    Fixed,
 }
 
 // Port settings of the overlay (settings.rs `touch*` rows).
@@ -301,6 +347,7 @@ pub struct TouchConfig {
     // Dev: the desktop mouse acts as one finger (and shows the overlay).
     pub mouse: bool,
     pub movement: Movement,
+    pub preset: Preset,
     // Drag: game pixels per window pixel scaled to the game picture (1.0 = the player follows the finger 1:1).
     pub sens: f32,
     // FOCUS button toggles instead of being held.
@@ -318,6 +365,7 @@ impl Default for TouchConfig {
             mode: TouchMode::Auto,
             mouse: false,
             movement: Movement::Stick,
+            preset: Preset::Right,
             sens: 1.0,
             focus_toggle: false,
             autofire: true,
@@ -349,9 +397,12 @@ pub enum TouchScene {
     Play {
         // Player position, game pixels.
         pos: [f32; 2],
-        // Ortho speed per frame unfocused / focused (sht +0x24 / +0x28) and the x / y multipliers.
-        speed: [f32; 2],
+        // Step per frame unfocused / focused, each [ortho, diagonal component] (sht +0x24 / +0x2C, youkai +0x28 /
+        // +0x30), and the x / y multipliers times the game speed.
+        speed: [[f32; 2]; 2],
         mult: [f32; 2],
+        // The player takes input (not dying, respawning or frozen).
+        movable: bool,
         // Auto-fire allowed: not during dialogue.
         fire: bool,
     },
@@ -393,10 +444,15 @@ impl TouchScene {
         if g.scene != SceneId::Game || g.paused != 0 || g.game_over != 0 {
             return Self::Menu;
         }
+        let gs = w.anm.speed;
         Self::Play {
             pos: [p.pos[0], p.pos[1]],
-            speed: [p.sht.speed, p.sht_youkai.speed_focus],
-            mult: p.speed_mult,
+            speed: [
+                [p.sht.speed, p.sht.diag],
+                [p.sht_youkai.speed_focus, p.sht_youkai.diag_focus],
+            ],
+            mult: [p.speed_mult[0] * gs, p.speed_mult[1] * gs],
+            movable: !matches!(p.state, 1 | 2) && w.timer_pause == 0,
             fire: !w
                 .msg
                 .as_deref()
@@ -442,6 +498,8 @@ impl Placed {
         let d = [p[0] - self.centre[0], p[1] - self.centre[1]];
         match self.ctl {
             Ctl::Move => d[0].abs() <= self.half[0] && d[1].abs() <= self.half[1],
+            // Generous: the thumb finds a fixed stick by feel.
+            Ctl::Stick => len(d[0], d[1]) <= self.half[0] * 1.5,
             // A little larger than drawn: fingers are imprecise.
             _ => len(d[0], d[1]) <= self.half[0] * 1.2,
         }
@@ -472,14 +530,19 @@ pub struct TouchSource {
     origin: [f32; 2],
     size: [f32; 2],
     ppm: f32,
+    // Picture scale (window px per game px; 0 = unknown).
+    picture: f32,
     fingers: Vec<Finger>,
     autofire: bool,
     focus_on: bool,
     scene: TouchScene,
-    // Drag target (game px) and the previous poll's request / position (wall re-anchoring).
+    // Drag target (game px, inside the player's bounds), the previous poll's player position and the step its word
+    // still makes (the game moves the player by a polled word one frame later).
     target: Option<[f32; 2]>,
-    last_req: u16,
     last_pos: [f32; 2],
+    in_flight: [f32; 2],
+    // Movement (window px) of a lifted drag finger that no poll has seen yet.
+    unseen: [f32; 2],
     // Menu swipe accumulator (px), queued direction / tap pulses and the up poll owed after a pulse.
     acc: [f32; 2],
     pulses: std::collections::VecDeque<u16>,
@@ -517,6 +580,7 @@ impl TouchSource {
     pub fn set_scene(&mut self, s: TouchScene) {
         if matches!(s, TouchScene::Menu) != matches!(self.scene, TouchScene::Menu) {
             self.target = None;
+            self.unseen = [0.0; 2];
             self.acc = [0.0; 2];
             self.pulses.clear();
             for f in &mut self.fingers {
@@ -533,6 +597,7 @@ impl TouchSource {
             self.pulses.clear();
             self.gap = false;
             self.target = None;
+            self.unseen = [0.0; 2];
             self.acc = [0.0; 2];
             self.mouse_down = false;
             self.menu_req = false;
@@ -548,6 +613,16 @@ impl TouchSource {
         [self.origin[0], self.origin[1], self.size[0], self.size[1]]
     }
 
+    // Whether `ctl` is in use with this movement: the Move zone or the fixed stick, not both.
+    pub fn uses(&self, ctl: Ctl) -> bool {
+        let fixed = self.cfg.movement == Movement::Fixed;
+        match ctl {
+            Ctl::Move => !fixed,
+            Ctl::Stick => fixed,
+            _ => true,
+        }
+    }
+
     // Visible controls of the current screen in window px.
     pub fn placed(&self) -> Vec<Placed> {
         let s = self.scene.screen();
@@ -555,7 +630,7 @@ impl TouchSource {
             .layout
             .controls(self.landscape())
             .iter()
-            .filter(|c| c.visible && c.ctl.shown(s))
+            .filter(|c| c.visible && c.ctl.shown(s) && self.uses(c.ctl))
             .map(|c| self.place(c))
             .collect()
     }
@@ -628,14 +703,15 @@ impl TouchSource {
         });
     }
 
-    // Layout editor: scales `ctl` by `k` (buttons 6–30 mm, the Move zone 10–100 % of the safe rect).
+    // Layout editor: scales `ctl` by `k` (`Ctl::mm_range`, the Move zone 10–100 % of the safe rect).
     pub fn edit_scale(&mut self, ctl: Ctl, k: f32) {
         self.edit(ctl, |c| {
             if c.ctl == Ctl::Move {
                 c.w = (c.w * k).clamp(0.1, 1.0);
                 c.h = (c.h * k).clamp(0.1, 1.0);
             } else {
-                c.w = (c.w * k).clamp(BUTTON_MM[0], BUTTON_MM[1]);
+                let [lo, hi] = c.ctl.mm_range();
+                c.w = (c.w * k).clamp(lo, hi);
                 c.h = c.w;
             }
         });
@@ -722,9 +798,10 @@ impl TouchSource {
             return;
         }
         let placed = self.placed();
-        let on = if let Some(b) = placed.iter().find(|c| c.ctl != Ctl::Move && c.hit(p)) {
+        let mover = |c: &&Placed| matches!(c.ctl, Ctl::Move | Ctl::Stick);
+        let on = if let Some(b) = placed.iter().find(|c| !mover(c) && c.hit(p)) {
             On::Button(b.ctl)
-        } else if placed.iter().any(|c| c.ctl == Ctl::Move && c.hit(p))
+        } else if placed.iter().filter(mover).any(|c| c.hit(p))
             && !self.fingers.iter().any(|f| f.on == On::Move)
         {
             On::Move
@@ -735,10 +812,7 @@ impl TouchSource {
             On::Button(Ctl::Auto) => self.autofire = !self.autofire,
             On::Button(Ctl::Menu) => self.menu_req = true,
             On::Button(Ctl::Focus) if self.cfg.focus_toggle => self.focus_on = !self.focus_on,
-            On::Move => {
-                self.target = None;
-                self.acc = [0.0; 2];
-            }
+            On::Move => self.acc = [0.0; 2],
             _ => {}
         }
         self.fingers.push(Finger {
@@ -766,8 +840,13 @@ impl TouchSource {
         {
             self.pulse(c.bit());
         }
+        // A drag target outlives a lifted finger (the player still travels the whole drag), not a cancelled one.
         if f.on == On::Move {
-            self.target = None;
+            if ended {
+                self.unseen = [f.last[0] - f.seen[0], f.last[1] - f.seen[1]];
+            } else {
+                self.target = None;
+            }
             // Menu tap = confirm.
             if ended && self.scene == TouchScene::Menu && f.travel < TAP_MM * self.ppm {
                 self.pulse(SHOT);
@@ -825,6 +904,7 @@ impl TouchSource {
                 pos,
                 speed,
                 mult,
+                movable,
                 fire,
             } => {
                 if fire && self.autofire {
@@ -833,8 +913,9 @@ impl TouchSource {
                 if toggle && self.focus_on {
                     w |= FOCUS;
                 }
-                let v = if w & FOCUS != 0 { speed[1] } else { speed[0] };
-                w |= self.steer(pos, [v * mult[0], v * mult[1]]);
+                let [o, d] = speed[usize::from(w & FOCUS != 0)];
+                let steps = [[o * mult[0], d * mult[0]], [o * mult[1], d * mult[1]]];
+                w |= self.steer(pos, steps, movable);
             }
             TouchScene::Menu => w |= self.menu(),
         }
@@ -853,23 +934,36 @@ impl TouchSource {
         self.fingers.iter_mut().find(|f| f.on == On::Move)
     }
 
-    // Window px → game px (the blit's letterbox scale in the safe rect).
+    // Window px → game px: the picture's scale as the blit draws it (whole steps with `integer_scale`), else the
+    // letterbox scale of the safe rect.
     fn game_scale(&self) -> f32 {
-        (self.size[0] / SCREEN[0]).min(self.size[1] / SCREEN[1])
+        if self.picture > 0.0 {
+            self.picture
+        } else {
+            (self.size[0] / SCREEN[0]).min(self.size[1] / SCREEN[1])
+        }
     }
 
-    fn steer(&mut self, pos: [f32; 2], step: [f32; 2]) -> u16 {
-        let k = self.cfg.sens / self.game_scale();
+    // The game picture's width on the window (px), from the renderer's frame rect.
+    pub fn set_picture(&mut self, width: f32) {
+        self.picture = width / SCREEN[0];
+    }
+
+    // `steps`: per axis [ortho, diagonal] step of this poll's word (game px).
+    fn steer(&mut self, pos: [f32; 2], steps: [[f32; 2]; 2], movable: bool) -> u16 {
         let movement = self.cfg.movement;
         let r = self.stick_radius();
-        let (last_req, last_pos) = (self.last_req, self.last_pos);
-        let had_target = self.target.is_some();
+        let (last_pos, in_flight) = (self.last_pos, self.in_flight);
+        let fixed = self.fixed_stick();
+        self.last_pos = pos;
+        self.in_flight = [0.0; 2];
+        if movement == Movement::Drag {
+            return self.drag(pos, steps, movable, last_pos, in_flight);
+        }
         let Some(f) = self.move_finger() else {
-            self.target = None;
-            self.last_req = 0;
             return 0;
         };
-        let bits = match movement {
+        match movement {
             Movement::Stick => {
                 let mut d = [f.last[0] - f.centre[0], f.last[1] - f.centre[1]];
                 let n = len(d[0], d[1]);
@@ -880,46 +974,77 @@ impl TouchSource {
                 }
                 eight_way(d, r * STICK_DEAD)
             }
-            Movement::Drag => {
-                let delta = [(f.last[0] - f.seen[0]) * k, (f.last[1] - f.seen[1]) * k];
-                f.seen = f.last;
-                let mut t = if had_target {
-                    self.target.unwrap()
-                } else {
-                    pos
-                };
-                // Blocked at a wall (or not movable): the target restarts at the player on that axis.
-                if had_target {
-                    if last_req & (LEFT | RIGHT) != 0 && pos[0] == last_pos[0] {
-                        t[0] = pos[0];
-                    }
-                    if last_req & (UP | DOWN) != 0 && pos[1] == last_pos[1] {
-                        t[1] = pos[1];
-                    }
-                }
-                t = [t[0] + delta[0], t[1] + delta[1]];
-                self.target = Some(t);
-                // Dead zone of one frame's step per axis: never overshoots, so it cannot oscillate.
-                let axis = |d: f32, s: f32, neg: u16, posb: u16| {
-                    let s = s.abs().max(0.25);
-                    if d >= s {
-                        posb
-                    } else if d <= -s {
-                        neg
-                    } else {
-                        0
-                    }
-                };
-                axis(t[0] - pos[0], step[0], LEFT, RIGHT) | axis(t[1] - pos[1], step[1], UP, DOWN)
-            }
+            Movement::Fixed => fixed.map_or(0, |(c, r)| {
+                eight_way([f.last[0] - c[0], f.last[1] - c[1]], r * STICK_DEAD)
+            }),
+            Movement::Drag => 0,
+        }
+    }
+
+    // Relative drag: the finger moves a target (game px) and the player steps towards it.
+    fn drag(
+        &mut self,
+        pos: [f32; 2],
+        steps: [[f32; 2]; 2],
+        movable: bool,
+        last_pos: [f32; 2],
+        in_flight: [f32; 2],
+    ) -> u16 {
+        let k = self.cfg.sens / self.game_scale();
+        let u = std::mem::take(&mut self.unseen);
+        let finger = self.move_finger().map(|f| {
+            let d = [f.last[0] - f.seen[0], f.last[1] - f.seen[1]];
+            f.seen = f.last;
+            d
+        });
+        let d = finger.unwrap_or_default();
+        let delta = [(d[0] + u[0]) * k, (d[1] + u[1]) * k];
+        if !movable || (finger.is_none() && self.target.is_none() && u == [0.0; 2]) {
+            self.target = None;
+            return 0;
+        }
+        // Where the player is once the previous word has moved it.
+        let ahead = [
+            (pos[0] + in_flight[0]).clamp(CLAMP[0], CLAMP[2]),
+            (pos[1] + in_flight[1]).clamp(CLAMP[1], CLAMP[3]),
+        ];
+        // A jump no step explains (respawn, a scripted move) re-anchors the target at the player.
+        let jump = (pos[0] - last_pos[0])
+            .abs()
+            .max((pos[1] - last_pos[1]).abs());
+        let anchor = match self.target {
+            Some(t) if jump <= 3.0 * steps[0][0].max(steps[1][0]).max(1.0) => t,
+            _ => ahead,
         };
-        self.last_req = bits;
-        self.last_pos = pos;
+        // Kept inside the bounds, so pushing past a wall is not owed back.
+        let t = [
+            (anchor[0] + delta[0]).clamp(CLAMP[0], CLAMP[2]),
+            (anchor[1] + delta[1]).clamp(CLAMP[1], CLAMP[3]),
+        ];
+        let (bits, step) = nearest_step([t[0] - ahead[0], t[1] - ahead[1]], steps);
+        // Without a finger the target goes once reached.
+        self.target = (finger.is_some() || bits != 0).then_some(t);
+        self.in_flight = step;
         bits
     }
 
     fn stick_radius(&self) -> f32 {
         12.0 * self.ppm
+    }
+
+    // The fixed stick's centre and radius (window px) while movement is `fixed`.
+    fn fixed_stick(&self) -> Option<([f32; 2], f32)> {
+        if self.cfg.movement != Movement::Fixed {
+            return None;
+        }
+        let c = self
+            .cfg
+            .layout
+            .controls(self.landscape())
+            .iter()
+            .find(|c| c.ctl == Ctl::Stick)?;
+        let p = self.place(c);
+        Some((p.centre, p.half[0]))
     }
 
     // Menus: a drag swipes one direction pulse per `SWIPE_MM`; a stick holds the direction (the menus repeat
@@ -928,9 +1053,15 @@ impl TouchSource {
         let swipe = SWIPE_MM * self.ppm;
         let movement = self.cfg.movement;
         let r = self.stick_radius();
+        let fixed = self.fixed_stick();
         let mut held = 0;
         if let Some(f) = self.move_finger() {
             match movement {
+                Movement::Fixed => {
+                    if let Some((c, r)) = fixed {
+                        held = eight_way([f.last[0] - c[0], f.last[1] - c[1]], r * STICK_DEAD);
+                    }
+                }
                 Movement::Stick => {
                     held = eight_way(
                         [f.last[0] - f.centre[0], f.last[1] - f.centre[1]],
@@ -1023,14 +1154,20 @@ impl TouchSource {
                     (p, lit)
                 })
                 .collect();
-        let finger =
-            self.fingers
-                .iter()
-                .find(|f| f.on == On::Move)
-                .map(|f| match self.cfg.movement {
-                    Movement::Stick => (f.centre, f.last, self.stick_radius()),
-                    Movement::Drag => (f.start, f.last, 0.0),
-                });
+        let finger = self
+            .fingers
+            .iter()
+            .find(|f| f.on == On::Move)
+            .and_then(|f| match self.cfg.movement {
+                Movement::Stick => Some((f.centre, f.last, self.stick_radius())),
+                Movement::Drag => Some((f.start, f.last, 0.0)),
+                // The knob stays on the ring.
+                Movement::Fixed => self.fixed_stick().map(|(c, r)| {
+                    let d = [f.last[0] - c[0], f.last[1] - c[1]];
+                    let s = (r / len(d[0], d[1]).max(1e-3)).min(1.0);
+                    (c, [c[0] + d[0] * s, c[1] + d[1] * s], r)
+                }),
+            });
         TouchView {
             controls,
             screen: self.scene.screen(),
@@ -1066,6 +1203,27 @@ fn eight_way(d: [f32; 2], dead: f32) -> u16 {
     ][sector as usize % 8]
 }
 
+// The direction word whose step (`steps`: per axis [ortho, diagonal]) lands nearest the offset `o` (game px), and that
+// step; no move unless one gets closer, so it settles within half a step and never steps against `o`.
+fn nearest_step(o: [f32; 2], steps: [[f32; 2]; 2]) -> (u16, [f32; 2]) {
+    let [[ox, dx], [oy, dy]] = steps;
+    let moves = [
+        (0, [0.0, 0.0]),
+        (RIGHT, [ox, 0.0]),
+        (LEFT, [-ox, 0.0]),
+        (DOWN, [0.0, oy]),
+        (UP, [0.0, -oy]),
+        (DOWN | RIGHT, [dx, dy]),
+        (DOWN | LEFT, [-dx, dy]),
+        (UP | RIGHT, [dx, -dy]),
+        (UP | LEFT, [-dx, -dy]),
+    ];
+    let err = |m: [f32; 2]| (o[0] - m[0]).powi(2) + (o[1] - m[1]).powi(2);
+    moves
+        .into_iter()
+        .fold(moves[0], |b, m| if err(m.1) < err(b.1) { m } else { b })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1073,6 +1231,7 @@ mod tests {
     use winit::keyboard::KeyCode;
 
     const PLAY_SPEED: f32 = 4.0;
+    const DIAG: f32 = PLAY_SPEED * std::f32::consts::FRAC_1_SQRT_2;
 
     // A 640×480 window at scale 1 (1 window px = 1 game px), default layout, auto-fire off unless asked.
     fn src(cfg: TouchConfig) -> TouchSource {
@@ -1084,33 +1243,84 @@ mod tests {
         t
     }
 
-    fn play(pos: [f32; 2]) -> TouchScene {
+    fn scene(pos: [f32; 2], movable: bool, fire: bool) -> TouchScene {
         TouchScene::Play {
             pos,
-            speed: [PLAY_SPEED, 2.0],
+            speed: [
+                [PLAY_SPEED, DIAG],
+                [2.0, 2.0 * std::f32::consts::FRAC_1_SQRT_2],
+            ],
             mult: [1.0; 2],
-            fire: true,
+            movable,
+            fire,
         }
+    }
+
+    fn play(pos: [f32; 2]) -> TouchScene {
+        scene(pos, true, true)
+    }
+
+    fn dialogue() -> TouchScene {
+        scene([0.0; 2], true, false)
     }
 
     fn centre(t: &TouchSource, ctl: Ctl) -> [f32; 2] {
         t.placed().iter().find(|p| p.ctl == ctl).unwrap().centre
     }
 
-    // Moves a simulated player by one step per poll along the word's direction bits.
+    // Moves a simulated player by one step along the word's direction bits, inside the bounds.
     fn advance(pos: &mut [f32; 2], w: u16) {
+        let v = if w & (LEFT | RIGHT) != 0 && w & (UP | DOWN) != 0 {
+            DIAG
+        } else {
+            PLAY_SPEED
+        };
         if w & LEFT != 0 {
-            pos[0] -= PLAY_SPEED;
+            pos[0] -= v;
         }
         if w & RIGHT != 0 {
-            pos[0] += PLAY_SPEED;
+            pos[0] += v;
         }
         if w & UP != 0 {
-            pos[1] -= PLAY_SPEED;
+            pos[1] -= v;
         }
         if w & DOWN != 0 {
-            pos[1] += PLAY_SPEED;
+            pos[1] += v;
         }
+        pos[0] = pos[0].clamp(CLAMP[0], CLAMP[2]);
+        pos[1] = pos[1].clamp(CLAMP[1], CLAMP[3]);
+    }
+
+    // A simulated player as the game moves it: the word polled in one frame moves it in the next.
+    struct Sim {
+        pos: [f32; 2],
+        prev: u16,
+    }
+
+    impl Sim {
+        fn new(pos: [f32; 2]) -> Self {
+            Self { pos, prev: 0 }
+        }
+
+        // One logic frame: scene, poll, then the previous word's step.
+        fn frame(&mut self, t: &mut TouchSource) -> u16 {
+            t.set_scene(play(self.pos));
+            let w = t.poll();
+            advance(&mut self.pos, self.prev);
+            self.prev = w;
+            w
+        }
+
+        // A frame in which the player does not take the word (it is dropped).
+        fn stalled(&mut self, t: &mut TouchSource) -> u16 {
+            t.set_scene(play(self.pos));
+            self.prev = 0;
+            t.poll()
+        }
+    }
+
+    fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+        len(a[0] - b[0], a[1] - b[1])
     }
 
     // The phone case: controls inside the safe rect (cutout left, corners, gesture bar), hit testing on the same
@@ -1235,7 +1445,13 @@ mod tests {
         assert!((s.centre[0] - (x0 + w - s.half[0])).abs() < 0.5);
         assert!((s.centre[1] - (y0 + h - s.half[1])).abs() < 0.5);
         t.edit_scale(Ctl::Shot, 100.0);
-        let c = t.cfg.layout.landscape[1];
+        let c = *t
+            .cfg
+            .layout
+            .landscape
+            .iter()
+            .find(|c| c.ctl == Ctl::Shot)
+            .unwrap();
         assert_eq!(c.w, BUTTON_MM[1]);
         let s = t.place(&c);
         assert!(s.centre[0] + s.half[0] <= x0 + w + 0.01);
@@ -1246,21 +1462,24 @@ mod tests {
         assert_eq!(t.cfg.layout.landscape[0].w, 0.1);
         assert_eq!(t.cfg.layout.portrait, TouchLayout::default().portrait);
         let l = &t.cfg.layout;
-        assert_eq!(&TouchLayout::parse(&l.cfg_value()).unwrap(), l);
-        assert_eq!(TouchLayout::default().cfg_value(), "");
+        assert_eq!(
+            &TouchLayout::parse(&l.cfg_value(Preset::Right), Preset::Right).unwrap(),
+            l
+        );
+        assert_eq!(TouchLayout::default().cfg_value(Preset::Right), "");
     }
 
     #[test]
     fn layout_cfg_round_trip() {
         let l = TouchLayout::default();
-        assert_eq!(TouchLayout::parse(&l.to_cfg()).unwrap(), l);
-        assert_eq!(TouchLayout::parse("").unwrap(), l);
+        assert_eq!(TouchLayout::parse(&l.to_cfg(), Preset::Right).unwrap(), l);
+        assert_eq!(TouchLayout::parse("", Preset::Right).unwrap(), l);
         let mut m = l.clone();
         m.portrait[1].visible = false;
         m.landscape[2].opacity = 0.25;
-        assert_eq!(TouchLayout::parse(&m.to_cfg()).unwrap(), m);
-        assert!(TouchLayout::parse("L:laser,0,0,1,1,1,1").is_err());
-        assert!(TouchLayout::parse("X:").is_err());
+        assert_eq!(TouchLayout::parse(&m.to_cfg(), Preset::Right).unwrap(), m);
+        assert!(TouchLayout::parse("L:laser,0,0,1,1,1,1", Preset::Right).is_err());
+        assert!(TouchLayout::parse("X:", Preset::Right).is_err());
     }
 
     fn drag_cfg() -> TouchConfig {
@@ -1270,30 +1489,28 @@ mod tests {
         }
     }
 
-    // Relative drag: the player follows the finger's movement and stops within one step, no oscillation.
+    // Relative drag: the player follows the finger's movement and stops within half a step, no oscillation.
     #[test]
     fn drag_follows_finger() {
         let mut t = src(drag_cfg());
-        let mut pos = [192.0, 400.0];
-        t.set_scene(play(pos));
+        let mut p = Sim::new([192.0, 400.0]);
+        t.set_scene(play(p.pos));
         t.touch(1, TouchPhase::Started, 100.0, 300.0);
-        assert_eq!(t.poll(), 0);
+        assert_eq!(p.frame(&mut t), 0);
         t.touch(1, TouchPhase::Moved, 140.0, 280.0);
-        let mut words = Vec::new();
-        for _ in 0..16 {
-            t.set_scene(play(pos));
-            let w = t.poll();
-            advance(&mut pos, w);
-            words.push(w);
-        }
-        assert_eq!(pos, [232.0, 380.0]);
+        let words: Vec<u16> = (0..24).map(|_| p.frame(&mut t)).collect();
+        assert!(
+            dist(p.pos, [232.0, 380.0]) <= PLAY_SPEED / 2.0,
+            "{:?}",
+            p.pos
+        );
         assert_eq!(words[0], UP | RIGHT);
-        assert!(words[10..].iter().all(|&w| w == 0));
+        assert!(words[16..].iter().all(|&w| w == 0), "{words:?}");
         t.touch(1, TouchPhase::Ended, 140.0, 280.0);
-        assert_eq!(t.poll(), 0);
+        assert_eq!(p.frame(&mut t), 0);
     }
 
-    // Sensitivity 2 doubles the distance; a wall re-anchors the target so reversing acts at once.
+    // Sensitivity 2 doubles the distance; at a wall the target stays inside the bounds, so reversing acts at once.
     #[test]
     fn drag_sensitivity_and_wall() {
         let mut t = src(TouchConfig {
@@ -1301,27 +1518,171 @@ mod tests {
             sens: 2.0,
             ..Default::default()
         });
-        let mut pos = [100.0, 300.0];
-        t.set_scene(play(pos));
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
         t.touch(1, TouchPhase::Started, 100.0, 300.0);
         t.touch(1, TouchPhase::Moved, 110.0, 300.0);
         for _ in 0..10 {
-            t.set_scene(play(pos));
-            let w = t.poll();
-            advance(&mut pos, w);
+            p.frame(&mut t);
         }
-        assert_eq!(pos, [120.0, 300.0]);
-        // Wall at x = 120: the finger goes on right, the player stays; reversing moves left right away.
-        t.touch(1, TouchPhase::Moved, 200.0, 300.0);
-        t.set_scene(play(pos));
-        assert_eq!(t.poll(), RIGHT);
-        for _ in 0..4 {
-            t.set_scene(play(pos));
+        assert_eq!(p.pos, [120.0, 300.0]);
+        // Pushed far past the right wall, then 2 px back: the player leaves the wall on the next poll.
+        t.touch(1, TouchPhase::Moved, 300.0, 300.0);
+        for _ in 0..80 {
+            p.frame(&mut t);
+        }
+        assert_eq!(p.pos[0], CLAMP[2]);
+        assert_eq!(p.frame(&mut t), 0);
+        t.touch(1, TouchPhase::Moved, 298.0, 300.0);
+        assert_eq!(p.frame(&mut t), LEFT);
+        p.frame(&mut t);
+        assert_eq!(p.pos[0], CLAMP[2] - PLAY_SPEED);
+    }
+
+    // The game moves the player by a word one frame after polling it: a slow drag must not read the not-yet-moved
+    // player as blocked and lose the step (it lost about half of every drag).
+    #[test]
+    fn drag_slow_keeps_distance() {
+        let mut t = src(drag_cfg());
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 100.0, 300.0);
+        // 1 px per frame for 120 frames, then rest.
+        for i in 1..=120 {
+            t.touch(1, TouchPhase::Moved, 100.0 + i as f32, 300.0);
+            p.frame(&mut t);
+        }
+        for _ in 0..10 {
+            p.frame(&mut t);
+        }
+        assert!((p.pos[0] - 220.0).abs() <= PLAY_SPEED / 2.0, "{:?}", p.pos);
+        assert_eq!(p.pos[1], 300.0);
+    }
+
+    // Frames in which the player does not move (its word dropped, not a wall) keep the finger's movement owed.
+    #[test]
+    fn drag_stalled_frames_keep_target() {
+        let mut t = src(drag_cfg());
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 100.0, 300.0);
+        t.touch(1, TouchPhase::Moved, 140.0, 300.0);
+        for i in 0..40 {
+            if i % 3 == 1 {
+                p.stalled(&mut t);
+            } else {
+                p.frame(&mut t);
+            }
+        }
+        assert!((p.pos[0] - 140.0).abs() <= PLAY_SPEED / 2.0, "{:?}", p.pos);
+    }
+
+    // A shallow swipe (20°) moves along it: first step straight right (per-axis dead zones went 45° first), never a
+    // step against the finger, the path within 1.5 steps of the finger's line.
+    #[test]
+    fn drag_shallow_angle() {
+        let mut t = src(drag_cfg());
+        let start = [100.0, 300.0];
+        let mut p = Sim::new(start);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 100.0, 300.0);
+        let (s, c) = th08_core::fmath::sin_cos_f(20f32.to_radians());
+        // 120 px in 8 frames.
+        let mut words = Vec::new();
+        for i in 1..=60 {
+            let u = (i as f32 / 8.0).min(1.0) * 120.0;
+            t.touch(1, TouchPhase::Moved, 100.0 + c * u, 300.0 + s * u);
+            let w = p.frame(&mut t);
+            assert_eq!(w & (LEFT | UP), 0, "frame {i}: {w:#x}");
+            words.push(w);
+            // Distance of the player from the finger's line.
+            let d = [p.pos[0] - start[0], p.pos[1] - start[1]];
+            let off = (d[0] * s - d[1] * c).abs();
+            assert!(off <= 1.5 * PLAY_SPEED, "frame {i}: {:?} off {off}", p.pos);
+        }
+        assert_eq!(words[0], RIGHT);
+        let end = [100.0 + c * 120.0, 300.0 + s * 120.0];
+        assert!(dist(p.pos, end) <= PLAY_SPEED / 2.0, "{:?}", p.pos);
+    }
+
+    // Dying / respawning: no movement, the target is dropped; after the respawn jump the drag is relative to the new
+    // place.
+    #[test]
+    fn drag_respawn_reanchors() {
+        let mut t = src(drag_cfg());
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 100.0, 300.0);
+        t.touch(1, TouchPhase::Moved, 150.0, 300.0);
+        p.frame(&mut t);
+        let dead = scene(p.pos, false, true);
+        for _ in 0..5 {
+            t.set_scene(dead);
             assert_eq!(t.poll(), 0);
         }
-        t.touch(1, TouchPhase::Moved, 196.0, 300.0);
-        t.set_scene(play(pos));
-        assert_eq!(t.poll(), LEFT);
+        t.touch(1, TouchPhase::Moved, 160.0, 300.0);
+        t.set_scene(dead);
+        assert_eq!(t.poll(), 0);
+        p = Sim::new([192.0, 384.0]);
+        t.touch(1, TouchPhase::Moved, 140.0, 300.0);
+        for _ in 0..20 {
+            p.frame(&mut t);
+        }
+        assert!(
+            dist(p.pos, [172.0, 384.0]) <= PLAY_SPEED / 2.0,
+            "{:?}",
+            p.pos
+        );
+    }
+
+    // A flick lifted before the player caught up: it still travels the whole flick, then stops; a new finger
+    // carries on from there.
+    #[test]
+    fn drag_lift_finishes() {
+        let mut t = src(drag_cfg());
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 100.0, 300.0);
+        t.touch(1, TouchPhase::Moved, 160.0, 300.0);
+        p.frame(&mut t);
+        t.touch(1, TouchPhase::Ended, 160.0, 300.0);
+        for _ in 0..30 {
+            p.frame(&mut t);
+        }
+        assert_eq!(p.pos, [160.0, 300.0]);
+        assert!(t.target.is_none());
+        t.touch(2, TouchPhase::Started, 300.0, 300.0);
+        t.touch(2, TouchPhase::Moved, 300.0, 280.0);
+        for _ in 0..10 {
+            p.frame(&mut t);
+        }
+        assert_eq!(p.pos, [160.0, 280.0]);
+        // Moved and lifted between two polls: that last movement still counts.
+        t.touch(2, TouchPhase::Moved, 340.0, 280.0);
+        t.touch(2, TouchPhase::Ended, 340.0, 280.0);
+        for _ in 0..20 {
+            p.frame(&mut t);
+        }
+        assert_eq!(p.pos, [200.0, 280.0]);
+    }
+
+    // Sensitivity 1 = 1:1 on the picture the blit draws: with integer scaling a 2400×1080 window shows it at 2×,
+    // not at the 2.25× the safe rect allows.
+    #[test]
+    fn drag_scale_is_the_picture() {
+        let mut t = TouchSource::new(drag_cfg());
+        t.set_window(2400, 1080, 2.625, SafeArea::default());
+        assert_eq!(t.game_scale(), 2.25);
+        t.set_picture(1280.0);
+        assert_eq!(t.game_scale(), 2.0);
+        let mut p = Sim::new([100.0, 300.0]);
+        t.set_scene(play(p.pos));
+        t.touch(1, TouchPhase::Started, 500.0, 500.0);
+        t.touch(1, TouchPhase::Moved, 580.0, 500.0);
+        for _ in 0..20 {
+            p.frame(&mut t);
+        }
+        assert_eq!(p.pos, [140.0, 300.0]);
     }
 
     #[test]
@@ -1351,19 +1712,17 @@ mod tests {
     #[test]
     fn multi_touch() {
         let mut t = src(drag_cfg());
-        let mut pos = [192.0, 400.0];
-        t.set_scene(play(pos));
+        let mut p = Sim::new([192.0, 400.0]);
+        t.set_scene(play(p.pos));
         t.touch(1, TouchPhase::Started, 100.0, 300.0);
         let [sx, sy] = centre(&t, Ctl::Shot);
         let [bx, by] = centre(&t, Ctl::Bomb);
         t.touch(2, TouchPhase::Started, sx, sy);
         t.touch(5, TouchPhase::Started, bx, by);
         t.touch(1, TouchPhase::Moved, 80.0, 300.0);
-        assert_eq!(t.poll(), SHOT | BOMB | LEFT);
-        advance(&mut pos, LEFT);
+        assert_eq!(p.frame(&mut t), SHOT | BOMB | LEFT);
         t.touch(5, TouchPhase::Ended, bx, by);
-        t.set_scene(play(pos));
-        assert_eq!(t.poll(), SHOT | LEFT);
+        assert_eq!(p.frame(&mut t), SHOT | LEFT);
         t.touch(2, TouchPhase::Ended, sx, sy);
         t.touch(1, TouchPhase::Cancelled, 80.0, 300.0);
         assert_eq!(t.poll(), 0);
@@ -1387,12 +1746,7 @@ mod tests {
         assert_eq!(t.poll(), SHOT);
         t.set_scene(TouchScene::Menu);
         assert_eq!(t.poll(), 0);
-        t.set_scene(TouchScene::Play {
-            pos: [0.0; 2],
-            speed: [4.0, 2.0],
-            mult: [1.0; 2],
-            fire: false,
-        });
+        t.set_scene(dialogue());
         assert_eq!(t.poll(), 0, "dialogue");
         t.set_scene(play([0.0; 2]));
         let [ax, ay] = centre(&t, Ctl::Auto);
@@ -1483,14 +1837,14 @@ mod tests {
         };
         let t = &mut m.touch;
         let [sx, sy] = centre(t, Ctl::Shot);
-        let mut pos = [192.0, 400.0];
+        let mut p = Sim::new([192.0, 400.0]);
         let swipe = SWIPE_MM * t.ppm;
         let mut touch = Vec::new();
         for i in 0..14 {
             let t = &mut m.touch;
             match i {
                 0 => {
-                    t.set_scene(play(pos));
+                    t.set_scene(play(p.pos));
                     t.touch(2, TouchPhase::Started, sx, sy);
                     t.touch(1, TouchPhase::Started, 100.0, 300.0);
                     t.touch(1, TouchPhase::Moved, 100.0 - 3.0 * PLAY_SPEED, 300.0);
@@ -1510,16 +1864,17 @@ mod tests {
                 _ => {}
             }
             if i < 5 {
-                m.touch.set_scene(play(pos));
+                m.touch.set_scene(play(p.pos));
             }
             let w = m.poll()[0];
-            if i < 5 {
-                advance(&mut pos, w);
+            if i < 6 {
+                advance(&mut p.pos, p.prev);
+                p.prev = w;
             }
             touch.push(w);
         }
         assert_eq!(touch, keyboard);
-        assert_eq!(pos, [180.0, 400.0]);
+        assert_eq!(p.pos, [180.0, 400.0]);
     }
 
     // Back = one pulse of the key it stands for: X in menus, Esc in play and dialogue; the same words as tapping
@@ -1532,14 +1887,8 @@ mod tests {
         t.set_scene(play([0.0; 2]));
         t.back(play([0.0; 2]));
         assert_eq!([t.poll(), t.poll()], [PAUSE, 0]);
-        let dialogue = TouchScene::Play {
-            pos: [0.0; 2],
-            speed: [4.0, 2.0],
-            mult: [1.0; 2],
-            fire: false,
-        };
-        t.set_scene(dialogue);
-        t.back(dialogue);
+        t.set_scene(dialogue());
+        t.back(dialogue());
         assert_eq!([t.poll(), t.poll()], [PAUSE, 0]);
         // Two quick Backs stay two edges.
         t.set_scene(TouchScene::Menu);
@@ -1612,17 +1961,10 @@ mod tests {
         t.touch(1, TouchPhase::Ended, focus[0], focus[1]);
         t.set_scene(play([0.0; 2]));
         assert_eq!(t.view().screen, Screen::Play);
-        assert_eq!(shown(&t).len(), Ctl::ALL.len());
-        assert_eq!(
-            TouchScene::Play {
-                pos: [0.0; 2],
-                speed: [1.0; 2],
-                mult: [1.0; 2],
-                fire: false
-            }
-            .screen(),
-            Screen::Dialogue
-        );
+        // All but the fixed stick (movement `stick` uses the Move zone).
+        assert_eq!(shown(&t).len(), Ctl::ALL.len() - 1);
+        assert!(!shown(&t).contains(&Ctl::Stick));
+        assert_eq!(dialogue().screen(), Screen::Dialogue);
     }
 
     // A layout saved before MENU existed gets it at its default place.
@@ -1632,7 +1974,7 @@ mod tests {
         old.landscape.retain(|c| c.ctl != Ctl::Menu);
         old.portrait.retain(|c| c.ctl != Ctl::Menu);
         old.landscape[1].x = 0.5;
-        let l = TouchLayout::parse(&old.to_cfg()).unwrap();
+        let l = TouchLayout::parse(&old.to_cfg(), Preset::Right).unwrap();
         assert_eq!(l.landscape[1].x, 0.5);
         assert_eq!(l.landscape.last().unwrap().ctl, Ctl::Menu);
         assert_eq!(l.portrait, TouchLayout::default().portrait);
@@ -1673,5 +2015,114 @@ mod tests {
         };
         t.set_window(2400, 1080, 2.625, cut);
         assert!(t.exclusion().iter().any(|r| r[0] == 0));
+    }
+
+    fn fixed_cfg() -> TouchConfig {
+        TouchConfig {
+            movement: Movement::Fixed,
+            ..TouchConfig::default()
+        }
+    }
+
+    // Fixed stick: the layout's ring replaces the Move zone; a touch on (or near) it steers 8-way from its centre,
+    // which never moves; a touch elsewhere does nothing.
+    #[test]
+    fn fixed_stick() {
+        let mut t = src(fixed_cfg());
+        t.set_scene(play([0.0; 2]));
+        let shown: Vec<Ctl> = t.placed().iter().map(|p| p.ctl).collect();
+        assert!(shown.contains(&Ctl::Stick) && !shown.contains(&Ctl::Move));
+        let s = t
+            .placed()
+            .into_iter()
+            .find(|p| p.ctl == Ctl::Stick)
+            .unwrap();
+        let ([cx, cy], r) = (s.centre, s.half[0]);
+        assert!((r - 12.0 * t.ppm).abs() < 0.01);
+        // Away from the ring (inside the old Move zone): ignored.
+        t.touch(1, TouchPhase::Started, 300.0, 100.0);
+        t.touch(1, TouchPhase::Moved, 380.0, 100.0);
+        assert_eq!(t.poll(), 0);
+        t.touch(1, TouchPhase::Ended, 380.0, 100.0);
+        // Just outside the ring still grabs it.
+        t.touch(2, TouchPhase::Started, cx + r * 1.4, cy);
+        assert_eq!(t.poll(), RIGHT);
+        t.touch(2, TouchPhase::Moved, cx + r * 0.2, cy);
+        assert_eq!(t.poll(), 0, "dead zone");
+        t.touch(2, TouchPhase::Moved, cx - r, cy - r);
+        assert_eq!(t.poll(), UP | LEFT);
+        // Far past the rim and back: the centre stays.
+        t.touch(2, TouchPhase::Moved, cx - 5.0 * r, cy);
+        assert_eq!(t.poll(), LEFT);
+        t.touch(2, TouchPhase::Moved, cx - 2.0 * r, cy);
+        assert_eq!(t.poll(), LEFT);
+        let v = t.view();
+        let (c, knob, vr) = v.finger.unwrap();
+        assert_eq!((c, vr), ([cx, cy], r));
+        assert!((dist(knob, c) - r).abs() < 0.01, "knob on the ring");
+        t.touch(2, TouchPhase::Ended, cx - 2.0 * r, cy);
+        assert_eq!(t.poll(), 0);
+        // Menus: the stick holds a direction.
+        t.set_scene(TouchScene::Menu);
+        t.touch(3, TouchPhase::Started, cx, cy + r);
+        assert_eq!(t.poll(), DOWN);
+    }
+
+    // The fixed stick is placed and resized in the editor like a button (12–40 mm) and is saved with the layout.
+    #[test]
+    fn fixed_stick_editable() {
+        let mut t = TouchSource::new(fixed_cfg());
+        t.set_window(2400, 1080, 2.625, SafeArea::default());
+        let before = t
+            .placed()
+            .into_iter()
+            .find(|p| p.ctl == Ctl::Stick)
+            .unwrap();
+        t.edit_move(Ctl::Stick, [300.0, -100.0]);
+        t.edit_scale(Ctl::Stick, 10.0);
+        let after = t
+            .placed()
+            .into_iter()
+            .find(|p| p.ctl == Ctl::Stick)
+            .unwrap();
+        assert!((after.centre[0] - before.centre[0] - 300.0).abs() < 1.0);
+        assert!((after.half[0] * 2.0 / t.ppm - STICK_MM[1]).abs() < 0.01);
+        let l = &t.cfg.layout;
+        assert_eq!(&TouchLayout::parse(&l.to_cfg(), Preset::Right).unwrap(), l);
+        // A layout saved before the stick existed gets it at its default place.
+        let mut old = TouchLayout::default();
+        old.landscape.retain(|c| c.ctl != Ctl::Stick);
+        let l = TouchLayout::parse(&old.to_cfg(), Preset::Right).unwrap();
+        assert!(l.landscape.iter().any(|c| c.ctl == Ctl::Stick));
+    }
+
+    // Left preset: the mirror of the default (SHOT / FOCUS / BOMB on the left, movement on the right), "" in
+    // port.cfg under its own preset; it fits every phone and window like the default.
+    #[test]
+    fn left_preset() {
+        let l = TouchLayout::preset(Preset::Left);
+        let d = TouchLayout::default();
+        for (a, b) in l.landscape.iter().zip(&d.landscape) {
+            assert_eq!(a.ctl, b.ctl);
+            assert!((a.x - (1.0 - b.x)).abs() < 1e-6);
+            assert_eq!(a.y, b.y);
+        }
+        let mut t = TouchSource::new(TouchConfig {
+            layout: l.clone(),
+            preset: Preset::Left,
+            ..TouchConfig::default()
+        });
+        t.set_window(2400, 1080, 2.625, SafeArea::default());
+        let x = |ctl| centre(&t, ctl)[0];
+        assert!(x(Ctl::Shot) < 600.0 && x(Ctl::Bomb) < 600.0);
+        let m = t.placed().into_iter().find(|p| p.ctl == Ctl::Move).unwrap();
+        assert!(m.centre[0] > 1200.0);
+        assert_eq!(l.cfg_value(Preset::Left), "");
+        assert_eq!(TouchLayout::parse("", Preset::Left).unwrap(), l);
+        assert_ne!(l.cfg_value(Preset::Right), "");
+        let mut e = l.clone();
+        e.mirror(true);
+        e.mirror(false);
+        assert_eq!(e, d);
     }
 }

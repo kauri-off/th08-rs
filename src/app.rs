@@ -1401,7 +1401,7 @@ fn pad_button(e: &winit::event::KeyEvent) -> Option<usize> {
 
 // The layout editor's result: the live overlay takes it now and port.cfg keeps it ("" = the defaults).
 fn save_layout(r: &mut Running, l: crate::platform::touch::TouchLayout) {
-    let v = l.cfg_value();
+    let v = l.cfg_value(r.settings.touch.preset);
     log::info!("touch layout saved: {v:?}");
     if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
         h.input.touch.cfg.layout = l.clone();
@@ -1555,18 +1555,19 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     let frozen = cfg!(target_arch = "wasm32") && shot.is_some_and(|f| r.ctx.w.frame >= f);
     let touch = gfx(&mut r.ctx).overlay.is_some();
     let safe = gfx(&mut r.ctx).safe;
+    let size = window.inner_size();
+    // A `--shot` through the scaling blit is laid out for the shot's size.
+    let (w, hgt) = r.settings.shot_size.unwrap_or((size.width, size.height));
+    let picture = gfx(&mut r.ctx).frame_rect(w, hgt)[2];
     if touch && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
-        let size = window.inner_size();
-        // A `--shot` through the scaling blit is laid out for the shot's size.
-        let (w, hgt) = r.settings.shot_size.unwrap_or((size.width, size.height));
         h.input
             .touch
             .set_window(w, hgt, window.scale_factor(), safe);
+        h.input.touch.set_picture(picture);
     }
     if let Some(f) = run_batch(r, per_draw, draws, frozen, touch) {
         return f;
     }
-    let size = window.inner_size();
     gfx(&mut r.ctx).resize(size.width, size.height);
     if touch {
         update_overlay(&mut r.ctx);
@@ -2221,6 +2222,9 @@ fn open_drawlog(v: &str) -> Option<th08_core::drawfmt::Writer> {
         }
     }
 }
+
+#[cfg(test)]
+mod touchdrag;
 
 #[cfg(test)]
 mod tests {

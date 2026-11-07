@@ -1,7 +1,7 @@
 //! Touch layout editor in the port menu: move, resize, opacity, show / hide and reset of the overlay controls.
 
 use super::overlay::{accent, button, label, white};
-use super::touch::{BUTTON_MM, Control, Ctl, Screen, TouchConfig, TouchLayout, TouchSource};
+use super::touch::{Control, Ctl, Screen, TouchConfig, TouchLayout, TouchSource};
 use crate::i18n::{self, Lang};
 use egui::{
     Align2, Color32, FontId, Id, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2,
@@ -46,13 +46,26 @@ impl TouchEdit {
             .find(|c| c.ctl == ctl)
     }
 
+    // The controls of this movement mode, the Move zone first (buttons over it win the hit test).
+    fn list(&self, land: bool) -> Vec<Control> {
+        let mut list: Vec<Control> = self
+            .src
+            .cfg
+            .layout
+            .controls(land)
+            .iter()
+            .filter(|c| self.src.uses(c.ctl))
+            .copied()
+            .collect();
+        list.sort_by_key(|c| c.ctl != Ctl::Move);
+        list
+    }
+
     // One pass; `ppp`: window px per egui point.
     pub fn ui(&mut self, ctx: &egui::Context, lang: Lang, ppp: f32) -> Option<EditOut> {
         let pt = |p: [f32; 2]| pos2(p[0] / ppp, p[1] / ppp);
         let land = self.src.landscape();
-        // The Move zone first: buttons over it win the hit test.
-        let mut list: Vec<Control> = self.src.cfg.layout.controls(land).to_vec();
-        list.sort_by_key(|c| c.ctl != Ctl::Move);
+        let list = self.list(land);
         let screen = ctx.content_rect();
         egui::Area::new(Id::unique("touch edit area"))
             .order(Order::Background)
@@ -100,8 +113,7 @@ impl TouchEdit {
             Stroke::new(1.0, white(0.35)),
             StrokeKind::Inside,
         );
-        let mut list: Vec<Control> = self.src.cfg.layout.controls(self.src.landscape()).to_vec();
-        list.sort_by_key(|c| c.ctl != Ctl::Move);
+        let list = self.list(self.src.landscape());
         for c in &list {
             let pl = self.src.place(c);
             let centre = pt(pl.centre);
@@ -176,8 +188,11 @@ impl TouchEdit {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button(i18n::ui(lang, "touch_reset")).clicked() {
-                        let d = TouchLayout::default();
+                        let d = TouchLayout::preset(self.src.cfg.preset);
                         *self.src.cfg.layout.controls_mut(land) = d.controls(land).to_vec();
+                    }
+                    if ui.button(i18n::ui(lang, "touch_mirror")).clicked() {
+                        self.src.cfg.layout.mirror(land);
                     }
                     if ui.button(i18n::ui(lang, "cancel")).clicked() {
                         out = Some(EditOut::Cancel);
@@ -222,8 +237,8 @@ impl TouchEdit {
                     }
                 } else {
                     let mut mm = c.w;
-                    let r = ui
-                        .add(egui::Slider::new(&mut mm, BUTTON_MM[0]..=BUTTON_MM[1]).suffix(" mm"));
+                    let [lo, hi] = ctl.mm_range();
+                    let r = ui.add(egui::Slider::new(&mut mm, lo..=hi).suffix(" mm"));
                     if r.changed() {
                         self.src.edit(ctl, |c| {
                             c.w = mm;
