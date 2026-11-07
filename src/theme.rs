@@ -387,6 +387,31 @@ pub fn balanced(p: &Painter, text: &str, font: FontId, color: Color32, w: f32) -
     if n < 2 {
         return full;
     }
+    // Two lines of Japanese break after the particle nearest the middle (タイトルに / 戻りますか？) rather than
+    // inside a word.
+    if n == 2 && !text.contains(' ') {
+        let chars: Vec<char> = text.chars().collect();
+        let mid = chars.len() as f32 / 2.0;
+        let best = (2..chars.len().saturating_sub(2))
+            .filter(|&i| {
+                matches!(
+                    chars[i - 1],
+                    'は' | 'に' | 'を' | 'が' | 'で' | 'と' | 'の' | '、' | '。'
+                )
+            })
+            .min_by(|&a, &b| (a as f32 - mid).abs().total_cmp(&(b as f32 - mid).abs()));
+        if let Some(i) = best.filter(|&i| (i as f32 - mid).abs() <= chars.len() as f32 * 0.3) {
+            let split: String = chars[..i]
+                .iter()
+                .chain(['\n'].iter())
+                .chain(&chars[i..])
+                .collect();
+            let g = p.layout(split, font.clone(), color, w);
+            if g.rows.len() == 2 {
+                return g;
+            }
+        }
+    }
     let (mut lo, mut hi) = (w * 0.4, w);
     for _ in 0..12 {
         let mid = (lo + hi) / 2.0;

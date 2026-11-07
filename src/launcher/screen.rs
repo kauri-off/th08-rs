@@ -423,6 +423,7 @@ impl Model {
         (art_w, panel, x, right)
     }
 
+    #[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
     pub(super) fn settings_screen(&mut self, ui: &mut Ui) -> Option<Action> {
         let lang = self.lang();
         self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
@@ -637,6 +638,7 @@ impl Model {
 
     // Starting / loading / start failure in the launcher's frame: title art, heading, the status, and on a failure
     // a short cause, the message as helper text and Choose folder / Back / Quit as rows.
+    #[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
     pub(super) fn status_screen(&mut self, ui: &mut Ui, status: &Status<'_>) -> Option<Action> {
         let lang = self.lang();
         let error = matches!(status, Status::Error(_));
