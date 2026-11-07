@@ -51,6 +51,8 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub struct Texture {
     pub width: u32,
     pub height: u32,
+    // Texels per logical texel: `width`×`height` stay the game's sizes, the wgpu texture is `scale` times larger.
+    pub scale: u32,
     bind: wgpu::BindGroup,
     tex: wgpu::Texture,
     label: Option<LogTex>,
@@ -66,6 +68,7 @@ pub struct Texture {
 struct Provenance {
     w: u32,
     h: u32,
+    scale: u32,
     format: wgpu::TextureFormat,
     // `ResCmd::Create` / decoded `CreateImage` pixels; None = screen capture target, which comes back black until captured again.
     rgba: Option<Arc<[u8]>>,
@@ -81,6 +84,8 @@ enum Edit {
     Write {
         at: [u32; 2],
         size: [u32; 2],
+        // Texels per logical texel of `rgba`.
+        scale: u32,
         rgba: Vec<u8>,
     },
     Copy {
@@ -383,6 +388,22 @@ impl BlitOptions {
     }
 }
 
+// Frame target resolution in multiples of 640×480; logic, texture sizes and the draw log stay in 640×480 units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderScale {
+    Fixed(u32),
+    // The largest multiple (at most `MAX_RENDER_SCALE`) whose frame fits the window's picture rect.
+    Auto,
+}
+
+impl Default for RenderScale {
+    fn default() -> Self {
+        Self::Fixed(1)
+    }
+}
+
+pub const MAX_RENDER_SCALE: u32 = 3;
+
 // Device-bound objects that do not depend on core state: made by `build` and again by `rebuild`.
 struct Gpu {
     pipes: Vec<wgpu::RenderPipeline>,
@@ -399,9 +420,18 @@ struct Gpu {
     fx_bind: wgpu::BindGroup,
     // Filtered sub-rect copy of the frame into an Rgba8Unorm texture (texture capture, 12 §3).
     crop: wgpu::RenderPipeline,
+    blit_sampler: wgpu::Sampler,
+    near_sampler: wgpu::Sampler,
+    draw_layout: wgpu::PipelineLayout,
+    // Draw pipelines for render scale `.0` > 1 (`SHADER_HI`), made when that scale is first used.
+    hi: Option<(u32, Vec<wgpu::RenderPipeline>)>,
+    fx_layout: wgpu::BindGroupLayout,
+    // `RESAMPLE` per target format, made on first use.
+    resample: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
 }
 
 // Port-only GPU state: device, pipelines, texture table, pending batches and the 640×480 frame target.
+#[expect(clippy::struct_excessive_bools, reason = "independent device switches")]
 pub struct Gfx {
     pub surface: Option<wgpu::Surface<'static>>,
     // Touch overlay (app), painted after `blit`.
@@ -413,6 +443,11 @@ pub struct Gfx {
     // Set by the app on every resize / resume; `blit` and the launcher keep out of it.
     pub safe: SafeArea,
     pub blit_options: BlitOptions,
+    pub render_scale: RenderScale,
+    // Scale of the current frame target (`render_scale` resolved at the last rendered frame).
+    scale: u32,
+    // Tools: with no window, Present still renders the frame and captures copy it.
+    pub offscreen: bool,
     // Makes the surface again after a lifecycle detach and the device after a loss (ARCH_D §5).
     instance: wgpu::Instance,
     // No window: `attach` fails, `rebuild` asks for any adapter.
@@ -473,6 +508,48 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(
 @fragment fn fs_clear(i: VsOut) -> @location(0) vec4f { return i.color; }
 "#;
 
+// `SHADER` at scale `SCALE` > 1: a vertex on a 640×480 pixel centre moves to the edge the 1× fill rule gives it;
+// textures drawn at most 1:1 in 640×480 units are sampled sharp-bilinear (a 1:1 sprite keeps its texels).
+const SHADER_HI: &str = r#"
+override SCALE: f32 = 2.0;
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f, @location(2) fogc: vec4f, @location(3) fog: f32 };
+fn snap(c: f32) -> f32 {
+    return select(c, c - 0.5, abs(fract(c) - 0.5) < 0.001);
+}
+@vertex fn vs(@location(0) pos: vec4f, @location(1) uv: vec2f, @location(2) color: vec4f, @location(3) fogc: vec4f, @location(4) fog: f32) -> VsOut {
+    var o: VsOut;
+    o.pos = pos;
+    if pos.w > 1e-6 {
+        let sx = snap((pos.x / pos.w + 1.0) * 320.0);
+        let sy = snap((1.0 - pos.y / pos.w) * 240.0);
+        o.pos = vec4f((sx / 320.0 - 1.0) * pos.w, (1.0 - sy / 240.0) * pos.w, pos.z, pos.w);
+    }
+    o.uv = uv;
+    o.color = color;
+    o.fogc = fogc;
+    o.fog = fog;
+    return o;
+}
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@fragment fn fs(i: VsOut) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(t));
+    let texel = i.uv * size;
+    let gx = vec2f(dpdx(texel.x), dpdy(texel.x));
+    let gy = vec2f(dpdx(texel.y), dpdy(texel.y));
+    let sc = 1.0 / max(vec2f(length(gx), length(gy)), vec2f(1e-6));
+    let on = sc <= vec2f(SCALE * 1.01);
+    let k = max(sc, vec2f(1.0));
+    let rr = 0.5 - 0.5 / k;
+    let d = fract(texel) - 0.5;
+    let sharp = (floor(texel) + (d - clamp(d, -rr, rr)) * k + 0.5) / size;
+    let c = textureSample(t, s, select(i.uv, sharp, on)) * i.color;
+    if c.a * 255.0 < 3.5 { discard; }
+    return vec4f(mix(i.fogc.rgb, c.rgb, clamp(i.fog, 0.0, 1.0)), c.a);
+}
+@fragment fn fs_clear(i: VsOut) -> @location(0) vec4f { return i.color; }
+"#;
+
 const BLIT: &str = r#"
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
@@ -517,6 +594,38 @@ struct Fx { m0: vec4f, m1: vec4f, m2: vec4f, off: vec4f, p: vec4f };
 }
 "#;
 
+// Rect resample (`Gpu::resample_pass`): dst / src rects `[x, y, w, h]` in texels, `n.x` taps per axis per pixel.
+const RESAMPLE: &str = r#"
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+    let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: VsOut;
+    o.pos = vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+struct P { dst: vec4f, src: vec4f, n: vec4f };
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@group(1) @binding(0) var<uniform> p: P;
+@fragment fn fs(i: VsOut) -> @location(0) vec4f {
+    let ix = floor(i.pos.xy) - p.dst.xy;
+    let r = p.src.zw / p.dst.zw;
+    let n = i32(p.n.x);
+    let lo = vec2i(p.src.xy);
+    let hi = vec2i(p.src.xy + p.src.zw) - 1;
+    var acc = vec4f(0.0);
+    for (var y = 0; y < n; y++) {
+        for (var x = 0; x < n; x++) {
+            let o = (vec2f(f32(x), f32(y)) + 0.5) / f32(n);
+            let c = clamp(vec2i(floor(p.src.xy + (ix + o) * r)), lo, hi);
+            acc += textureLoad(t, c, 0);
+        }
+    }
+    return acc / f32(n * n);
+}
+"#;
+
 const CROP: &str = r#"
 struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f) -> VsOut {
@@ -539,6 +648,22 @@ fn shader(device: &wgpu::Device, src: &str) -> wgpu::ShaderModule {
 
 fn view(t: &wgpu::Texture) -> wgpu::TextureView {
     t.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+// The frame target at render scale `k`: 640k × 480k texels.
+fn frame_texture(device: &wgpu::Device, format: wgpu::TextureFormat, k: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: extent(FRAME.0 * k, FRAME.1 * k),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
@@ -634,7 +759,7 @@ impl Gpu {
             bind_group_layouts: &[Some(&tex_layout)],
             immediate_size: 0,
         });
-        let pipes = Self::draw_pipes(device, &layout, format);
+        let pipes = Self::draw_pipes(device, &layout, format, None);
         // ADDRESSU/V = WRAP, MAG/MIN = LINEAR, no mip (05 §12.4).
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -645,18 +770,7 @@ impl Gpu {
         });
         let blit = Self::blit_pipe(device, &layout, format, BLIT);
         let crop = Self::crop_pipe(device, &layout);
-        let frame = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: extent(FRAME.0, FRAME.1),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let frame = frame_texture(device, format, 1);
         let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
@@ -714,7 +828,116 @@ impl Gpu {
             fx_buf,
             fx_bind,
             crop,
+            blit_sampler,
+            near_sampler,
+            draw_layout: layout,
+            hi: None,
+            fx_layout,
+            resample: Vec::new(),
         }
+    }
+
+    // A new frame target of render scale `k`; the old one's picture is resampled into it.
+    fn set_frame_scale(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, k: u32) {
+        let format = self.frame.format();
+        let frame = frame_texture(device, format, k);
+        let (ow, oh) = (self.frame.width(), self.frame.height());
+        let mut enc = encoder(device);
+        let src = bind_group(
+            device,
+            &self.tex_layout,
+            &view(&self.frame),
+            &self.near_sampler,
+        );
+        self.resample_pass(
+            device,
+            &mut enc,
+            &src,
+            [0, 0, ow, oh],
+            &frame,
+            [0, 0, frame.width(), frame.height()],
+        );
+        queue.submit([enc.finish()]);
+        self.frame_bind = bind_group(device, &self.tex_layout, &view(&frame), &self.blit_sampler);
+        self.frame_near = bind_group(device, &self.tex_layout, &view(&frame), &self.near_sampler);
+        self.frame = frame;
+        if k > 1 && self.hi.as_ref().is_none_or(|h| h.0 != k) {
+            let pipes = Self::draw_pipes(device, &self.draw_layout, format, Some(k));
+            self.hi = Some((k, pipes));
+        }
+    }
+
+    fn draw_pipes_for(&self, k: u32) -> &[wgpu::RenderPipeline] {
+        match &self.hi {
+            Some((hk, p)) if k > 1 && *hk == k => p,
+            _ => &self.pipes,
+        }
+    }
+
+    // Texel rect `from` of `src` into rect `to` of `dst`: nearest when enlarging, box mean when shrinking.
+    fn resample_pass(
+        &mut self,
+        device: &wgpu::Device,
+        enc: &mut wgpu::CommandEncoder,
+        src: &wgpu::BindGroup,
+        from: [u32; 4],
+        dst: &wgpu::Texture,
+        to: [u32; 4],
+    ) {
+        let format = dst.format();
+        if !self.resample.iter().any(|(f, _)| *f == format) {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&self.tex_layout), Some(&self.fx_layout)],
+                immediate_size: 0,
+            });
+            let pipe = Self::blit_pipe(device, &layout, format, RESAMPLE);
+            self.resample.push((format, pipe));
+        }
+        let pipe = &self
+            .resample
+            .iter()
+            .find(|(f, _)| *f == format)
+            .expect("made")
+            .1;
+        let f = from.map(|v| v as f32);
+        let t = to.map(|v| v as f32);
+        let taps = (f[2] / t[2]).max(f[3] / t[3]).ceil().max(1.0);
+        let u: [f32; 12] = [
+            t[0], t[1], t[2], t[3], f[0], f[1], f[2], f[3], taps, 0.0, 0.0, 0.0,
+        ];
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&u),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let ub = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.fx_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+        let target = view(dst);
+        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(t[0], t[1], t[2], t[3], 0.0, 1.0);
+        pass.set_pipeline(pipe);
+        pass.set_bind_group(0, src, &[]);
+        pass.set_bind_group(1, &ub, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     fn tex_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -743,12 +966,19 @@ impl Gpu {
 
     // Pipelines indexed by `PipeKey::index`: 0–7 draw (bit 0 Add blend, bit 1 z test, bit 2 z write), 8 colour + z
     // clear, 9 z-only clear.
+    // `hi` = render scale above 1: `SHADER_HI` with that `SCALE`.
     fn draw_pipes(
         device: &wgpu::Device,
         layout: &wgpu::PipelineLayout,
         format: wgpu::TextureFormat,
+        hi: Option<u32>,
     ) -> Vec<wgpu::RenderPipeline> {
-        let shader = shader(device, SHADER);
+        let shader = shader(device, if hi.is_some() { SHADER_HI } else { SHADER });
+        let constants = hi.map(|k| [("SCALE", f64::from(k))]);
+        let fs_opts = wgpu::PipelineCompilationOptions {
+            constants: constants.as_ref().map_or(&[][..], |c| &c[..]),
+            ..Default::default()
+        };
         let add = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -768,7 +998,7 @@ impl Gpu {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: fs_opts.clone(),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
@@ -778,7 +1008,7 @@ impl Gpu {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: fs_opts.clone(),
                     targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: mask })],
                 }),
                 primitive: wgpu::PrimitiveState::default(),
@@ -892,25 +1122,27 @@ impl Gpu {
     }
 
     // Full-precision RGBA8 upload (03 §3: the reduced-colour option can be ignored); `rgba` None = a blank (black,
-    // alpha 0) capture target.
+    // alpha 0) capture target. `size` is logical, `rgba` already at `scale`.
     fn upload(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         size: [u32; 2],
+        scale: u32,
         rgba: Option<&[u8]>,
         format: wgpu::TextureFormat,
     ) -> Texture {
         let [width, height] = size;
+        let (pw, ph) = (width * scale, height * scale);
         let rgba = rgba.map_or_else(
-            || Cow::Owned(vec![0u8; (width * height * 4) as usize]),
+            || Cow::Owned(vec![0u8; (pw * ph * 4) as usize]),
             Cow::Borrowed,
         );
         let tex = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
                 label: None,
-                size: extent(width, height),
+                size: extent(pw, ph),
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -928,6 +1160,7 @@ impl Gpu {
         Texture {
             width,
             height,
+            scale,
             bind,
             tex,
             label: None,
@@ -1040,6 +1273,9 @@ impl Gfx {
             overlay_top: None,
             safe: SafeArea::default(),
             blit_options: BlitOptions::default(),
+            render_scale: RenderScale::default(),
+            scale: 1,
+            offscreen: false,
             instance,
             device,
             queue,
@@ -1115,6 +1351,7 @@ impl Gfx {
         let (device, queue) = pollster::block_on(request_device(&adapter))?;
         self.lost = watch_loss(&device);
         self.gpu = Gpu::new(&device, self.config.format);
+        self.scale = 1;
         self.device = device;
         self.queue = queue;
         self.depth = None;
@@ -1138,36 +1375,57 @@ impl Gfx {
                 self.textures[i] = None;
                 continue;
             };
-            let rgba = p.rgba.as_deref();
-            let mut t = self
-                .gpu
-                .upload(&self.device, &self.queue, [p.w, p.h], rgba, p.format);
+            let rgba = p
+                .rgba
+                .as_deref()
+                .map(|b| resample_rgba(b, [p.w, p.h], 1, p.scale));
+            let mut t = self.gpu.upload(
+                &self.device,
+                &self.queue,
+                [p.w, p.h],
+                p.scale,
+                rgba.as_deref(),
+                p.format,
+            );
             t.label = self.textures[i].take().and_then(|old| old.label);
             self.textures[i] = Some(t);
         }
         let mut enc = encoder(&self.device);
-        for (i, p) in self.prov.iter().enumerate() {
-            let (Some(p), Some(dst)) = (p, &self.textures[i]) else {
+        let prov = std::mem::take(&mut self.prov);
+        for (i, p) in prov.iter().enumerate() {
+            let Some(p) = p else {
                 continue;
             };
             for e in &p.edits {
                 match *e {
-                    Edit::Write { at, size, ref rgba } => {
-                        write_region(&self.queue, &dst.tex, at, size, rgba);
+                    Edit::Write {
+                        at,
+                        size,
+                        scale,
+                        ref rgba,
+                    } => {
+                        if let Some(dst) = &self.textures[i] {
+                            let px = resample_rgba(rgba, size, scale, dst.scale);
+                            let s = dst.scale;
+                            write_region(
+                                &self.queue,
+                                &dst.tex,
+                                at.map(|v| v * s),
+                                size.map(|v| v * s),
+                                &px,
+                            );
+                        }
                     }
                     Edit::Copy {
                         src,
                         from,
                         to,
                         size,
-                    } => {
-                        if let Some(Some(a)) = self.textures.get(src.index()) {
-                            copy_region(&self.device, &mut enc, &a.tex, from, &dst.tex, to, size);
-                        }
-                    }
+                    } => self.copy_scaled(&mut enc, src, from, TexId(i as u32), to, size),
                 }
             }
         }
+        self.prov = prov;
         self.queue.submit([enc.finish()]);
     }
 
@@ -1251,17 +1509,19 @@ impl Gfx {
     }
 
     // Post-present capture (12 §1, 0x44886F): copies the last presented 640x480 frame into a new surface texture.
+    // At render scale k the texture holds the k× frame (same logical 640×480).
     fn do_capture_screen(&mut self, id: TexId, label: &str) {
         let (w, h) = FRAME;
         let fmt = self.config.format;
         self.create_texture_fmt(id, w, h, None, fmt);
-        if self.surface.is_some() {
+        self.rescale_texture(id, self.scale);
+        if self.captures() {
             let mut enc = encoder(&self.device);
             let dst = &self.tex(id).tex;
             enc.copy_texture_to_texture(
                 self.gpu.frame.as_image_copy(),
                 dst.as_image_copy(),
-                extent(w, h),
+                extent(w * self.scale, h * self.scale),
             );
             self.queue.submit([enc.finish()]);
         }
@@ -1309,9 +1569,13 @@ impl Gfx {
             });
             self.log = Some(log);
         }
-        if self.surface.is_none() || t.tex.format() != wgpu::TextureFormat::Rgba8Unorm {
+        if !self.captures() || t.tex.format() != wgpu::TextureFormat::Rgba8Unorm {
             return;
         }
+        // At render scale k the destination is made k× too, so the capture keeps the frame's detail.
+        self.rescale_texture(dst, self.scale);
+        let t = self.tex(dst);
+        let s = t.scale as f32;
         let (u0, v0) = (from[0] as f32 / SCREEN_W, from[1] as f32 / SCREEN_H);
         let (u1, v1) = (
             (from[0] + size[0]) as f32 / SCREEN_W,
@@ -1343,7 +1607,14 @@ impl Gfx {
                 })],
                 ..Default::default()
             });
-            pass.set_viewport(to[0] as f32, to[1] as f32, w as f32, h as f32, 0.0, 1.0);
+            pass.set_viewport(
+                to[0] as f32 * s,
+                to[1] as f32 * s,
+                w as f32 * s,
+                h as f32 * s,
+                0.0,
+                1.0,
+            );
             pass.set_pipeline(&self.gpu.crop);
             pass.set_bind_group(0, &self.gpu.frame_bind, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
@@ -1365,12 +1636,14 @@ impl Gfx {
             &self.device,
             &self.queue,
             [width, height],
+            1,
             rgba.map(|b| &b[..]),
             format,
         );
         let p = Provenance {
             w: width,
             h: height,
+            scale: 1,
             format,
             // The web never rebuilds (`recover_if_lost`): no second copy of the pixels there.
             rgba: rgba.filter(|_| cfg!(not(target_arch = "wasm32"))).cloned(),
@@ -1406,8 +1679,18 @@ impl Gfx {
         }
     }
 
-    // Replaces a w×h RGBA region at (x, y); applied before the next submit.
-    fn do_write_texture(&mut self, id: TexId, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+    // Replaces a w×h RGBA region at (x, y); applied before the next submit. `rgba` is at `scale`.
+    #[expect(clippy::too_many_arguments, reason = "rect, pixels and their scale")]
+    fn do_write_texture(
+        &mut self,
+        id: TexId,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        rgba: &[u8],
+        scale: u32,
+    ) {
         let Some(t) = self.textures.get(id.index()).and_then(Option::as_ref) else {
             return;
         };
@@ -1418,14 +1701,93 @@ impl Gfx {
         if w == 0 || h == 0 {
             return;
         }
-        write_region(&self.queue, &t.tex, [x, y], [w, h], rgba);
+        let s = t.scale;
+        let px = resample_rgba(rgba, [w, h], scale, s);
+        write_region(&self.queue, &t.tex, [x * s, y * s], [w * s, h * s], &px);
         self.push_edit(
             id,
             Edit::Write {
                 at: [x, y],
                 size: [w, h],
+                scale,
                 rgba: rgba.to_vec(),
             },
+        );
+    }
+
+    // Slot `id` remade at `scale` texels per logical texel, its picture resampled; `rebuild` keeps the scale.
+    fn rescale_texture(&mut self, id: TexId, scale: u32) {
+        let Some(Some(old)) = self.textures.get(id.index()) else {
+            return;
+        };
+        if old.scale == scale {
+            return;
+        }
+        let mut t = self.gpu.upload(
+            &self.device,
+            &self.queue,
+            [old.width, old.height],
+            scale,
+            None,
+            old.tex.format(),
+        );
+        let from = [0, 0, old.tex.width(), old.tex.height()];
+        let to = [0, 0, t.tex.width(), t.tex.height()];
+        let src = bind_group(
+            &self.device,
+            &self.gpu.tex_layout,
+            &view(&old.tex),
+            &self.gpu.near_sampler,
+        );
+        let mut enc = encoder(&self.device);
+        self.gpu
+            .resample_pass(&self.device, &mut enc, &src, from, &t.tex, to);
+        self.queue.submit([enc.finish()]);
+        let old = self.textures[id.index()].take().expect("checked");
+        t.label = old.label;
+        self.textures[id.index()] = Some(t);
+        if let Some(Some(p)) = self.prov.get_mut(id.index()) {
+            p.scale = scale;
+        }
+    }
+
+    // Logical texel rect copy `src`@`from` → `dst`@`to` (clipped already) at the two textures' scales; no edit.
+    fn copy_scaled(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        src: TexId,
+        from: [u32; 2],
+        dst: TexId,
+        to: [u32; 2],
+        size: [u32; 2],
+    ) {
+        let (Some(Some(a)), Some(Some(b))) = (
+            self.textures.get(src.index()),
+            self.textures.get(dst.index()),
+        ) else {
+            return;
+        };
+        let (sa, sb) = (a.scale, b.scale);
+        if sa == sb {
+            let m = |p: [u32; 2]| p.map(|v| v * sa);
+            copy_region(&self.device, enc, &a.tex, m(from), &b.tex, m(to), m(size));
+            return;
+        }
+        let src_bind = bind_group(
+            &self.device,
+            &self.gpu.tex_layout,
+            &view(&a.tex),
+            &self.gpu.near_sampler,
+        );
+        let r = |p: [u32; 2], q: [u32; 2], s: u32| [p[0] * s, p[1] * s, q[0] * s, q[1] * s];
+        let dst_tex = b.tex.clone();
+        self.gpu.resample_pass(
+            &self.device,
+            enc,
+            &src_bind,
+            r(from, size, sa),
+            &dst_tex,
+            r(to, size, sb),
         );
     }
 
@@ -1456,7 +1818,7 @@ impl Gfx {
         // No K record: the original's texture-to-texture copy (D3DXLoadSurfaceFromSurface) makes no device call
         // (specs/data/drawlog/FORMAT.md §3 K).
         let mut enc = encoder(&self.device);
-        copy_region(&self.device, &mut enc, &a.tex, from, &b.tex, to, [w, h]);
+        self.copy_scaled(&mut enc, src, from, dst, to, [w, h]);
         self.queue.submit([enc.finish()]);
         self.push_edit(
             dst,
@@ -1833,6 +2195,8 @@ impl Gfx {
         if let Some((vb, ib)) = &buffers {
             pass.set_vertex_buffer(0, vb.slice(..));
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            let k = self.scale;
+            let pipes = self.gpu.draw_pipes_for(k);
             for b in &self.batches {
                 let x0 = b.clip.x.round().clamp(0.0, SCREEN_W) as u32;
                 let y0 = b.clip.y.round().clamp(0.0, SCREEN_H) as u32;
@@ -1841,8 +2205,8 @@ impl Gfx {
                 if x1 <= x0 || y1 <= y0 {
                     continue;
                 }
-                pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
-                pass.set_pipeline(&self.gpu.pipes[b.key.index()]);
+                pass.set_scissor_rect(x0 * k, y0 * k, (x1 - x0) * k, (y1 - y0) * k);
+                pass.set_pipeline(&pipes[b.key.index()]);
                 pass.set_bind_group(0, &self.tex(b.tex).bind, &[]);
                 pass.draw_indexed(b.start..b.end, 0, 0..1);
             }
@@ -1864,6 +2228,11 @@ impl Gfx {
 
     fn present_frame(&mut self) {
         let Some(frame) = self.acquire() else {
+            if self.offscreen && self.surface.is_none() {
+                let mut enc = encoder(&self.device);
+                self.render_frame(&mut enc);
+                self.queue.submit([enc.finish()]);
+            }
             self.clear_batches();
             return;
         };
@@ -1984,7 +2353,8 @@ impl Gfx {
         if o.plain() {
             pass.set_pipeline(&self.gpu.blit);
         } else {
-            let u = o.uniform([vw / SCREEN_W, vh / SCREEN_H]);
+            let k = self.scale as f32;
+            let u = o.uniform([vw / (SCREEN_W * k), vh / (SCREEN_H * k)]);
             self.queue
                 .write_buffer(&self.gpu.fx_buf, 0, bytemuck::cast_slice(&u));
             pass.set_pipeline(&self.gpu.blit_fx);
@@ -1992,6 +2362,47 @@ impl Gfx {
         }
         pass.set_bind_group(0, frame, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    // `render_scale` for the current window (1 with none).
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "small positive multiple"
+    )]
+    pub fn wanted_scale(&self) -> u32 {
+        match self.render_scale {
+            RenderScale::Fixed(k) => k.clamp(1, MAX_RENDER_SCALE),
+            RenderScale::Auto if self.surface.is_none() => 1,
+            RenderScale::Auto => {
+                let [_, _, w, h] = self.safe.rect(self.config.width, self.config.height);
+                ((w / SCREEN_W).min(h / SCREEN_H).floor() as u32).clamp(1, MAX_RENDER_SCALE)
+            }
+        }
+    }
+
+    // Scale of the frame target now: the last rendered frame is 640k × 480k texels.
+    pub fn frame_scale(&self) -> u32 {
+        self.scale
+    }
+
+    fn ensure_scale(&mut self) {
+        let k = self.wanted_scale();
+        if k != self.scale {
+            self.gpu.set_frame_scale(&self.device, &self.queue, k);
+            self.scale = k;
+            self.depth = None;
+        }
+    }
+
+    fn captures(&self) -> bool {
+        self.surface.is_some() || self.offscreen
+    }
+
+    // The last rendered frame at its own scale (RGBA, 640k × 480k).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_frame(&self) -> image::RgbaImage {
+        self.read_texture(encoder(&self.device), &self.gpu.frame)
     }
 
     // Renders the pending batches into the 640x480 frame without presenting (tools).
@@ -2048,7 +2459,8 @@ impl Gfx {
     }
 
     fn render_frame(&mut self, enc: &mut wgpu::CommandEncoder) {
-        let (w, h) = FRAME;
+        self.ensure_scale();
+        let (w, h) = (FRAME.0 * self.scale, FRAME.1 * self.scale);
         let depth = self.depth_view(w, h);
         let target = view(&self.gpu.frame);
         self.encode(enc, &target, &depth);
@@ -2130,12 +2542,12 @@ impl Gfx {
         image::RgbaImage::from_raw(w, h, px).unwrap()
     }
 
-    // Starts a read-back of the last rendered 640x480 frame, or of it blitted like the window into a w×h target
-    // (no overlays); `Readback::poll` returns the RGBA image once the copy has landed.
-    pub fn snapshot(&self, size: Option<(u32, u32)>) -> Readback {
+    // Starts a read-back of the last rendered frame at 640x480 (a k× frame averaged down), or of it blitted like the
+    // window into a w×h target (no overlays); `Readback::poll` returns the RGBA image once the copy has landed.
+    pub fn snapshot(&mut self, size: Option<(u32, u32)>) -> Readback {
         let mut enc = encoder(&self.device);
-        let scaled = size.map(|(w, h)| {
-            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+        let target = |w: u32, h: u32| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: extent(w.max(1), h.max(1)),
                 mip_level_count: 1,
@@ -2144,10 +2556,30 @@ impl Gfx {
                 format: self.config.format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
-            });
-            self.blit(&mut enc, &view(&t), t.width(), t.height());
-            t
-        });
+            })
+        };
+        let scaled = match size {
+            Some((w, h)) => {
+                let t = target(w, h);
+                self.blit(&mut enc, &view(&t), t.width(), t.height());
+                Some(t)
+            }
+            None if self.scale > 1 => {
+                let t = target(FRAME.0, FRAME.1);
+                let from = [0, 0, self.gpu.frame.width(), self.gpu.frame.height()];
+                let src = self.gpu.frame_near.clone();
+                self.gpu.resample_pass(
+                    &self.device,
+                    &mut enc,
+                    &src,
+                    from,
+                    &t,
+                    [0, 0, FRAME.0, FRAME.1],
+                );
+                Some(t)
+            }
+            None => None,
+        };
         let src = scaled.as_ref().unwrap_or(&self.gpu.frame);
         let (w, h) = (src.width(), src.height());
         let row = (w * 4).div_ceil(256) * 256;
@@ -2340,7 +2772,7 @@ impl Gfx {
                 w,
                 h,
                 rgba,
-            } => self.do_write_texture(*id, *x, *y, *w, *h, rgba),
+            } => self.do_write_texture(*id, *x, *y, *w, *h, rgba, 1),
             ResCmd::Copy {
                 src,
                 from,
@@ -2366,13 +2798,21 @@ impl Gfx {
     // Text_RenderToVm 0x4663B0 (10 §6): translation or Shift-JIS decode, CPU raster, upload over the strip.
     // Text equal to the vanilla decode takes the vanilla path (system font, byte-formula `x`), so untranslated
     // strings keep their pixels with a pack mounted.
+    // At render scale k the strip's texture is made k× and the text rasterised at k×.
     fn do_text(&mut self, t: &th08_out::drawlist::TextCmd) {
+        self.rescale_texture(t.dst, self.scale);
+        let k = self
+            .textures
+            .get(t.dst.index())
+            .and_then(Option::as_ref)
+            .map_or(1, |x| x.scale);
         let s = self.pack.db.resolve(&t.key, &t.text);
         let translated = !self.pack.db.is_empty() && s != t.text.decode();
         let (font, pack_font) = (self.font.as_deref(), &self.pack.fonts);
         let raster = self
             .text
             .get_or_insert_with(|| crate::text::Raster::new(font, pack_font.clone()));
+        raster.scale = k as usize;
         let (w, size) = (t.w as usize, t.size as usize);
         let rgba = if translated {
             let overflow = self.pack.overflow(t.site);
@@ -2388,7 +2828,7 @@ impl Gfx {
         } else {
             raster.render_outline(&s, t.color, w, size, t.x, t.outline)
         };
-        self.do_write_texture(t.dst, 0, t.y, t.w, t.size, &rgba);
+        self.do_write_texture(t.dst, 0, t.y, t.w, t.size, &rgba, k);
     }
 }
 
@@ -2413,6 +2853,45 @@ impl th08_out::drawlist::Renderer for Gfx {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+// RGBA of logical size `size` from scale `from` to `to`: nearest when enlarging, box mean when shrinking.
+#[expect(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "texel indices and byte means"
+)]
+fn resample_rgba(rgba: &[u8], size: [u32; 2], from: u32, to: u32) -> Cow<'_, [u8]> {
+    if from == to {
+        return Cow::Borrowed(rgba);
+    }
+    let (sw, sh) = ((size[0] * from) as usize, (size[1] * from) as usize);
+    let (dw, dh) = ((size[0] * to) as usize, (size[1] * to) as usize);
+    let r = from as f32 / to as f32;
+    let n = r.ceil().max(1.0) as usize;
+    let mut out = vec![0u8; dw * dh * 4];
+    for y in 0..dh {
+        for x in 0..dw {
+            let mut acc = [0u32; 4];
+            for ty in 0..n {
+                for tx in 0..n {
+                    let o = |i: usize, t: usize| {
+                        ((i as f32 + (t as f32 + 0.5) / n as f32) * r) as usize
+                    };
+                    let (sx, sy) = (o(x, tx).min(sw - 1), o(y, ty).min(sh - 1));
+                    let p = rgba.get((sy * sw + sx) * 4..(sy * sw + sx) * 4 + 4);
+                    for (a, &v) in acc.iter_mut().zip(p.unwrap_or(&[0; 4])) {
+                        *a += u32::from(v);
+                    }
+                }
+            }
+            let nn = (n * n) as u32;
+            for (c, a) in out[(y * dw + x) * 4..][..4].iter_mut().zip(acc) {
+                *c = ((a + nn / 2) / nn) as u8;
+            }
+        }
+    }
+    Cow::Owned(out)
 }
 
 // `w`×`h` RGBA texels at `at`, rows `w * 4` bytes apart.
@@ -2587,6 +3066,69 @@ mod tests {
         let after = frame(&mut gfx, &mut rec, tex);
         assert_eq!(gfx.generation(), 1);
         assert!(before == after, "rebuilt frame differs");
+    }
+
+    // A 1:1 sprite, a rect with edges on pixel centres and a capture drawn back: scale 2 averaged down = scale 1.
+    #[test]
+    fn render_scale_keeps_picture() {
+        let shot = |k: u32| -> Option<image::RgbaImage> {
+            let mut gfx = pollster::block_on(Gfx::headless()).ok()?;
+            gfx.offscreen = true;
+            gfx.render_scale = RenderScale::Fixed(k);
+            let mut rec = Recorder::new();
+            let px: Vec<u8> = (0..16 * 16)
+                .flat_map(|i: u32| {
+                    [
+                        (i * 37 % 251) as u8,
+                        (i * 11 % 241) as u8,
+                        (i * 5) as u8,
+                        255,
+                    ]
+                })
+                .collect();
+            let tex = rec.create_texture(16, 16, &px);
+            let at = |x, y, w, h| Rect { x, y, w, h };
+            rec.sprite(
+                tex,
+                Blend::Alpha,
+                at(100.0, 60.0, 16.0, 16.0),
+                [0.0, 0.0, 1.0, 1.0],
+                [255; 4],
+            );
+            rec.rect(120.0, 64.0, 6.0, 9.0, [40, 200, 90, 255]);
+            gfx.capture(&mut rec, None);
+            let cap = rec.create_texture(32, 32, &[0; 32 * 32 * 4]);
+            rec.capture_rect(cap, [96, 56], [32, 32], [0, 0], [32, 32]);
+            rec.sprite(
+                cap,
+                Blend::Alpha,
+                at(300.0, 200.0, 32.0, 32.0),
+                [0.0, 0.0, 1.0, 1.0],
+                [255; 4],
+            );
+            rec.rect(10.0, 10.0, 20.0, 5.0, [200, 30, 60, 255]);
+            let img = gfx.capture(&mut rec, None);
+            Some(image::RgbaImage::from_fn(640, 480, |x, y| {
+                let mut acc = [0u32; 4];
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let p = img
+                        .get_pixel(x * k + dx.min(k - 1), y * k + dy.min(k - 1))
+                        .0;
+                    acc.iter_mut().zip(p).for_each(|(a, v)| *a += u32::from(v));
+                }
+                image::Rgba(acc.map(|a| (a / 4) as u8))
+            }))
+        };
+        let (Some(one), Some(two)) = (shot(1), shot(2)) else {
+            eprintln!("no GPU adapter; skipped");
+            return;
+        };
+        let diff = one
+            .pixels()
+            .zip(two.pixels())
+            .filter(|(a, b)| a.0[..3] != b.0[..3])
+            .count();
+        assert_eq!(diff, 0, "scale 2 differs from scale 1 in {diff} pixels");
     }
 
     #[test]

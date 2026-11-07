@@ -352,6 +352,7 @@ impl ApplicationHandler<UserEvent> for App {
                 r.pacer.start(Instant::now());
                 gfx(&mut r.ctx).safe = self.read_safe();
                 gfx(&mut r.ctx).blit_options = r.settings.blit;
+                gfx(&mut r.ctx).render_scale = r.settings.render_scale;
                 crate::platform::hitbox::install(gfx(&mut r.ctx), r.settings.hitboxes);
                 if self.suspended {
                     r.pacer.suspend();
@@ -1421,6 +1422,7 @@ fn apply_row(s: &mut Settings, key: &str, v: &str) {
 // overlays and the screenshot size are read from the settings where they are used.
 fn apply_live(r: &mut Running) {
     gfx(&mut r.ctx).blit_options = r.settings.blit;
+    gfx(&mut r.ctx).render_scale = r.settings.render_scale;
     if let Some(v) = &r.volume {
         v.set(r.settings.volume);
     }

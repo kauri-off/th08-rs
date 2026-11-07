@@ -304,6 +304,7 @@ pub struct Settings {
     // Open the port menu when the window / tab loses focus in a stage (desktop, web).
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
+    pub render_scale: th08_render::gfx::RenderScale,
     pub hitboxes: crate::platform::hitbox::Hitboxes,
     pub keys: crate::platform::keymap::KeyMap,
     pub pads: crate::platform::padmap::PadMap,
@@ -401,6 +402,7 @@ impl Settings {
             discord: false,
             pause_unfocused: true,
             blit: th08_render::gfx::BlitOptions::default(),
+            render_scale: th08_render::gfx::RenderScale::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
             keys: crate::platform::keymap::KeyMap::default(),
             pads: crate::platform::padmap::PadMap::default(),
@@ -852,6 +854,38 @@ pub const ENTRIES: &[Entry] = &[
         help: "scale the picture by the largest whole multiple of 640x480 that fits",
         set: |s, v| {
             s.blit.integer = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "render_scale",
+        env: "TH08_RENDER_SCALE",
+        kind: Kind::Enum(&["1", "2", "3", "auto"]),
+        default: "1",
+        group: Group::Display,
+        label: "Render resolution",
+        summary: "Draw the game at 1×, 2× or 3× of 640×480",
+        unit: "",
+        words: &[
+            ("1", "640×480"),
+            ("2", "1280×960"),
+            ("3", "1920×1440"),
+            ("auto", "Fit window"),
+        ],
+        audience: Audience::Player,
+        platforms: Platforms::ALL,
+        persist: true,
+        live: true,
+        help: "internal resolution: 2× or 3× gives sharper rotated sprites, 3D backgrounds and text on large screens; auto picks the largest that fits the window; 1 is the original picture",
+        set: |s, v| {
+            use th08_render::gfx::RenderScale;
+            s.render_scale = match v.trim() {
+                "auto" => RenderScale::Auto,
+                n => match n.parse::<u32>() {
+                    Ok(k @ 1..=3) => RenderScale::Fixed(k),
+                    _ => return Err("expected 1, 2, 3 or auto".into()),
+                },
+            };
             Ok(())
         },
     },

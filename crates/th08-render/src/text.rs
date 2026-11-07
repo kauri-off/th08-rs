@@ -15,6 +15,8 @@ pub struct Raster {
     // Presentation-pack FileFont chain (ARCH_B §1.6, I18N §2.3): translated text only, first font with the glyph
     // wins, the system font last.
     pack: Vec<Face>,
+    // Output texels per strip texel (render scale); 0 is taken as 1.
+    pub scale: usize,
 }
 
 // Port-only font search order; TH08_FONT overrides it.
@@ -93,6 +95,7 @@ impl Raster {
         Self {
             font,
             pack: pack.into_iter().filter_map(file_font).collect(),
+            scale: 1,
         }
     }
 
@@ -240,6 +243,7 @@ pub struct Raster {
     )>,
     // Presentation-pack FileFont chain: the same pixels as native for translated text (ARCH_B §1.6).
     pack: Vec<Face>,
+    pub scale: usize,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -249,6 +253,7 @@ impl Raster {
         Self {
             canvas: None,
             pack: pack.into_iter().filter_map(file_font).collect(),
+            scale: 1,
         }
     }
 
@@ -395,6 +400,10 @@ fn split_two(s: &str) -> (&str, &str) {
 }
 
 impl Raster {
+    fn k(&self) -> usize {
+        self.scale.max(1)
+    }
+
     // One text row, RGBA w×size (10 §6): GDI height 2·size − 2 at 2×, outline ±2 px (2× space), then 2:1 downsample.
     pub fn render(&mut self, s: &str, color: [u8; 3], w: usize, size: usize) -> Vec<u8> {
         self.render_at(s, color, w, size, 0.0)
@@ -406,6 +415,7 @@ impl Raster {
     }
 
     // As `render_at` with the outline argument: −1 → ±1 px offsets (2× space), else ±2 px (10 §6).
+    // At `scale` k the result is (w·k)×(size·k): the work surface and every offset in it scaled by k.
     pub fn render_outline(
         &mut self,
         s: &str,
@@ -415,9 +425,11 @@ impl Raster {
         x: f32,
         outline: i32,
     ) -> Vec<u8> {
-        let (w2, h2) = work_size(w, size);
-        let mask = self.mask(s, (2 * size - 2) as f32, 2.0 * x, 0.0, w2, h2);
-        finish(&mask, color, w, size, outline)
+        let k = self.k();
+        let (w2, h2) = work_size(w, size, k);
+        let kf = k as f32;
+        let mask = self.mask(s, (2 * size - 2) as f32 * kf, 2.0 * x * kf, 0.0, w2, h2);
+        finish(&mask, color, w, size, outline, k)
     }
 
     // Translated text (I18N §2.3): placed by its measured width (`align`, `x` for Left) and fitted by `overflow` to
@@ -436,7 +448,8 @@ impl Raster {
         (align, x, edge): (Align, f32, f32),
         overflow: Overflow,
     ) -> Vec<u8> {
-        let (w2, h2) = work_size(w, size);
+        let k = self.k();
+        let (w2, h2) = work_size(w, size, k);
         let cell = (2 * size - 2) as f32;
         let room = 2.0 * avail(align, x, edge);
         let fit = |width: f32| (room / width.max(1.0)).clamp(MIN_FIT, 1.0);
@@ -465,37 +478,40 @@ impl Raster {
                 _ => (c, 1.0, top),
             };
             let drawn = self.measure(line, c) * sx;
+            let kf = k as f32;
             runs.push(Run {
                 s: line,
-                cell: c,
+                cell: c * kf,
                 sx,
-                x: 2.0 * place(align, x, drawn / 2.0),
-                y: top,
+                x: 2.0 * place(align, x, drawn / 2.0) * kf,
+                y: top * kf,
             });
         }
         let mask = self.mask_runs(&runs, w2, h2);
-        finish(&mask, color, w, size, outline)
+        finish(&mask, color, w, size, outline, k)
     }
 }
 
-// The 2× work rect: a fresh 1024-wide A1R5G5B5 DIB per call, copied as (0, 0, min(2w, 1024), 2·size) (10 §6).
-fn work_size(w: usize, size: usize) -> (usize, usize) {
-    ((2 * w).min(DIB_W), 2 * size + 6)
+// The 2× work rect: a fresh 1024-wide A1R5G5B5 DIB per call, copied as (0, 0, min(2w, 1024), 2·size) (10 §6),
+// times the render scale `k`.
+fn work_size(w: usize, size: usize, k: usize) -> (usize, usize) {
+    ((2 * w).min(DIB_W) * k, (2 * size + 6) * k)
 }
 
 // 10 §6 steps 2–5 over a coverage mask of the work rect: outline, colour, gradient, TRIANGLE 2:1, RGBA w×size.
-fn finish(mask: &[u8], color: [u8; 3], w: usize, size: usize, outline: i32) -> Vec<u8> {
-    let o = if outline == -1 { 1 } else { 2 };
-    let (w2, h2) = work_size(w, size);
+fn finish(mask: &[u8], color: [u8; 3], w: usize, size: usize, outline: i32, k: usize) -> Vec<u8> {
+    let o = if outline == -1 { k } else { 2 * k };
+    let c0 = 2 * k;
+    let (w2, h2) = work_size(w, size, k);
     let mut dib = vec![Px::default(); w2 * h2];
     // Outline always black at (2x+2±o, 2), (2x+2, 2±o), then the colour at the centre (2x+2, 2) (10 §6).
     let edge = [0; 3];
     for (dx, dy, c) in [
-        (2 + o, 2, edge),
-        (2 - o, 2, edge),
-        (2, 2 - o, edge),
-        (2, 2 + o, edge),
-        (2, 2, color),
+        (c0 + o, c0, edge),
+        (c0 - o, c0, edge),
+        (c0, c0 - o, edge),
+        (c0, c0 + o, edge),
+        (c0, c0, color),
     ] {
         for y in 0..h2 - dy {
             for x in 0..w2 - dx {
@@ -506,8 +522,9 @@ fn finish(mask: &[u8], color: [u8; 3], w: usize, size: usize, outline: i32) -> V
             }
         }
     }
-    gradient(&mut dib, w2, h2, outline == -1);
-    let out = triangle_2to1(&dib, w2, 2 * size);
+    gradient(&mut dib, w2, h2, outline == -1, k);
+    let out = triangle_2to1(&dib, w2, 2 * size * k);
+    let (w, size) = (w * k, size * k);
     let mut rgba = vec![0u8; w * size * 4];
     for y in 0..size {
         for x in 0..w2 / 2 {
@@ -550,9 +567,10 @@ impl Px {
 
 // Post-pass 0x43F31C (10 §6 step 4): alpha 0 → colour 0; alpha 1 → vertical gradient in 5-bit integer arithmetic.
 // c / N are byte offsets in the 1024-pixel-row DIB over the region rows 0 … h−1 (exact for the 512-wide text
-// textures; a narrower strip gets the left part of that region).
-fn gradient(dib: &mut [Px], w: usize, h: usize, flag: bool) {
-    let n = (2 * DIB_W * h) as u32;
+// textures; a narrower strip gets the left part of that region). At render scale `k` the DIB row is k·1024 wide.
+fn gradient(dib: &mut [Px], w: usize, h: usize, flag: bool, k: usize) {
+    let row = DIB_W * k;
+    let n = (2 * row * h) as u32;
     for y in 0..h {
         for x in 0..w {
             let p = &mut dib[y * w + x];
@@ -560,7 +578,7 @@ fn gradient(dib: &mut [Px], w: usize, h: usize, flag: bool) {
                 p.rgb = [0; 3];
                 continue;
             }
-            let c = (2 * (y * DIB_W + x)) as u32;
+            let c = (2 * (y * row + x)) as u32;
             let [r, g, b] = &mut p.rgb;
             if *b > *r {
                 let d = if flag { 4 } else { 2 };
@@ -755,7 +773,7 @@ mod tests {
             alpha: true,
         };
         dib[1].rgb = [5; 3];
-        gradient(&mut dib, w, h, false);
+        gradient(&mut dib, w, h, false, 1);
         assert_eq!(dib[0].rgb, [31; 3]);
         assert_eq!(dib[1].rgb, [0; 3]);
         assert_eq!(dib[(h - 1) * w].rgb, [0, 16, 16]);
