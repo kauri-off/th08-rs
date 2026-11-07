@@ -903,6 +903,11 @@ impl Stage {
         }
     }
 
+    #[cfg(test)]
+    pub fn spell_vms_mut(&mut self) -> &mut Vec<AnmVm> {
+        &mut self.spell_vms
+    }
+
     // Spell_End 0x416AD0: +0xB24 = 0.
     pub fn end_spell_bg(&mut self) {
         self.spell_state = 0;

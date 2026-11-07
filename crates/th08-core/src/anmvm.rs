@@ -1468,4 +1468,85 @@ mod tests {
             assert_eq!(VmFlags::from_bits_retain(x).bits(), x);
         }
     }
+
+    // 05 §5 op 35: rotation slot from the current rotation to (x, y, z), easing = the mode's low byte; POST writes
+    // wrap(start + (end − start)·t) per axis (§6 step 2, wrap §6.3) and sets bit 2; the end lands `dur` frames on.
+    #[test]
+    fn op35_rotation_time() {
+        let mut rng = crate::rng::Rng::default();
+        let mut s = Vec::new();
+        s.extend(ins(12, 0, 0, &[f(0.5), f(-1.0), f(3.0)]));
+        s.extend(ins(35, 1, 0, &[4, 0x104, f(1.5), f(-1.0), f(4.0)]));
+        s.extend(ins(2, 100, 0, &[]));
+        let (mut anm, mut vm) = vm_with(s);
+        let (start, end) = ([0.5f32, -1.0, 3.0], [1.5f32, -1.0, 4.0]);
+        assert_eq!(vm.rotation, start);
+        for k in 1..=4 {
+            vm.flags &= !F_ROT_DIRTY;
+            vm.run(&mut anm, &mut rng);
+            let t = ease(4, k as f32 / 4.0);
+            let want: [f32; 3] =
+                std::array::from_fn(|i| wrap_add(start[i], (end[i] - start[i]) * t));
+            assert_eq!(vm.rotation, want, "frame {k}");
+            assert!(vm.flags & F_ROT_DIRTY != 0);
+        }
+        assert_eq!(vm.rotation[2], 4.0 - 6.283_185_5);
+        vm.flags &= !F_ROT_DIRTY;
+        vm.run(&mut anm, &mut rng);
+        assert_eq!(vm.rotation, [1.5, -1.0, 4.0 - 6.283_185_5]);
+        assert_eq!(vm.flags & F_ROT_DIRTY, 0);
+    }
+
+    // 05 §5 op 69: ijne a, b, off, t: if a ≠ b, time.Set(t) and ip = start + off, continuing in the same frame;
+    // equal operands fall through. `a` here is variable I0 (mask bit 0).
+    #[test]
+    fn op69_ijne() {
+        let mut s = Vec::new();
+        s.extend(ins(37, 0, 1, &[10000, 3]));
+        s.extend(ins(69, 0, 1, &[10000, 3, 0, 50]));
+        let jump = s.len();
+        s.extend(ins(69, 0, 1, &[10000, 4, 0, 7]));
+        s.extend(ins(6, 0, 0, &[f(9.0), f(9.0), f(9.0)]));
+        let target = s.len() as u32;
+        s.extend(ins(6, 7, 0, &[f(1.0), f(2.0), f(3.0)]));
+        s.extend(ins(2, 8, 0, &[]));
+        s[jump + 16..jump + 20].copy_from_slice(&target.to_le_bytes());
+        let (_, vm) = vm_with(s);
+        assert_eq!(vm.pos, [1.0, 2.0, 3.0]);
+        assert_eq!(vm.time.cur, 8);
+        assert_eq!(vm.ip, Some(AnmOff(target + 20)));
+    }
+
+    // 05 §4 / §5 op 89: time and ip as saved on interrupt entry, so the instruction current when the interrupt
+    // arrived runs again (here an iadd due this very frame, and a wait_interrupt that yields again).
+    #[test]
+    fn op89_return_interrupt() {
+        let mut rng = crate::rng::Rng::default();
+        let mut s = Vec::new();
+        s.extend(ins(0, 0, 0, &[]));
+        let at = s.len() as u32;
+        s.extend(ins(39, 3, 1, &[10000, 1]));
+        let wait = s.len() as u32;
+        s.extend(ins(20, 3, 0, &[]));
+        s.extend(ins(21, 40, 0, &[5]));
+        s.extend(ins(6, 40, 0, &[f(1.0), f(2.0), f(3.0)]));
+        s.extend(ins(89, 40, 0, &[]));
+        s.extend(ins(-1, 0, 0, &[]));
+        let (mut anm, mut vm) = vm_with(s);
+        vm.run(&mut anm, &mut rng);
+        assert_eq!((vm.time.cur, vm.ip), (2, Some(AnmOff(at))));
+        vm.run(&mut anm, &mut rng);
+        assert_eq!((vm.time.cur, vm.ip), (3, Some(AnmOff(at))));
+        vm.pending_interrupt = 5;
+        vm.run(&mut anm, &mut rng);
+        assert_eq!(vm.pos, [1.0, 2.0, 3.0]);
+        assert_eq!(vm.ivars[0], 1);
+        assert_eq!((vm.time.cur, vm.ip), (3, Some(AnmOff(wait))));
+        assert!(vm.flags & F_WAIT_INT != 0 && vm.visible());
+        vm.pending_interrupt = 5;
+        vm.run(&mut anm, &mut rng);
+        assert_eq!(vm.ivars[0], 1);
+        assert_eq!((vm.time.cur, vm.ip), (3, Some(AnmOff(wait))));
+        assert!(vm.flags & F_WAIT_INT != 0);
+    }
 }

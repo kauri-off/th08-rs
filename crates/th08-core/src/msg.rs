@@ -908,4 +908,48 @@ mod tests {
         assert_eq!(run(4, false, false, 0), (3, 0));
         assert_eq!(run(1, true, true, 1), (1, 0));
     }
+
+    // 10 §5 / §5.1 op 10: halt stalls forever: the ip stays on it, the clock is not ticked (Ctrl only moves it by
+    // the §5 skip rules), the entry stays running and, unlike op 11, no game-clear trigger in any stage.
+    #[test]
+    fn op10_halt_stalls_forever() {
+        let mut rng = crate::rng::Rng::default();
+        let mut anm = AnmManager::default();
+        let data = vec![
+            1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 13, 4, 1, 0, 0, 0, 2, 0, 10, 0, 0, 0, 0, 0,
+        ];
+        for stage in [2, 6] {
+            let mut d = Dialogue {
+                file: Some(parse(data.clone()).unwrap().into()),
+                ..Dialogue::default()
+            };
+            d.info.stage = stage;
+            d.start(0);
+            let idle = Input::default();
+            for _ in 0..2 {
+                d.run(&mut anm, &mut rng, &idle, false);
+            }
+            assert_eq!((d.clock.cur, d.ip), (2, MsgOff(16)));
+            let skip = Input {
+                held: input::SKIP,
+                ..Input::default()
+            };
+            for (inp, clock) in [
+                (&idle, 2),
+                (&idle, 2),
+                (&skip, 60),
+                (&idle, 60),
+                (&skip, 60),
+            ] {
+                d.run(&mut anm, &mut rng, inp, false);
+                assert_eq!(
+                    (d.clock.cur, d.ip, d.entry),
+                    (clock, MsgOff(16), 0),
+                    "stage {stage}"
+                );
+                assert!(d.active() && d.blocking());
+            }
+            assert!(!d.events.contains(&Event::HaltFinal));
+        }
+    }
 }

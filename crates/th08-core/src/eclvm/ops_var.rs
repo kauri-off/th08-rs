@@ -8,6 +8,11 @@ use crate::nanprobe::{self, Site};
 use std::f32::consts::PI;
 use th08_formats::ecl::{Arg, Arith, Dst, Ins, VarOp};
 
+// Op 86 getter cases that never touch the enemy (07 §7 op 86, getter 0x41F420).
+fn is_global_id(id: i32) -> bool {
+    matches!(id, 10032..=10035 | 10040 | 10041 | 10052 | 10061..=10064 | 10097..=10099)
+}
+
 // Ops 10–14 / 20–24: C truncating / and %, two's complement wrap; the 0 result for b == 0 is a port guard.
 fn int_arith(kind: Arith, a: i32, b: i32) -> i32 {
     match kind {
@@ -222,11 +227,24 @@ impl Exec<'_> {
 
     // Ops 86 / 87: variable `var` evaluated once, with the op's own getter, on boss[slot]'s main context:
     // 87 only if the boss exists; 86 has no such test.
+    // The `var` word is the id itself (87: as f32, like its literal), evaluated on the boss, never on the caller.
     fn get_boss(&mut self, t: &mut Thread, ins: &Ins, dst: Dst, var: Arg, slot: Arg, float: bool) {
-        let (var, slot) = (self.ai(t, var), self.ai(t, slot));
-        // Op 86: an empty entry faults in the original for enemy/context ids (0 uses); skipped as a stand-in.
-        let Some(b) = self.m.boss(slot) else {
+        if !var.var {
+            if float {
+                self.set_f(t, ins, dst, f32::from_bits(var.raw));
+            } else {
+                self.set_i(t, ins, dst, var.raw.cast_signed());
+            }
             return;
+        }
+        let slot = self.ai(t, slot);
+        let id = var.raw.cast_signed();
+        let b = match self.m.boss(slot) {
+            Some(b) => b,
+            // Op 86 reads through a null enemy: global-only ids still read; enemy/context ids fault
+            // (0 uses), skipped as a stand-in.
+            None if !float && is_global_id(id) => self.idx,
+            None => return,
         };
         let other = (b != self.idx).then(|| self.m.enemies[b].clone());
         let (e, ctx) = match &other {
@@ -234,7 +252,14 @@ impl Exec<'_> {
             None => (&*self.e, &t.ctx),
         };
         if float {
-            let v = var_f(self.m, self.sys.rng, e, ctx, var as f32, self.sys.rank.rank);
+            let v = var_f(
+                self.m,
+                self.sys.rng,
+                e,
+                ctx,
+                f32::from_bits(var.raw),
+                self.sys.rank.rank,
+            );
             self.set_f(t, ins, dst, v);
         } else {
             let pl = crate::pl!(self.sys);
@@ -245,7 +270,7 @@ impl Exec<'_> {
                 self.sys.rng,
                 e,
                 ctx,
-                var,
+                id,
                 self.sys.rank.rank,
             );
             self.set_i(t, ins, dst, v);

@@ -44,10 +44,11 @@ impl Exec<'_> {
                 let n = crate::pl!(self.sys).stats.spells;
                 t.ctx.set_int(V_INT0, n);
             }
-            // Freeze byte 0x160F534 := arg; stage VMs get interrupt 2, or 1 when arg is 0.
+            // Freeze byte 0x160F534 := low byte of arg; stage VMs get interrupt 2, or 1 when that byte is 0.
             26 => {
-                *self.sys.timer_pause = arg;
-                self.stage_interrupt(if arg != 0 { 2 } else { 1 });
+                let b = i32::from(arg.to_le_bytes()[0]);
+                *self.sys.timer_pause = b;
+                self.stage_interrupt(if b != 0 { 2 } else { 1 });
             }
             27 => self.spawn_from_marked(t),
             12 | 14 => self.toggle_ghost(t, n == 14),

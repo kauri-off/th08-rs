@@ -1226,8 +1226,9 @@ mod tests {
     fn boss_var_single_getter() {
         let mut ts = ts();
         let sys = &mut ts.sys();
-        let op87 = ins_v(0, 87, 1, &[10016.0f32.to_bits().cast_signed(), 10082, 0]);
-        let op86 = ins_v(0, 86, 1, &[10000, 10032, 1]);
+        let f = |x: f32| x.to_bits().cast_signed();
+        let op87 = ins_v(0, 87, 3, &[f(10016.0), f(10082.0), 0]);
+        let op86 = ins_v(0, 86, 3, &[10000, 10032, 1]);
         let (mut anm, mut m) = manager(&[&[op87, op86]]);
         spawn(&mut m, 0, 0, -1, 0);
         spawn(&mut m, 1, 0, -1, 0);
@@ -1542,6 +1543,320 @@ mod tests {
             let before = sys.rng.counter;
             ecl_run(&mut m, &mut anm, 0, sys);
             assert_eq!(sys.rng.counter, before, "flags {flags:#x}");
+        }
+    }
+
+    // 07 §7 op 87: a variable operand is evaluated on boss[slot] (its main context), not on the caller.
+    #[test]
+    fn op87_reads_var_on_boss() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let f = |x: f32| x.to_bits().cast_signed();
+        let (mut anm, mut m) = manager(&[&[ins_v(0, 87, 3, &[f(10016.0), f(10017.0), 1])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        spawn(&mut m, 1, 0, -1, 0);
+        m.bosses = [Some(EnemyIdx(0)), Some(EnemyIdx(1)), None, None];
+        m.enemies[0].main.ctx.set_flt(V_FLT0 + 1, 3.0);
+        m.enemies[1].main.ctx.set_flt(V_FLT0 + 1, 7.5);
+        ecl_run(&mut m, &mut anm, 0, sys);
+        assert_eq!(m.enemies[0].main.ctx.flt(V_FLT0), 7.5);
+    }
+
+    // 07 §7 op 87: a literal operand is copied as its raw f32 bits without reading the slot (empty here).
+    #[test]
+    fn op87_literal_skips_slot() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let f = |x: f32| x.to_bits().cast_signed();
+        let (mut anm, mut m) = manager(&[&[
+            ins_v(0, 87, 1, &[f(10016.0), f(3.125), 2]),
+            ins_v(0, 87, 1, &[f(10017.0), 10082, 2]),
+        ]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        let rng = sys.rng.state;
+        ecl_run(&mut m, &mut anm, 0, sys);
+        let c = &m.enemies[0].main.ctx;
+        assert_eq!(c.flt(V_FLT0), 3.125);
+        assert_eq!(c.flt(V_FLT0 + 1).to_bits(), 10082);
+        assert_eq!(sys.rng.state, rng);
+    }
+
+    // 07 §7 op 87: a variable operand with an empty boss entry leaves the destination alone.
+    #[test]
+    fn op87_empty_slot_no_write() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let f = |x: f32| x.to_bits().cast_signed();
+        let (mut anm, mut m) = manager(&[&[ins_v(0, 87, 3, &[f(10016.0), f(10040.0), 3])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].main.ctx.set_flt(V_FLT0, -4.0);
+        ecl_run(&mut m, &mut anm, 0, sys);
+        assert_eq!(m.enemies[0].main.ctx.flt(V_FLT0), -4.0);
+    }
+
+    // 07 §7 op 86: with an empty boss entry a global-only id is still read and written; an enemy id is not.
+    #[test]
+    fn op86_empty_slot_global_id() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let (mut anm, mut m) = manager(&[&[
+            ins_v(0, 86, 3, &[10000, 10040, 3]),
+            ins_v(0, 86, 3, &[10001, 10008, 3]),
+        ]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].main.ctx.set_int(V_INT0 + 1, -9);
+        ecl_run(&mut m, &mut anm, 0, sys);
+        let c = &m.enemies[0].main.ctx;
+        assert_eq!((c.int(V_INT0), c.int(V_INT0 + 1)), (m.g.difficulty, -9));
+    }
+
+    // 07 §7 op 121: laser k in startup / active → state 2 (fade) with its timer at 0; a fading, empty or
+    // out-of-range slot is left alone.
+    #[test]
+    fn op121_laser_cancel() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let (mut anm, mut m) = manager(&[&[
+            ins(0, 121, &[0]),
+            ins(0, 121, &[1]),
+            ins(0, 121, &[2]),
+            ins(0, 121, &[3]),
+            ins(0, 121, &[40]),
+        ]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        let b = crate::bm!(sys);
+        for (k, state) in [(0usize, 0u8), (1, 1), (2, 2)] {
+            let l = &mut b.lasers[k + 5];
+            (l.alive, l.state) = (true, state);
+            l.timer.set(17);
+            m.enemies[0].lasers[k] = Some(k + 5);
+        }
+        b.lasers[9].state = 1;
+        m.enemies[0].lasers[3] = Some(9);
+        ecl_run(&mut m, &mut anm, 0, sys);
+        let b = crate::bm!(sys);
+        for k in 5..7 {
+            assert_eq!(
+                (b.lasers[k].state, b.lasers[k].timer.cur),
+                (2, 0),
+                "slot {k}"
+            );
+            assert_eq!(b.lasers[k].timer.frac, 0.0);
+        }
+        assert_eq!((b.lasers[7].state, b.lasers[7].timer.cur), (2, 17));
+        assert_eq!(b.lasers[9].state, 1);
+    }
+
+    // 07 §12 native 18: game speed := 1 / arg.
+    #[test]
+    fn native18_sets_game_speed() {
+        for arg in [1, 3, 4] {
+            let mut ts = ts();
+            let sys = &mut ts.sys();
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[18, arg])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            ecl_run(&mut m, &mut anm, 0, sys);
+            assert_eq!(anm.speed, 1.0 / arg as f32, "arg {arg}");
+        }
+    }
+
+    // 07 §12 native 25 (and 09 §6.1): boxes 590 long from the final pos, heights 288 (hit) / 224 (graze, only
+    // when the e+0x2E14 timer changed to a multiple of 12).
+    #[test]
+    fn native25_laser_box() {
+        let run = |player_y: f32, timer: (i32, i32)| {
+            let mut ts = ts();
+            let sys = &mut ts.sys();
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[25, 0])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            let e = &mut m.enemies[0];
+            (e.pos, e.pos_offset) = ([100.0, 100.0, 0.0], [0.0, 50.0, 0.0]);
+            (e.boss_timer.prev, e.boss_timer.cur) = timer;
+            let pl = crate::pl!(sys);
+            pl.pos = [300.0, player_y, 0.0];
+            ecl_run(&mut m, &mut anm, 0, sys);
+            let pl = crate::pl!(sys);
+            (pl.hits, pl.grazes)
+        };
+        // Half height 144 around y 150 (final pos): a hit; from pos (y 100) it would miss.
+        assert_eq!(run(150.0 + 130.0, (0, 0)), (1, 0));
+        assert_eq!(run(150.0 - 143.0, (0, 0)), (1, 0));
+        // Outside the big box, inside small half 112 + graze margin 48.
+        assert_eq!(run(150.0 + 150.0, (11, 12)), (0, 1));
+        assert_eq!(run(150.0 + 150.0, (12, 12)), (0, 0));
+        assert_eq!(run(150.0 + 150.0, (12, 13)), (0, 0));
+        assert_eq!(run(150.0 + 165.0, (11, 12)), (0, 0));
+    }
+
+    fn spell_bg_stage(ts: &mut crate::game::TestSys) {
+        let std = th08_formats::stdfile::Std {
+            quad_count: 0,
+            bgm: Default::default(),
+            objects: Vec::new(),
+            instances: Vec::new(),
+            script: Vec::new(),
+        };
+        let mut st = crate::stage::Stage::new(0, std);
+        *st.spell_vms_mut() = vec![crate::anmvm::AnmVm::default(); 2];
+        ts.stage = Some(Box::new(st));
+    }
+
+    fn spell_bg_interrupts(sys: &mut crate::game::Sys) -> Vec<u16> {
+        let st = sys.stage.as_deref_mut().unwrap();
+        st.spell_vms_mut()
+            .iter()
+            .map(|v| v.pending_interrupt)
+            .collect()
+    }
+
+    // 07 §12 native 26: freeze byte 0x160F534 := low byte of arg; spell-background VMs interrupt 2 when it is
+    // non-zero, else 1.
+    #[test]
+    fn native26_freeze_byte() {
+        for (arg, byte, k) in [
+            (1, 1, 2),
+            (0x101, 1, 2),
+            (0x100, 0, 1),
+            (0, 0, 1),
+            (-1, 0xFF, 2),
+        ] {
+            let mut ts = ts();
+            spell_bg_stage(&mut ts);
+            let sys = &mut ts.sys();
+            *sys.timer_pause = 7;
+            let (mut anm, mut m) = manager(&[&[ins(0, 136, &[26, arg])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            ecl_run(&mut m, &mut anm, 0, sys);
+            assert_eq!(*sys.timer_pause, byte, "arg {arg:#x}");
+            assert_eq!(spell_bg_interrupts(sys), [k, k], "arg {arg:#x}");
+        }
+    }
+
+    // 07 §12 native 27: each live bullet with flag 0x100000 spawns enemy sub = var 10038 at its position, life
+    // 800, item −2, score 10, its var 10016 = the bullet angle; the flag is cleared.
+    // SPEC-GAP: native 27 state test (free bullets), spawn z and spawn order vs flag clear are not specified.
+    #[test]
+    fn native27_spawn_from_marked() {
+        let mut ts = ts();
+        let sys = &mut ts.sys();
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[27, 0])], &[]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        m.enemies[0].main.ctx.set_int(V_INT1 + 2, 1);
+        let b = crate::bm!(sys);
+        for (k, (x, a, flags)) in [
+            (10.0, 0.5, 0x10_0001),
+            (20.0, 1.0, 1),
+            (30.0, -2.0, 0x10_0000),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bl = &mut b.bullets[k * 3];
+            (bl.state, bl.flags, bl.pos, bl.angle) = (1, flags, [x, x + 1.0, 0.0], a);
+        }
+        ecl_run(&mut m, &mut anm, 0, sys);
+        let b = crate::bm!(sys);
+        assert_eq!(
+            [b.bullets[0].flags, b.bullets[3].flags, b.bullets[6].flags],
+            [1, 1, 0]
+        );
+        let spawned: Vec<_> = m.enemies[1..4]
+            .iter()
+            .filter(|e| e.alive())
+            .map(|e| {
+                (
+                    e.main.ctx.sub,
+                    [e.pos[0], e.pos[1]],
+                    e.life,
+                    e.item,
+                    e.score,
+                    e.main.ctx.flt(V_FLT0),
+                )
+            })
+            .collect();
+        assert_eq!(
+            spawned,
+            [
+                (1, [10.0, 11.0], 800, -2, 10, 0.5),
+                (1, [30.0, 31.0], 800, -2, 10, -2.0)
+            ]
+        );
+    }
+
+    // Bullet VM0s of slot 0 get a file with 0x70 sprites so `AnmVm_SetSprite` succeeds.
+    fn sprite_file(anm: &mut AnmManager) {
+        let sprites = (0..0x70)
+            .map(|id| th08_formats::anm::Sprite {
+                id,
+                x: 0.0,
+                y: 0.0,
+                w: 16.0,
+                h: 16.0,
+            })
+            .collect();
+        let chunk = th08_formats::anm::Chunk {
+            name: "t".into(),
+            width: 256,
+            height: 256,
+            sprites,
+            scripts: Vec::new(),
+            has_texture: false,
+        };
+        anm.insert(0, "t", vec![chunk], |_| crate::drawlist::TexId(0));
+    }
+
+    // 07 §12 natives 28 / 29: 28 sets speed 1/arg first, interrupt 2, live velocities × the new speed, +0x218 :=
+    // sprite and sprites 0x60–0x6F → 0x6F; 29 scales by 1/speed, restores only sprites in 0x60–0x6F from +0x218
+    // (a bullet spawned while slowed gets its template sprite), sets Supervisor flag 0x20 when 1/arg < 1, speed 1,
+    // interrupt 1.
+    #[test]
+    fn native28_29_slow_down_and_undo() {
+        let mut ts = ts();
+        spell_bg_stage(&mut ts);
+        let sys = &mut ts.sys();
+        let (mut anm, mut m) = manager(&[&[ins(0, 136, &[28, 4])]]);
+        sprite_file(&mut anm);
+        spawn(&mut m, 0, 0, -1, 0);
+        let b = crate::bm!(sys);
+        for (k, (state, sprite)) in [(1, 0x64), (1, 0x20), (0, 0x64)].into_iter().enumerate() {
+            let bl = &mut b.bullets[k];
+            (bl.state, bl.vel) = (state, [2.0, 4.0, 0.5]);
+            bl.vms[0].sprite_index = sprite;
+        }
+        ecl_run(&mut m, &mut anm, 0, sys);
+        assert_eq!(anm.speed, 0.25);
+        assert_eq!(spell_bg_interrupts(sys), [2, 2]);
+        let b = crate::bm!(sys);
+        let got = |b: &crate::bullet::BulletManager, k: usize| {
+            let x = &b.bullets[k];
+            (x.vel, x.vms[0].sprite_index, x.saved_sprite)
+        };
+        assert_eq!(got(b, 0), ([0.5, 1.0, 0.125], 0x6F, 0x64));
+        assert_eq!(got(b, 1), ([0.5, 1.0, 0.125], 0x20, 0x20));
+        assert_eq!(got(b, 2), ([2.0, 4.0, 0.5], 0x64, 0));
+        // Spawned while slowed: its +0x218 is the template sprite.
+        let bl = &mut b.bullets[3];
+        (bl.state, bl.vel, bl.saved_sprite) = (1, [1.0, 0.0, 0.0], 0x22);
+        bl.vms[0].sprite_index = 0x65;
+
+        let (_, mut m) = manager(&[&[ins(0, 136, &[29, 2])]]);
+        spawn(&mut m, 0, 0, -1, 0);
+        ecl_run(&mut m, &mut anm, 0, sys);
+        assert_eq!((anm.speed, anm.slowdown_restore), (1.0, true));
+        assert_eq!(spell_bg_interrupts(sys), [1, 1]);
+        let b = crate::bm!(sys);
+        assert_eq!(got(b, 0), ([2.0, 4.0, 0.5], 0x64, 0x64));
+        assert_eq!(got(b, 1), ([2.0, 4.0, 0.5], 0x20, 0x20));
+        assert_eq!(got(b, 3), ([4.0, 0.0, 0.0], 0x22, 0x22));
+
+        // 1/arg = 1 is not < 1: the Supervisor flag stays as it was.
+        for arg in [1, 0x7FFF] {
+            let mut anm = AnmManager::default();
+            anm.speed = 0.5;
+            let (_, mut m) = manager(&[&[ins(0, 136, &[29, arg])]]);
+            spawn(&mut m, 0, 0, -1, 0);
+            ecl_run(&mut m, &mut anm, 0, sys);
+            assert_eq!(anm.slowdown_restore, arg != 1, "arg {arg}");
         }
     }
 }
