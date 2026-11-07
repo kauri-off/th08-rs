@@ -93,20 +93,6 @@ abstract class GameData : DefaultTask() {
     }
 }
 
-// The menu's serif face (i18n/fonts, made by tools/i18n_font_subset) as assets/fonts.
-abstract class UiFont : DefaultTask() {
-    @get:InputFiles abstract val files: ConfigurableFileCollection
-    @get:OutputDirectory abstract val outputDir: DirectoryProperty
-
-    @TaskAction
-    fun run() {
-        val out = File(outputDir.get().asFile, "fonts")
-        out.deleteRecursively()
-        out.mkdirs()
-        files.files.forEach { it.copyTo(File(out, it.name)) }
-    }
-}
-
 // Translation packs as assets/packs/lang_xx; the launcher copies them into filesDir/packs (LauncherActivity).
 abstract class PackAssets : DefaultTask() {
     @get:InputFiles abstract val dirs: ConfigurableFileCollection
@@ -235,12 +221,10 @@ androidComponents {
         val schema = tasks.register<SettingsSchema>("settingsSchema$cap") { repo.set(repoDir) }
         val data = tasks.register<GameData>("gameData$cap") { files.from(gameFiles(prop("th08.data"))) }
         val packs = tasks.register<PackAssets>("packAssets$cap") { dirs.from(packDirs()) }
-        val font = tasks.register<UiFont>("uiFont$cap") { files.from(File(repoDir, "i18n/fonts/NotoSerifJP-ui.otf")) }
         v.sources.jniLibs?.addGeneratedSourceDirectory(cargo, CargoBuild::outputDir)
         v.sources.assets?.addGeneratedSourceDirectory(schema, SettingsSchema::outputDir)
         v.sources.assets?.addGeneratedSourceDirectory(data, GameData::outputDir)
         v.sources.assets?.addGeneratedSourceDirectory(packs, PackAssets::outputDir)
-        v.sources.assets?.addGeneratedSourceDirectory(font, UiFont::outputDir)
     }
 }
 

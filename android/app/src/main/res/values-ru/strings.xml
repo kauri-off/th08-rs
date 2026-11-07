@@ -165,9 +165,4 @@
   <string name="stats_cleared">Всё пройдено</string>
   <string name="stats_clears">Отметки прохождения</string>
   <string name="stats_clears_hint">A / B: пройден финальный уровень A или B; * — ещё и без продолжений.</string>
-  <string name="settings_tab">Настройки</string>
-  <string name="play_help">Начать игру с этими настройками.</string>
-  <string name="device_touch">Сенсорный экран</string>
-  <string name="word_off">Выкл</string>
-  <string name="word_on">Вкл</string>
 </resources>
