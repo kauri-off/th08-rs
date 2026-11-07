@@ -411,10 +411,12 @@ impl MainMenu {
         self.practice_run(ctx);
     }
 
-    // Entry (12 §2.5): range interrupt 18, portraits entries 1–3, +0x6C = 0, cursor = g_StageIdx (0 if unavailable).
+    // Entry (12 §2.5): range interrupt 18, portraits entries 1–3, +0x6C = 0, practice flag set (the +0x6C forward
+    // reaches it with bit 0 cleared by MainMenu_OnRegister, 12 §2.2), cursor = g_StageIdx (0 if unavailable).
     fn practice_enter(&mut self, ctx: &mut Ctx) {
         {
             self.back = 0;
+            ctx.w.game.flags |= F_PRACTICE;
             self.interrupt_all(18);
             self.char_vms_list(i32::from(ctx.w.game.shot));
             self.cursor = int(ctx.w.game.stage).clamp(0, 7);

@@ -541,6 +541,7 @@ impl MainMenu {
             self.idle + 1
         };
         // Demo (12 §2.2): idle counter reset by any raw input; after 1500 frames load demorpy((n+1) mod 4).
+        // SPEC-GAP: compare / increment order of +0x14430 (title_demo: the original loads one call later than `>= 1500`).
         if self.idle >= 1500 {
             self.idle = 0;
             if Self::top_demo(ctx) {
@@ -740,12 +741,12 @@ impl MainMenu {
                 DIFF_EXTRA => 1,
                 _ => 0,
             };
-            ctx.w.game.flags &= !F_PRACTICE;
+            // flags &= ~1 with the switch to screen 0, not on the cancel frame (12 §2.3).
             self.pending = Some(Pending {
                 frames: 20,
                 screen: TOP,
                 cursor,
-                clear_flags: 0,
+                clear_flags: F_PRACTICE,
             });
         }
     }
@@ -885,12 +886,11 @@ impl MainMenu {
                 // cursor 2 after 30 frames (12 §2.4).
                 ctx.w.sound.play(sound::CANCEL);
                 self.interrupt_all(6);
-                ctx.w.game.flags &= !F_PRACTICE;
                 self.pending = Some(Pending {
                     frames: 30,
                     screen: TOP,
                     cursor: 2,
-                    clear_flags: 0,
+                    clear_flags: F_PRACTICE,
                 });
             } else {
                 // No interrupt here (12 §2.4): the difficulty screen's enter interrupt 7 does the transition.
