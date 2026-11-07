@@ -549,8 +549,8 @@ pub struct PortMenu {
     pub speed: Option<(u32, u32)>,
     // Slow motion was used: score.dat and replays are not saved.
     pub no_saves: bool,
-    // The paused stage and difficulty (`stage_line`), the heading's caption.
-    pub stage: Option<(String, String)>,
+    // The paused stage, difficulty and team (`stage_line`), the heading's caption.
+    pub stage: Option<StageLine>,
     // The live overlay settings (None: no overlay, no layout editor), the open editor, a saved layout not yet taken.
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
@@ -815,20 +815,29 @@ struct MenuState<'a> {
     speed: Option<(u32, u32)>,
     no_saves: bool,
     quit: bool,
-    stage: Option<&'a (String, String)>,
+    stage: Option<&'a StageLine>,
 }
 
-// The paused stage ("1" … "6B", "Extra") and difficulty word, while a stage is played.
-pub fn stage_line(w: &th08_core::world::World) -> Option<(String, String)> {
+// The paused stage ("1" … "6B", "Extra"), difficulty word and shot type (0–11), while a stage is played.
+#[derive(Clone, Copy, Debug)]
+pub struct StageLine {
+    pub stage: &'static str,
+    pub difficulty: &'static str,
+    pub shot: u8,
+}
+
+pub fn stage_line(w: &th08_core::world::World) -> Option<StageLine> {
     const STAGES: [&str; 9] = ["1", "2", "3", "4A", "4B", "5", "6A", "6B", "Extra"];
     const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
     let g = &w.game;
     if g.scene != th08_core::types::SceneId::Game {
         return None;
     }
-    let stage = STAGES.get(g.stage)?;
-    let diff = DIFF.get(usize::try_from(g.difficulty).ok()?)?;
-    Some(((*stage).to_string(), (*diff).to_string()))
+    Some(StageLine {
+        stage: STAGES.get(g.stage)?,
+        difficulty: DIFF.get(usize::try_from(g.difficulty).ok()?)?,
+        shot: g.shot,
+    })
 }
 
 // The egui context of a menu, with the serif and CJK faces.
@@ -941,16 +950,26 @@ impl Words {
         }
     }
 
-    fn heading_caption(&self, m: &MenuState<'_>) -> String {
+    // `team`: add the shot type's team ("Stage 1 · Normal · Reimu & Yukari"); the phone's bar is too narrow.
+    fn heading_caption(&self, m: &MenuState<'_>, team: bool) -> String {
         if self.lang == Lang::Ja {
             return "Pause".into();
         }
-        m.stage.map_or_else(String::new, |(s, d)| {
-            if s == "Extra" {
-                "Extra".into()
+        m.stage.map_or_else(String::new, |l| {
+            let mut c = if l.stage == "Extra" {
+                "Extra".to_string()
             } else {
-                i18n::ui_fmt(self.lang, "stage_line", &[("stage", s), ("difficulty", d)])
+                i18n::ui_fmt(
+                    self.lang,
+                    "stage_line",
+                    &[("stage", l.stage), ("difficulty", l.difficulty)],
+                )
+            };
+            if let Some(t) = team.then(|| team_name(self.lang, l.shot)).flatten() {
+                c.push_str(" · ");
+                c.push_str(t);
             }
+            c
         })
     }
 
@@ -982,8 +1001,17 @@ fn sentence(s: &str) -> String {
         .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
+// The team of a shot type, from the `player` setting's words (its ids follow the shot type order).
+fn team_name(lang: Lang, shot: u8) -> Option<&'static str> {
+    let e = crate::settings::find("player")?;
+    let crate::settings::Kind::Enum(ids) = e.kind else {
+        return None;
+    };
+    i18n::word(lang, e, ids.get(usize::from(shot))?)
+}
+
 fn version(lang: Lang) -> String {
-    i18n::ui_fmt(lang, "version", &[("version", &launcher::version_line())])
+    i18n::ui_fmt(lang, "version", &[("version", launcher::short_version())])
 }
 
 // Key hints: plain glyphs on keyboard, A / B discs on a pad, none on touch.
@@ -1494,7 +1522,7 @@ fn list_card(
         p,
         pos2(x, y),
         words.ui("paused_title"),
-        &words.heading_caption(m),
+        &words.heading_caption(m, true),
         cm.head,
         cm.cap,
     );
@@ -1708,7 +1736,7 @@ fn split_card(
         p,
         pos2(x, top + 44.0),
         words.ui("paused_title"),
-        &words.heading_caption(m),
+        &words.heading_caption(m, false),
         cm.head,
         cm.cap,
     );
@@ -1808,8 +1836,8 @@ fn split_card(
         );
     }
     // Quick settings.
-    let rx = right.min.x + 44.0;
-    let rw = geo.safe.max.x - 64.0 - rx;
+    let rx = right.min.x + 20.0;
+    let rw = geo.safe.max.x - 20.0 - rx;
     let rband = (right.min.x + 6.0, geo.screen.max.x);
     let quick: Vec<Item> = items
         .iter()
@@ -1823,9 +1851,40 @@ fn split_card(
         .collect();
     let lab = cm.row;
     let lab_h = lab * 1.75;
+    // Choice words a step under the labels, as in the mock-up.
+    let word = lab * 0.9;
+    // Choice cells are at least 120 points (48 dp) and fit their word; those that do not fit one line wrap.
+    let grid = |it: Item| match item_ctl(it, m, model, words.lang) {
+        Ctl::Choices { words: ws, .. } => {
+            let widest = ws
+                .iter()
+                .map(|w| {
+                    p.layout_no_wrap(w.clone(), theme::serif(word), theme::TEXT)
+                        .size()
+                        .x
+                })
+                .fold(0.0, f32::max);
+            let cell = (widest + 12.0).max(120.0);
+            let cols = (1..=ws.len())
+                .rev()
+                .find(|&c| c as f32 * cell <= rw)
+                .unwrap_or(1);
+            (cols, ws.len().div_ceil(cols).max(1))
+        }
+        _ => (1, 1),
+    };
+    let grids: Vec<(usize, usize)> = quick.iter().map(|&it| grid(it)).collect();
+    let at = |it: Item| {
+        quick
+            .iter()
+            .position(|&q| q == it)
+            .map_or((1, 1), |i| grids[i])
+    };
+    let cols = |it: Item| at(it).0;
+    let lines = |it: Item| at(it).1;
     let height = |it: Item| match it {
         Item::Volume => lab_h + 120.0 + 40.0 + 16.0,
-        Item::Hitboxes | Item::Speed => lab_h + 120.0 + 16.0,
+        Item::Hitboxes | Item::Speed => lab_h + 120.0 * lines(it) as f32 + 16.0,
         _ => 120.0,
     };
     let total: f32 = quick.iter().map(|&i| height(i)).sum();
@@ -1838,7 +1897,7 @@ fn split_card(
     let ch = cap.size().y;
     theme::caption_text(p, pos2(rx, y - ch - 24.0), cap);
     theme::rule(&op, egui::Rangef::new(rx, rx + rw), y - 12.0);
-    for it in quick {
+    for &it in &quick {
         let h = height(it);
         let r = Rect::from_min_size(pos2(rx, y), vec2(rw, h));
         let b = Rect::from_x_y_ranges(rband.0..=rband.1, r.y_range());
@@ -1862,9 +1921,14 @@ fn split_card(
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         let ctl = item_ctl(it, m, model, words.lang);
         if matches!(ctl, Ctl::None) {
-            label(&op, r, words.item(it), theme::serif(lab), color, focused);
+            let lr = if it == Item::TouchLayout {
+                Rect::from_min_size(r.min, vec2(rw - lab, h))
+            } else {
+                r
+            };
+            label(&op, lr, words.item(it), theme::serif(lab), color, focused);
             if it == Item::TouchLayout {
-                theme::chevron(&op, pos2(r.max.x + 20.0, r.center().y), lab, theme::HELP);
+                theme::chevron(&op, pos2(r.max.x - 8.0, r.center().y), lab, theme::HELP);
             }
             if resp.clicked() {
                 out.push(focus.activate(it, m));
@@ -1880,7 +1944,7 @@ fn split_card(
             );
             let cells = Rect::from_min_size(pos2(rx, y + lab_h), vec2(rw, 120.0));
             let st = CtlStyle {
-                size: lab,
+                size: word,
                 num: lab,
                 cells: true,
                 right: true,
@@ -1888,16 +1952,35 @@ fn split_card(
                 track: 0.0,
                 numw: 0.0,
                 gap: lab,
-                // The words share the bar's width (2–3 cells of ≈ 45–60 dp).
-                cell_w: match &ctl {
-                    Ctl::Choices { words, .. } => (rw / words.len().max(1) as f32).min(180.0),
-                    _ => 120.0,
-                },
+                cell_w: 0.0,
             };
-            let res = if let Ctl::Slider { frac, text, unit } = &ctl {
-                phone_volume(ui, &op, id, cells, *frac, text, unit, focused, lab)
-            } else {
-                theme::value_ctl(ui, &op, id, cells, &ctl, focused, &st)
+            let res = match &ctl {
+                Ctl::Slider { frac, text, unit } => {
+                    phone_volume(ui, &op, id, cells, *frac, text, unit, focused, lab)
+                }
+                Ctl::Choices { words: ws, sel } => {
+                    let n = cols(it);
+                    let mut res = None;
+                    for (line, chunk) in ws.chunks(n).enumerate() {
+                        let at = line * n;
+                        let row = Rect::from_min_size(
+                            cells.min + vec2(0.0, 120.0 * line as f32),
+                            vec2(rw * chunk.len() as f32 / n as f32, 120.0),
+                        );
+                        let part = Ctl::Choices {
+                            words: chunk.to_vec(),
+                            sel: sel.and_then(|i| i.checked_sub(at)),
+                        };
+                        let got =
+                            theme::value_ctl(ui, &op, id.with(line), row, &part, focused, &st);
+                        res = res.or(got.map(|o| match o {
+                            CtlOut::Pick(i) => CtlOut::Pick(i + at),
+                            o => o,
+                        }));
+                    }
+                    res
+                }
+                _ => theme::value_ctl(ui, &op, id, cells, &ctl, focused, &st),
             };
             if let Some(o) = res.filter(|_| !dimmed) {
                 focus.item = it;
@@ -2539,7 +2622,7 @@ pub struct Shot {
     pub speed: Option<(u32, u32)>,
     pub no_saves: bool,
     pub status: Option<String>,
-    pub stage: Option<(String, String)>,
+    pub stage: Option<StageLine>,
     // The settings page open at this tab.
     pub settings: Option<usize>,
     // The Retry / Quit question open.
