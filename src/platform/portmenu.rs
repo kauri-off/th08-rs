@@ -2203,12 +2203,7 @@ fn wide_head(
     if !ends.0.is_empty() {
         let g = p.layout_no_wrap(ends.0.to_string(), theme::sans(hint_size), theme::KEYCAP);
         let gw = g.size().x;
-        theme::shadowed(
-            &p,
-            pos2(tx, ty + (size - hint_size) * 0.75),
-            g,
-            theme::KEYCAP,
-        );
+        theme::shadowed(&p, pos2(tx, ty + size * 0.48), g, theme::KEYCAP);
         tx += gw + gap(size) * 0.7;
     }
     let mut clicked = None;
@@ -2241,7 +2236,7 @@ fn wide_head(
         let g = p.layout_no_wrap(ends.1.to_string(), theme::sans(hint_size), theme::KEYCAP);
         theme::shadowed(
             &p,
-            pos2(tx - gap(size) * 0.3, ty + (size - hint_size) * 0.75),
+            pos2(tx - gap(size) * 0.3, ty + size * 0.48),
             g,
             theme::KEYCAP,
         );
