@@ -667,6 +667,13 @@ pub fn value_ctl(
                     if resp.clicked() {
                         out = Some(CtlOut::Pick(i));
                     }
+                    // A word wider than its cell is set smaller to fit (long Russian words).
+                    let fit = (cw - 12.0) / g.size().x.max(1.0);
+                    let g = if fit < 1.0 {
+                        p.layout_no_wrap(words[i].clone(), serif(st.size * fit.max(0.6)), TEXT)
+                    } else {
+                        g
+                    };
                     let pos = r.center() - g.size() / 2.0;
                     outlined(p, pos, g, if on { TEXT_HI } else { DIM }, false);
                 }
@@ -698,7 +705,12 @@ pub fn value_ctl(
             } else {
                 let word = sel.and_then(|i| words.get(i)).cloned().unwrap_or_default();
                 out = stepper(ui, p, id, rect, st, focused, |p, r| {
-                    let g = p.layout(word.clone(), serif(st.size), TEXT, r.width());
+                    let wide = p
+                        .layout_no_wrap(word.clone(), serif(st.size), TEXT)
+                        .size()
+                        .x;
+                    let size = st.size * (r.width() / wide.max(1.0)).clamp(0.6, 1.0);
+                    let g = p.layout_no_wrap(word.clone(), serif(size), TEXT);
                     let pos = if st.cells {
                         r.center() - g.size() / 2.0
                     } else {

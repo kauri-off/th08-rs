@@ -1768,42 +1768,45 @@ fn split_card(
         yb -= 24.0;
         theme::rule(p, egui::Rangef::new(x, x + w), yb + 8.0);
     }
-    yb -= cm.row_h;
-    let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
-    item_row(
-        ui,
-        &op,
-        r,
-        bandr(r),
-        Item::Settings,
-        cm.row,
-        cm,
-        m,
-        model,
-        focus,
-        lay,
-        words,
-        dimmed,
-        out,
-    );
-    yb -= cm.resume_h;
-    let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.resume_h));
-    item_row(
-        ui,
-        &op,
-        r,
-        bandr(r),
-        Item::Resume,
-        cm.resume,
-        cm,
-        m,
-        model,
-        focus,
-        lay,
-        words,
-        dimmed,
-        out,
-    );
+    // The question takes the bar on a phone; the items behind it are not drawn.
+    if !dimmed {
+        yb -= cm.row_h;
+        let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.row_h));
+        item_row(
+            ui,
+            &op,
+            r,
+            bandr(r),
+            Item::Settings,
+            cm.row,
+            cm,
+            m,
+            model,
+            focus,
+            lay,
+            words,
+            dimmed,
+            out,
+        );
+        yb -= cm.resume_h;
+        let r = Rect::from_min_size(pos2(x, yb), vec2(w, cm.resume_h));
+        item_row(
+            ui,
+            &op,
+            r,
+            bandr(r),
+            Item::Resume,
+            cm.resume,
+            cm,
+            m,
+            model,
+            focus,
+            lay,
+            words,
+            dimmed,
+            out,
+        );
+    }
     // Quick settings.
     let rx = right.min.x + 44.0;
     let rw = geo.safe.max.x - 64.0 - rx;
@@ -1885,7 +1888,11 @@ fn split_card(
                 track: 0.0,
                 numw: 0.0,
                 gap: lab,
-                cell_w: 120.0,
+                // The words share the bar's width (2–3 cells of ≈ 45–60 dp).
+                cell_w: match &ctl {
+                    Ctl::Choices { words, .. } => (rw / words.len().max(1) as f32).min(180.0),
+                    _ => 120.0,
+                },
             };
             let res = if let Ctl::Slider { frac, text, unit } = &ctl {
                 phone_volume(ui, &op, id, cells, *frac, text, unit, focused, lab)
