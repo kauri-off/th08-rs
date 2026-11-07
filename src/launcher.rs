@@ -14,6 +14,7 @@ use winit::window::Window;
 mod gamepad;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 mod replay_tab;
+mod screen;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 mod stats_tab;
 
@@ -407,6 +408,7 @@ pub struct Model {
     // The Keyboard row waiting for a key press (its entry key).
     capture: Option<&'static str>,
     pad: gamepad::PadUi,
+    nav: screen::Nav,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     update: Update,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -494,6 +496,7 @@ impl Model {
             last_error,
             capture: None,
             pad: gamepad::PadUi::default(),
+            nav: screen::Nav::default(),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
             update: if crate::update::wanted(s) {
                 Update::Pending
@@ -930,129 +933,9 @@ impl Model {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
-        let mut act = None;
-        let lang = self.lang();
-        egui::Panel::top("folder")
-            .frame(theme::bar())
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading(i18n::ui(lang, "title"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(theme::hint(version_line()));
-                    });
-                });
-                ui.add_space(theme::XS);
-                self.folder_ui(ui);
-                #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-                self.tabs_ui(ui, lang);
-            });
-        egui::Panel::bottom("buttons")
-            .frame(theme::bar())
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let play = ui.add_enabled(
-                        self.can_play(),
-                        theme::button(i18n::ui(lang, "play"), theme::Kind::Primary)
-                            .min_size(egui::vec2(120.0, 0.0)),
-                    );
-                    if play.clicked() {
-                        act = Some(Action::Play);
-                    }
-                    if ui.button(i18n::ui(lang, "reset")).clicked() {
-                        self.reset();
-                    }
-                    if cfg!(not(target_arch = "wasm32"))
-                        && ui.button(i18n::ui(lang, "quit")).clicked()
-                    {
-                        act = Some(Action::Quit);
-                    }
-                    ui.checkbox(&mut self.dev, i18n::ui(lang, "developer"))
-                        .on_hover_text(i18n::ui(lang, "developer_hint"));
-                    if !self.folder_ok() {
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
-                            i18n::ui(lang, "select_folder_first"),
-                        );
-                    } else if self.rows.iter().any(|r| r.error().is_some()) {
-                        ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "fix_values"));
-                    }
-                });
-            });
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-        self.dropped_ui(ui, lang);
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-        if self.tab == Tab::Replays {
-            egui::CentralPanel::default_margins().show(ui, |ui| {
-                egui::ScrollArea::both().show(ui, |ui| {
-                    if let Some(a) = self.replays_ui(ui, lang) {
-                        act = Some(a);
-                    }
-                });
-            });
-            return act;
-        }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-        if self.tab == Tab::Stats {
-            egui::CentralPanel::default_margins().show(ui, |ui| {
-                egui::ScrollArea::both().show(ui, |ui| self.stats_ui(ui, lang));
-            });
-            return act;
-        }
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-                if let Some(a) = self.update_ui(ui, lang) {
-                    act = Some(a);
-                }
-                self.last_error_ui(ui, lang);
-                if !self.dev {
-                    let active: Vec<&str> = self
-                        .rows
-                        .iter()
-                        .filter(|r| r.e.audience == Audience::Dev && r.value != r.default_value())
-                        .map(|r| i18n::label(lang, r.e))
-                        .collect();
-                    if !active.is_empty() {
-                        ui.colored_label(
-                            ui.visuals().error_fg_color,
-                            i18n::ui_fmt(lang, "dev_active", &[("list", &active.join(", "))]),
-                        );
-                    }
-                }
-                if let Some(note) = cheats_note(lang, &self.active_cheats()) {
-                    ui.colored_label(ui.visuals().error_fg_color, note);
-                }
-                for g in Group::ALL {
-                    self.group_ui(ui, g, lang);
-                    #[cfg(not(target_os = "android"))]
-                    if g == Group::GameData {
-                        self.saves_ui(ui, lang);
-                    }
-                }
-            });
-        });
-        act
-    }
-
-    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-    fn tabs_ui(&mut self, ui: &mut egui::Ui, lang: Lang) {
-        ui.horizontal(|ui| {
-            let before = self.tab;
-            let all = [
-                (Tab::Settings, "tab_settings"),
-                (Tab::Replays, "tab_replays"),
-                (Tab::Stats, "tab_stats"),
-            ];
-            let labels: Vec<&str> = all.iter().map(|&(_, k)| i18n::ui(lang, k)).collect();
-            let now = all.iter().position(|&(t, _)| t == self.tab).unwrap_or(0);
-            if let (Some(i), _) = theme::tabs(ui, &labels, now, false) {
-                self.tab = all[i].0;
-            }
-            if self.tab != before {
-                self.forget_replays();
-                self.forget_stats();
-            }
-        });
+        self.dropped_ui(ui, self.lang());
+        self.settings_screen(ui)
     }
 
     // .rpy files dropped on the window are imported from either tab, which then shows the Replays tab.
@@ -1093,114 +976,6 @@ impl Model {
         self.tab = t;
         self.forget_replays();
         self.forget_stats();
-    }
-
-    fn folder_ui(&mut self, ui: &mut egui::Ui) {
-        let ok = self.folder_ok();
-        let lang = self.lang();
-        ui.horizontal(|ui| {
-            ui.label(i18n::ui(lang, "game_folder"));
-            match &self.folder {
-                Folder::Native => {
-                    let r = self.row_mut("game_dir");
-                    let mut v = r.value.text();
-                    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-                    if ui.button(i18n::ui(lang, "browse")).clicked()
-                        && let Some(d) = folder_dialog()
-                    {
-                        v = d.to_string_lossy().into_owned();
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut v)
-                            .hint_text(i18n::ui(lang, "folder_hint"))
-                            .desired_width(f32::INFINITY),
-                    );
-                    if v != r.value.text() {
-                        r.set(Value::Path(v));
-                    }
-                }
-                Folder::Web(names) | Folder::Bundled(names) => {
-                    ui.label(if names.is_empty() {
-                        i18n::ui(lang, "no_files").to_string()
-                    } else {
-                        names.join(", ")
-                    });
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            if ok {
-                ui.colored_label(theme::SUCCESS, i18n::ui(lang, "dat_found"));
-            } else {
-                ui.colored_label(ui.visuals().error_fg_color, i18n::ui(lang, "dat_missing"));
-            }
-            if self.dev && matches!(self.folder, Folder::Native) {
-                origin_label(ui, self.row("game_dir"), lang);
-            }
-        });
-        if self.bundled {
-            ui.label(
-                egui::RichText::new(i18n::ui(lang, "bundled_note"))
-                    .small()
-                    .weak(),
-            );
-        }
-    }
-
-    fn group_ui(&mut self, ui: &mut egui::Ui, g: Group, lang: Lang) {
-        self.refresh_installed();
-        let extra = self.pack_choices(lang);
-        // The game folder row is at the top.
-        let dev = self.dev;
-        let rows: Vec<usize> = (0..self.rows.len())
-            .filter(|&i| self.rows[i].e.group == g && self.shown(i))
-            .collect();
-        if rows.is_empty() {
-            return;
-        }
-        let set_here = rows.iter().any(|&i| self.rows[i].origin > Origin::PortCfg);
-        // Ids from the group id, so a language switch keeps the open/closed state.
-        egui::CollapsingHeader::new(egui::RichText::new(i18n::group_title(lang, g)).strong())
-            .id_salt(g.id())
-            .default_open(
-                self.live.is_some()
-                    || matches!(g, Group::GameData | Group::Language | Group::Display)
-                    || set_here
-                    || (g == Group::Gamepad && self.pad.capture.is_some()),
-            )
-            .show(ui, |ui| {
-                if g == Group::Gamepad {
-                    self.pad_section_ui(ui, &rows, lang);
-                    return;
-                }
-                egui::Grid::new(g.id())
-                    .num_columns(2)
-                    .striped(true)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        if g == Group::Keyboard {
-                            self.keys_rows_ui(ui, &rows, lang);
-                            return;
-                        }
-                        for i in rows {
-                            let x: &[(String, String)] = if self.rows[i].e.key == "game_text" {
-                                &extra
-                            } else {
-                                &[]
-                            };
-                            row_ui(ui, &mut self.rows[i], dev, lang, x);
-                            ui.end_row();
-                        }
-                    });
-                if g == Group::Language && self.live.is_none() {
-                    ui.add_space(6.0);
-                    self.translations_ui(ui, lang);
-                }
-                if g == Group::Keyboard {
-                    ui.add_space(6.0);
-                    self.keys_presets_ui(ui, lang);
-                }
-            });
     }
 
     // Keyboard rows: the bound keys (click one to remove it), "+" to capture a key, keys bound in several rows.
@@ -1768,26 +1543,6 @@ fn error_ui(ui: &mut egui::Ui, lang: Lang, msg: &str) -> Option<Action> {
     act
 }
 
-// Help is shown once, under the value; the developer view adds the flag / env name and the origin tag.
-fn row_ui(ui: &mut egui::Ui, r: &mut Row, dev: bool, lang: Lang, extra: &[(String, String)]) {
-    let l = ui.label(i18n::label(lang, r.e));
-    if dev {
-        l.on_hover_text(format!("--{} / {}", r.e.key.replace('_', "-"), r.e.env));
-    }
-    ui.vertical(|ui| {
-        ui.horizontal(|ui| {
-            value_ui(ui, r, lang, extra, None);
-            if dev {
-                origin_label(ui, r, lang);
-            }
-        });
-        if let Some(err) = r.error() {
-            ui.colored_label(ui.visuals().error_fg_color, err);
-        }
-        ui.label(egui::RichText::new(i18n::help(lang, r.e)).small().weak());
-    });
-}
-
 // The values an Enum row offers: the unset value first when the entry has no default, then the table's
 // choices, then `extra` (value, shown name).
 fn enum_values(r: &Row, choices: &[&str], extra: &[(String, String)]) -> Vec<String> {
@@ -1867,32 +1622,14 @@ fn row_input(r: &mut Row, out: theme::CtlOut, extra: &[(String, String)]) -> boo
     changed
 }
 
-// The port menu's value box (a slider's number), points.
-const MENU_BOX_W: f32 = 56.0;
-
-// Edits a copy of the value; the row is set (and its dirty flag updated) only when a widget changed it.
-// `extra` = choices after the table's (value, shown name): the installed pack languages for `game_text`.
-// `menu`: the port menu's control column width; there every number is a slider (no small drag targets on touch)
-// with its value box at the column's right edge, a checkbox centred under the value boxes, a list filling the column.
-fn value_ui(
-    ui: &mut egui::Ui,
-    r: &mut Row,
-    lang: Lang,
-    extra: &[(String, String)],
-    menu: Option<f32>,
-) {
+// Edits a copy of the value with egui widgets (text and path rows; the painted rows use `row_ctl`); the row is set
+// (and its dirty flag updated) only when a widget changed it. `extra` = choices after the table's (value, shown
+// name): the installed pack languages for `game_text`.
+fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String)]) {
     let unsettable = r.e.default.is_empty();
     let mut v = r.value.clone();
-    let gap = ui.spacing().item_spacing.x;
-    if let Some(w) = menu {
-        ui.spacing_mut().interact_size.x = MENU_BOX_W;
-        ui.spacing_mut().slider_width = (w - MENU_BOX_W - gap).max(60.0);
-    }
     match (&mut v, r.e.kind) {
         (Value::Bool(on), _) => {
-            if let Some(w) = menu {
-                ui.add_space((w - MENU_BOX_W / 2.0 - ui.spacing().icon_width / 2.0).max(0.0));
-            }
             ui.checkbox(on, "");
         }
         (Value::Int(n), Kind::Int { min, max }) => {
@@ -1903,7 +1640,7 @@ fn value_ui(
             if let Some(n) = n {
                 let mut f = *n as f64;
                 let range = min as f64..=max as f64;
-                let changed = if menu.is_some() || max - min <= 16 {
+                let changed = if max - min <= 16 {
                     ui.add(
                         egui::Slider::new(&mut f, range)
                             .step_by(1.0)
@@ -1939,7 +1676,7 @@ fn value_ui(
                 .find(|(x, _)| x == c)
                 .map_or_else(|| shown(c), |(_, n)| n.clone());
             egui::ComboBox::from_id_salt(r.e.key)
-                .width(menu.unwrap_or(ui.spacing().combo_width))
+                .width(ui.spacing().combo_width)
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if unsettable {
@@ -2318,6 +2055,10 @@ pub fn render_image(
             .entry(egui::ViewportId::ROOT)
             .or_default()
             .native_pixels_per_point = Some(ppp);
+        #[cfg(not(target_os = "android"))]
+        if i == 1 {
+            s.model.settle_art();
+        }
         let (out, _) = s.pass(raw);
         let e = s.paint(gfx, out, &view, (w, h));
         if i < 3 {
