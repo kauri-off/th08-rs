@@ -24,7 +24,8 @@ export component SettingsPage inherits Window {
     in property <[string]> tabs;
     in property <[RowData]> rows;
     in property <[string]> label-pieces;
-    in property <[Hint]> hints;
+    in property <[Hint]> hints-first;
+    in property <[Hint]> hints-rest;
     in property <string> heading;
     in property <string> caption;
     in property <string> back-word;
@@ -171,9 +172,9 @@ export component SettingsPage inherits Window {
                         BackLink { text: root.back-word; key: root.back-key; size: Ui.font(17, 11); clicked => { root.back(); } }
                     }
                 }
-                Tabs {
+                wide-tabs := Tabs {
                     tabs: root.tabs; current: root.tab; size: root.tab-size; prev-key: root.prev-key; next-key: root.next-key;
-                    bar: Ui.bar && root.cursor < 0; height: 52px;
+                    bar: Ui.bar && root.cursor < 0; height: self.tight ? 84px : 52px;
                     pick(i) => { root.go-tab(i); }
                 }
                 Rectangle { height: 1px; background: Tk.rule; }
@@ -218,7 +219,7 @@ export component SettingsPage inherits Window {
                 spacing: 10px;
                 Rectangle { height: 1px; background: Tk.rule; }
                 HelpLine { text: root.help; font-size: root.help-size; min-height: root.help-size * 3; }
-                if !Ui.split: HintLine { hints: root.hints; device: root.device; size: root.hint-size; }
+                if !Ui.split: HintLine { first: root.hints-first; rest: root.hints-rest; device: root.device; size: root.hint-size; }
             }
         }
         // More rows above / below: a mark in the right margin; the margin beside it pages the list.

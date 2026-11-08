@@ -50,7 +50,6 @@ fn every_modality() {
     let Ok(gfx) = pollster::block_on(Gfx::headless()) else {
         eprintln!("no GPU adapter: skipped");
         return;
-        return;
     };
     let dir = std::env::temp_dir().join(format!("th08-slint-input-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

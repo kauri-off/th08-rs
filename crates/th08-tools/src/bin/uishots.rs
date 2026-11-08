@@ -12,6 +12,7 @@ Renders every launcher view and port-menu page × window size × OS scale × lan
 save dir with stats and replays, nested game folder) and runs the layout check; exit 1 when it finds issues.
 Without OUT_DIR only the check runs (no GPU); with it: PNGs, index.html and sheet_*.png contact sheets.
 --size keeps sizes whose name contains SUBSTR (phone, 1674x738, @2x); --all prints every issue.
+--bench prints the CPU time of a settings frame, egui and Slint, per size (headless GPU, finishes each frame).
 --fixture=DIR only copies the fixture's save dir (score.dat, stats.jsonl, replay/) to DIR (for the Android check).";
 
 #[derive(Default)]
@@ -21,6 +22,7 @@ struct Args {
     lang: Vec<String>,
     size: Option<String>,
     all: bool,
+    bench: bool,
     fixture: Option<PathBuf>,
 }
 
@@ -39,6 +41,8 @@ impl Args {
                 std::process::exit(0);
             } else if let Some(v) = x.strip_prefix("--fixture=") {
                 a.fixture = Some(v.into());
+            } else if x == "--bench" {
+                a.bench = true;
             } else if x == "--all" {
                 a.all = true;
             } else if x.starts_with('-') || a.out.is_some() {
@@ -489,6 +493,7 @@ struct Frame {
     issues: Vec<Issue>,
 }
 
+#[expect(clippy::too_many_lines, reason = "the matrix loop")]
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = Args::parse();
@@ -496,6 +501,9 @@ fn main() -> anyhow::Result<()> {
     if let Some(dir) = &args.fixture {
         copy_dir(&fx.save, dir)?;
         return Ok(());
+    }
+    if args.bench {
+        return bench(&fx);
     }
     let langs: Vec<&'static str> = ["en", "ja", "ru"]
         .into_iter()
@@ -656,6 +664,29 @@ fn main() -> anyhow::Result<()> {
         sheets(dir, &frames)?;
     }
     std::process::exit(i32::from(bad > 0));
+}
+
+fn bench(fx: &Fixture) -> anyhow::Result<()> {
+    let g = pollster::block_on(th08_render::gfx::Gfx::headless())?;
+    let s = fx.settings("en");
+    for sz in sizes() {
+        if !["1920x1080@1x", "2560x1440@2x", "phone2400x1080"].contains(&sz.name) {
+            continue;
+        }
+        let shot = Shot {
+            settings: Some(0),
+            touch: sz.phone,
+            density: sz.density,
+            ..Shot::default()
+        };
+        let (em, ep) = th08::platform::portmenu::bench_egui(&g, &s, sz.px, sz.safe, &shot);
+        let (sm, sp) = th08::slintui::check::bench_page(&g, &s, sz.px, sz.safe, &shot)?;
+        println!(
+            "{}: egui median {em:.2} p99 {ep:.2} ms; slint median {sm:.2} p99 {sp:.2} ms",
+            sz.name
+        );
+    }
+    Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {

@@ -1579,7 +1579,7 @@ pub const ENTRIES: &[Entry] = &[
         words: &[],
         audience: Audience::Dev,
         platforms: Platforms::ALL,
-        persist: true,
+        persist: false,
         live: false,
         help: "draw the port menu's settings page with Slint instead of egui (UI migration, developers only)",
         set: |s, v| {

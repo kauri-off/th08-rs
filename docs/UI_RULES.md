@@ -21,6 +21,9 @@ phrases, with kinsoku (`slintui/text.rs`).
 **Targets.** Every tap target on touch is at least 48 dp tall; steppers, choices and tabs also 48 dp wide. Exception:
 the list's paging margin.
 
+**Bars.** Tabs shrink to the least font (13 dp), then share the bar equally and wrap. Hints and the device line take two
+lines when one does not fit. A slider that does not fit the value column goes under its label.
+
 **Lists scroll.** A list longer than its pane is a `ScrollList`: key focus reveals its row; ▴ ▾ marks in the right
 margin show more content and page the list. The rule above the danger row is part of that row.
 

@@ -121,7 +121,7 @@ component TabCell inherits Target {
     in property <length> size;
     in property <bool> wrap-text;
     name: "tab|" + text;
-    preferred-width: l.preferred-width;
+    out property <length> natural: l.preferred-width;
     min-height: Ui.touch ? 120px : 48px;
     l := Ringed {
         width: 100%;
@@ -151,7 +151,10 @@ export component Tabs inherits Rectangle {
     in property <length> size;
     callback pick(int);
 
-    property <float> fit: min(1, (self.width - (prev-key == "" ? 0 : 2 * size * 3)) / max(1px, measure.preferred-width));
+    property <length> avail: self.width - (prev-key == "" ? 0 : 2 * size * 3);
+    property <float> fit: min(1, avail / max(1px, measure.preferred-width));
+    // Below the least tab font the labels share the bar equally and wrap.
+    out property <bool> tight: !rail && size * fit < Ui.font(0, 13);
     Rectangle {
         visible: false;
         measure := HorizontalLayout {
@@ -161,11 +164,14 @@ export component Tabs inherits Rectangle {
     }
     if bar: FocusMark { bar: true; x: -12px; width: parent.width + 24px; }
     if !rail: HorizontalLayout {
-        spacing: 32px * fit;
+        spacing: tight ? 12px : 32px * fit;
         alignment: start;
         if prev-key != "": VerticalLayout { alignment: center; Keycap { cap: { text: prev-key, disc: false }; size: root.size * 0.7; } }
         for t[i] in tabs: TabCell {
-            text: t; sel: i == root.current; size: max(root.size * root.fit, Ui.font(0, 13));
+            text: t; sel: i == root.current; size: root.tight ? Ui.font(0, 13) : root.size * root.fit;
+            wrap-text: root.tight;
+            preferred-width: root.tight ? (root.avail - 12px * (tabs.length - 1)) / tabs.length : self.natural;
+            max-width: root.tight ? self.preferred-width : 100000px;
             clicked => { root.pick(i); }
         }
         if next-key != "": VerticalLayout { alignment: center; Keycap { cap: { text: next-key, disc: false }; size: root.size * 0.7; } }
@@ -346,7 +352,8 @@ export component SettingRow inherits Rectangle {
     property <length> value-w: content-w - label-w;
     property <length> cell-sum: Ui.split ? 256px : 96px;
     property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > value-w;
-    property <bool> stacked: (as-stepper && widest-m.preferred-width + cell-sum > value-w) || label-m.preferred-width > label-w - 24px;
+    property <length> slider-min: Ui.split ? 454px : 284px;
+    property <bool> stacked: (data.kind == 1 && slider-min > value-w) || (as-stepper && widest-m.preferred-width + cell-sum > value-w) || label-m.preferred-width > label-w - 24px;
     property <bool> lit: area.has-hover && Ui.modality == Modality.mouse;
     property <bool> hot: bar || lit;
     min-height: max(row-h, body.preferred-height);
@@ -414,9 +421,8 @@ export component HelpLine inherits Label {
     horizontal-alignment: left;
 }
 
-export component HintLine inherits HorizontalLayout {
+component HintGroup inherits HorizontalLayout {
     in property <[Hint]> hints;
-    in property <string> device;
     in property <length> size;
     spacing: 18px;
     for h in hints: HorizontalLayout {
@@ -425,8 +431,41 @@ export component HintLine inherits HorizontalLayout {
         for c in h.caps: VerticalLayout { alignment: center; Keycap { cap: c; size: root.size * 0.85; } }
         Label { text: h.word; serif: false; font-size: root.size; color: Tk.help; }
     }
-    Rectangle { horizontal-stretch: 1; }
-    Label { text: root.device; serif: false; font-size: root.size; color: Tk.help; horizontal-stretch: 0; }
+}
+
+// One line of hints and the device name; two lines when they do not fit.
+export component HintLine inherits VerticalLayout {
+    in property <[Hint]> first;
+    in property <[Hint]> rest;
+    in property <string> device;
+    in property <length> size;
+    property <bool> tight: measure.preferred-width > self.width;
+    property <bool> device-alone: tight && lower.preferred-width > self.width;
+    spacing: 4px;
+    Rectangle {
+        visible: false;
+        height: 0;
+        lower := HorizontalLayout {
+            spacing: 18px;
+            HintGroup { hints: root.rest; size: root.size; }
+            Text { text: root.device; font-family: Tk.sans; font-size: root.size; }
+        }
+        measure := HorizontalLayout {
+            spacing: 18px;
+            HintGroup { hints: root.first; size: root.size; }
+            HintGroup { hints: root.rest; size: root.size; }
+            Text { text: root.device; font-family: Tk.sans; font-size: root.size; }
+        }
+    }
+    if tight: HintGroup { hints: root.first; size: root.size; alignment: start; }
+    HorizontalLayout {
+        spacing: 18px;
+        if !tight: HintGroup { hints: root.first; size: root.size; horizontal-stretch: 0; }
+        HintGroup { hints: root.rest; size: root.size; horizontal-stretch: 0; }
+        Rectangle { horizontal-stretch: 1; }
+        if !device-alone: Label { text: root.device; serif: false; font-size: root.size; color: Tk.help; horizontal-stretch: 0; }
+    }
+    if device-alone: Label { text: root.device; serif: false; font-size: root.size; color: Tk.help; horizontal-alignment: right; }
 }
 
 // The scrolling list: rows passed as children, `reveal` keeps a row in view, marks page it.

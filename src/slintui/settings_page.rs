@@ -169,7 +169,9 @@ impl Page {
         ui.set_next_key(s(&words.next_key));
         ui.set_device(s(&words.device));
         ui.set_ask(s(&breakable(&words.ask)));
-        ui.set_hints(hints(&words.hints));
+        let cut = words.hints.len().min(3);
+        ui.set_hints_first(hints(&words.hints[..cut]));
+        ui.set_hints_rest(hints(&words.hints[cut..]));
         let g = Ui::get(&ui);
         g.set_touch(touch);
         g.set_modality(if touch {

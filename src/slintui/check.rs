@@ -593,3 +593,54 @@ pub fn check_page(
     }
     Ok(out)
 }
+
+// CPU ms (median, p99) of a frame in which the focused row changes every frame, GPU work finished.
+pub fn bench_page(
+    gfx: &Gfx,
+    s: &Settings,
+    size: (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+) -> anyhow::Result<(f64, f64)> {
+    let mut h = Harness::new(gfx, s, size, safe, shot)?;
+    let frame = image::RgbaImage::from_pixel(size.0, size.1, image::Rgba([40, 30, 70, 255]));
+    let _ = h.image(&frame);
+    let (w, hh) = size;
+    let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bench"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: hh,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: gfx.surface_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut times = Vec::with_capacity(300);
+    for i in 0..300 {
+        h.page.nav(if i % 2 == 0 { Nav::Down } else { Nav::Up });
+        let start = web_time::Instant::now();
+        h.tick(16);
+        let t = OverlayTarget {
+            device: &gfx.device,
+            queue: &gfx.queue,
+            view: &view,
+            format: gfx.surface_format(),
+            size,
+            frame: gfx.frame_rect(w, hh),
+        };
+        let mut enc = gfx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        h.page.paint(&t, &mut enc);
+        gfx.queue.submit([enc.finish()]);
+        let _ = gfx.device.poll(wgpu::PollType::wait_indefinitely());
+        times.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok(crate::platform::portmenu::median_p99(&mut times))
+}
