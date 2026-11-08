@@ -368,6 +368,14 @@ impl Model {
             #[cfg(not(target_os = "android"))]
             Target::SavesCfg => i18n::ui(lang, "saves_port_cfg_hint"),
         };
+        // A file name opening the sentence keeps its case.
+        if text
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.contains('.'))
+        {
+            return text.to_string();
+        }
         let mut c = text.chars();
         c.next()
             .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
@@ -422,6 +430,7 @@ impl Model {
     }
 
     // A row carries the focus bar.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn focus_shown(&self) -> bool {
         self.nav.input.bar() && self.nav.focus.is_some()
     }
