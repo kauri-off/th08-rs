@@ -16,10 +16,11 @@ pub enum Kind {
     FewRows,
     NoFocus,
     TwoFocus,
+    Unreachable,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Clipped,
         Kind::Overlap,
         Kind::MidWord,
@@ -30,6 +31,7 @@ impl Kind {
         Kind::FewRows,
         Kind::NoFocus,
         Kind::TwoFocus,
+        Kind::Unreachable,
     ];
 
     pub fn name(self) -> &'static str {
@@ -44,6 +46,7 @@ impl Kind {
             Kind::FewRows => "few-rows",
             Kind::NoFocus => "no-focus-at-rest",
             Kind::TwoFocus => "two-focus-markers",
+            Kind::Unreachable => "unreachable-row",
         }
     }
 }
@@ -147,10 +150,19 @@ pub struct Scroll {
     pub space: Rect,
     // The content is taller than the viewport.
     pub more: bool,
+    // Scrolled to its last line.
+    pub at_end: bool,
 }
 
-pub fn note_scroll(ctx: &egui::Context, viewport: Rect, space: Rect, content_h: f32) {
+pub fn note_scroll<R>(
+    ctx: &egui::Context,
+    out: &egui::scroll_area::ScrollAreaOutput<R>,
+    space: Rect,
+) {
+    let viewport = out.inner_rect;
+    let content_h = out.content_size.y;
     let more = content_h > viewport.height() + 0.5;
+    let at_end = out.state.clamped_offset().y + viewport.height() >= content_h - 1.0;
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| {
         let v = d.get_temp_mut_or_default::<(u64, Vec<Scroll>)>(egui::Id::unique("uicheck scroll"));
@@ -161,6 +173,7 @@ pub fn note_scroll(ctx: &egui::Context, viewport: Rect, space: Rect, content_h: 
             viewport,
             space,
             more,
+            at_end,
         });
     });
 }
@@ -172,6 +185,51 @@ pub fn scrolls(ctx: &egui::Context) -> Vec<Scroll> {
         .filter(|v| v.0 == last)
         .map(|v| v.1)
         .unwrap_or_default()
+}
+
+// The rows of a paged list shown this pass (index, rect) and how many it has.
+pub fn note_rows(ctx: &egui::Context, shown: Vec<(usize, Rect)>, total: usize) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("uicheck rows"), (shown, total)));
+}
+
+pub fn rows(ctx: &egui::Context) -> (Vec<(usize, Rect)>, usize) {
+    ctx.data(|d| d.get_temp(egui::Id::unique("uicheck rows")))
+        .unwrap_or_default()
+}
+
+// What a finger sends, as egui-winit reports it: the touch event and the pointer events it emulates.
+pub fn finger(phase: egui::TouchPhase, pos: egui::Pos2) -> Vec<egui::Event> {
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let touch = egui::Event::Touch {
+        device_id: egui::TouchDeviceId(0),
+        id: egui::TouchId(0),
+        phase,
+        pos,
+        force: None,
+    };
+    match phase {
+        egui::TouchPhase::Start => vec![touch, egui::Event::PointerMoved(pos), button(true)],
+        egui::TouchPhase::Move => vec![touch, egui::Event::PointerMoved(pos)],
+        _ => vec![touch, button(false), egui::Event::PointerGone],
+    }
+}
+
+// One swipe of `dist` points up from `from`, as the events of each pass from `k`: `None` when it is over.
+pub fn swipe(k: u32, from: egui::Pos2, dist: f32) -> Option<Vec<egui::Event>> {
+    const MOVES: u32 = 8;
+    let at = |i: u32| from - egui::vec2(0.0, dist * i as f32 / MOVES as f32);
+    Some(match k {
+        0 => finger(egui::TouchPhase::Start, from),
+        1..=MOVES => finger(egui::TouchPhase::Move, at(k)),
+        9 => finger(egui::TouchPhase::End, at(MOVES)),
+        10..=40 => Vec::new(),
+        _ => return None,
+    })
 }
 
 // The shapes of a pass whose textures nobody uploads.
@@ -739,6 +797,7 @@ mod tests {
             viewport: view,
             space: view,
             more: false,
+            at_end: true,
         };
         assert!(check(&out, screen, &[s]).is_empty());
         // The same viewport given twice the height it uses: the cut row had room.
@@ -746,6 +805,7 @@ mod tests {
             viewport: view,
             space: view.with_max_y(40.0),
             more: false,
+            at_end: true,
         };
         assert_eq!(kinds(&check(&out, screen, &[short])), [Kind::Clipped]);
     }

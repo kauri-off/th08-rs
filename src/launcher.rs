@@ -2123,6 +2123,80 @@ pub fn render_image(
     gfx.read_texture(enc.unwrap(), &tex)
 }
 
+// Lists of one view that an input cannot scroll to their end: finger drags (touch screens), the wheel and keys.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_reach(
+    make: impl Fn() -> Model,
+    size: (u32, u32),
+    safe: SafeArea,
+    o: &ShotOpts,
+) -> Vec<crate::uicheck::Issue> {
+    use crate::uicheck::{self as uc, Issue, Kind};
+    let mut out = Vec::new();
+    for how in ["touch", "wheel", "keys"] {
+        if how == "touch" && !o.touch {
+            continue;
+        }
+        let mut model = make();
+        model.touch = o.touch;
+        let ctx = new_ctx(&model);
+        let pass = |model: &mut Model, i: u32, events: Vec<egui::Event>| {
+            let mut raw = shot_input(i.min(SHOT_PASSES), size, safe, o);
+            raw.time = Some(f64::from(SHOT_PASSES) / 10.0 + f64::from(i) / 60.0);
+            raw.events = events;
+            crate::uicheck::shapes(ctx.run_ui(raw, |ui| {
+                let rect = ui.ctx().content_rect();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    model.ui(ui);
+                });
+            }));
+        };
+        for i in 0..SHOT_PASSES {
+            pass(&mut model, 1000, Vec::new());
+            let _ = i;
+        }
+        let mut ok = false;
+        for k in 0..800u32 {
+            let scrolls = uc::scrolls(&ctx);
+            if scrolls.iter().all(|s| s.at_end) {
+                ok = true;
+                break;
+            }
+            let v = scrolls.iter().find(|s| !s.at_end).map(|s| s.viewport);
+            let v = v.unwrap_or(egui::Rect::NOTHING);
+            let events = match how {
+                "touch" => uc::swipe(k % 41, v.center(), v.height() * 0.7).unwrap_or_default(),
+                "wheel" => vec![
+                    egui::Event::PointerMoved(v.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -40.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                _ => vec![egui::Event::Key {
+                    key: egui::Key::ArrowDown,
+                    physical_key: None,
+                    pressed: k % 2 == 0,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            };
+            pass(&mut model, 2000 + k, events);
+        }
+        if !ok {
+            out.push(Issue {
+                kind: Kind::Unreachable,
+                what: format!("the list does not reach its end by {how}"),
+                rect: egui::Rect::NOTHING,
+            });
+        }
+    }
+    out
+}
+
 // The last offscreen pass's shapes without a GPU, every stock egui style slot marked (`uicheck`).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn check_frame(

@@ -625,6 +625,11 @@ impl<T: Copy + PartialEq> Input<T> {
             self.pointer(false);
         }
         self.next = None;
+        let finger = touch_screen || self.modality == Modality::Touch;
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("theme touch input"), finger));
+        if touch_screen {
+            ctx.options_mut(|o| o.input_options.max_click_dist = TAP_DP);
+        }
     }
 
     pub fn pointer(&mut self, touch: bool) {
@@ -675,6 +680,62 @@ impl<T: Copy + PartialEq> Input<T> {
             _ => None,
         }
     }
+}
+
+// The next scroll area shown moves by `points`, content up for a positive value.
+pub fn ask_scroll(ctx: &egui::Context, points: f32) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("theme asked scroll"), points));
+}
+
+pub fn apply_scroll(ui: &Ui) {
+    let d = ui
+        .ctx()
+        .data_mut(|d| d.remove_temp::<f32>(egui::Id::unique("theme asked scroll")));
+    if let Some(d) = d {
+        ui.scroll_with_delta(vec2(0.0, -d));
+    }
+}
+
+// A finger moving further than this is a drag, never a tap (dp; points on a screen at one point per dp).
+pub const TAP_DP: f32 = 8.0;
+
+// The screen is driven by touch: a press on a list or slider is a gesture to classify.
+pub fn touch_input(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(egui::Id::unique("theme touch input")))
+        .unwrap_or(false)
+}
+
+// The way a press went, fixed once it has moved past the tap distance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Axis {
+    #[default]
+    Undecided,
+    Horizontal,
+    Vertical,
+}
+
+pub fn press_axis(ctx: &egui::Context) -> Axis {
+    let id = egui::Id::unique("theme press axis");
+    let limit = ctx.options(|o| o.input_options.max_click_dist);
+    let (origin, pos) = ctx.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos()));
+    let (Some(origin), Some(pos)) = (origin, pos) else {
+        ctx.data_mut(|d| d.remove::<(Pos2, Axis)>(id));
+        return Axis::Undecided;
+    };
+    let mut axis = ctx
+        .data(|d| d.get_temp::<(Pos2, Axis)>(id))
+        .filter(|(o, _)| *o == origin)
+        .map_or(Axis::Undecided, |(_, a)| a);
+    let moved = pos - origin;
+    if axis == Axis::Undecided && moved.length() > limit {
+        axis = if moved.y.abs() > moved.x.abs() {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
+    }
+    ctx.data_mut(|d| d.insert_temp(id, (origin, axis)));
+    axis
 }
 
 // How a row is marked: the focus bar (keys / pad), a hover band (pointer), pressed (touch), or not at all.
@@ -1289,7 +1350,27 @@ pub fn stepper(
 }
 
 // A drag or click on a slider track: the new position 0..1.
-fn drag(ui: &Ui, id: egui::Id, r: Rect) -> Option<f32> {
+pub fn drag(ui: &Ui, id: egui::Id, r: Rect) -> Option<f32> {
+    let frac = |x: f32| ((x - r.min.x) / r.width()).clamp(0.0, 1.0);
+    // Under a finger the track only claims taps and horizontal drags; a vertical drag scrolls the list under it.
+    if touch_input(ui.ctx()) {
+        let resp = ui.interact(r, id.with("track"), egui::Sense::click());
+        if resp.clicked() {
+            return Some(frac(resp.interact_pointer_pos()?.x));
+        }
+        let (origin, pos, down) = ui.input(|i| {
+            (
+                i.pointer.press_origin(),
+                i.pointer.latest_pos(),
+                i.pointer.primary_down(),
+            )
+        });
+        return (down
+            && origin.is_some_and(|o| r.contains(o))
+            && press_axis(ui.ctx()) == Axis::Horizontal)
+            .then(|| pos.map(|p| frac(p.x)))
+            .flatten();
+    }
     let resp = ui.interact(r, id.with("track"), egui::Sense::click_and_drag());
     if resp.clicked() || resp.dragged() {
         let x = resp.interact_pointer_pos()?.x;

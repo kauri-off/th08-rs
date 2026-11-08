@@ -380,6 +380,11 @@ fn reference(rel: &str) -> Option<image::RgbaImage> {
 
 // The title screen shot without what the game draws over title00.png on the right: the logo sprite (kanji column
 // and the diagonal "Imperishable Night"), filled in from around it and blurred.
+#[expect(
+    clippy::cast_sign_loss,
+    clippy::type_complexity,
+    reason = "coordinates filtered to the image, colours in 0..=255"
+)]
 fn without_logo(img: &image::RgbaImage) -> image::RgbaImage {
     let (w, h) = img.dimensions();
     let logo = |x: u32, y: u32| {
@@ -534,7 +539,15 @@ fn main() -> anyhow::Result<()> {
                             touch: sz.phone,
                         };
                         let (m, probe) = launcher_model(&fx, lang, view, title.as_ref());
-                        let issues = th08::launcher::check_frame(m, sz.px, sz.safe, &o(probe));
+                        let mut issues = th08::launcher::check_frame(m, sz.px, sz.safe, &o(probe));
+                        if matches!(*view, "settings" | "replays" | "stats" | "error") {
+                            issues.extend(th08::launcher::check_reach(
+                                || launcher_model(&fx, lang, view, None).0,
+                                sz.px,
+                                sz.safe,
+                                &o(Probe::None),
+                            ));
+                        }
                         if let (Some(g), Some(dir)) = (&gfx, &args.out) {
                             let (m, probe) = launcher_model(&fx, lang, view, title.as_ref());
                             th08::launcher::render_image(g, m, sz.px, sz.safe, &o(probe))
@@ -547,8 +560,13 @@ fn main() -> anyhow::Result<()> {
                             density: sz.density,
                             ..shot.clone()
                         };
-                        let issues =
+                        let mut issues =
                             th08::platform::portmenu::check_frame(&s, sz.px, sz.safe, &shot);
+                        if shot.settings.is_some() && shot.navs.is_empty() {
+                            issues.extend(th08::platform::portmenu::check_reach(
+                                &s, sz.px, sz.safe, &shot,
+                            ));
+                        }
                         if let (Some(g), Some(dir)) = (&gfx, &args.out) {
                             th08::platform::portmenu::render_image(
                                 g,

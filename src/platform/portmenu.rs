@@ -111,6 +111,9 @@ pub struct Layout {
 const PILLAR: f32 = 480.0;
 // A phone side bar's least width, points.
 const SPLIT_BAR: f32 = 420.0;
+// Coasting after a release, points per second.
+const FLING_MIN: f32 = 200.0;
+const FLING_MAX: f32 = 3000.0;
 // A phone stepper or choice cell: 48 dp at the phone's scale, in points.
 const STEP_CELL: f32 = 120.0;
 // The picture may shrink to this share of its full size to make room for the pillar.
@@ -306,6 +309,10 @@ struct Focus {
     moved: bool,
     // Settings rows scrolled by this many points.
     scroll: f32,
+    // A finger is dragging the settings list; its speed and the speed the list keeps after the release (points/s).
+    dragging: bool,
+    drag_speed: f32,
+    fling: f32,
     split: bool,
     // Hover and the last input kind: the focus bar shows only under key / pad input.
     input: theme::Input<Hit>,
@@ -323,6 +330,9 @@ impl Default for Focus {
             reset: false,
             moved: false,
             scroll: 0.0,
+            dragging: false,
+            drag_speed: 0.0,
+            fling: 0.0,
             split: false,
             input: theme::Input::new(theme::Modality::Keys),
         }
@@ -1262,6 +1272,10 @@ fn menu_ui(
     let geo = Geo::new(ctx, lay);
     let mut out = Vec::new();
     focus.input.begin(ctx, m.touch);
+    if m.touch {
+        let tap = theme::TAP_DP * lay.density / lay.ppp;
+        ctx.options_mut(|o| o.input_options.max_click_dist = tap);
+    }
     let wash = ctx.layer_painter(LayerId::new(
         Order::Background,
         Id::unique("port menu wash"),
@@ -2401,6 +2415,47 @@ fn split_card(
     }
 }
 
+// A finger on the settings list: a vertical drag scrolls it from anywhere on it, the list then coasts briefly and
+// comes to rest on a row (`nearest`).
+fn drag_list(ui: &Ui, list: Rect, focus: &mut Focus, nearest: impl Fn(f32) -> f32) {
+    let ctx = ui.ctx();
+    let (origin, down, dy, dt) = ctx.input(|i| {
+        (
+            i.pointer.press_origin(),
+            i.pointer.primary_down(),
+            i.pointer.delta().y,
+            i.stable_dt.clamp(1.0 / 240.0, 0.1),
+        )
+    });
+    if down && origin.is_some_and(|o| list.contains(o)) {
+        focus.fling = 0.0;
+        if theme::press_axis(ctx) == theme::Axis::Vertical {
+            focus.dragging = true;
+            focus.scroll -= dy;
+            focus.drag_speed = focus.drag_speed * 0.7 + (-dy / dt) * 0.3;
+            ctx.request_repaint();
+        }
+        return;
+    }
+    if std::mem::take(&mut focus.dragging) {
+        if focus.drag_speed.abs() > FLING_MIN {
+            focus.fling = focus.drag_speed.clamp(-FLING_MAX, FLING_MAX);
+        } else {
+            focus.scroll = nearest(focus.scroll);
+        }
+        focus.drag_speed = 0.0;
+    }
+    if focus.fling != 0.0 {
+        focus.scroll += focus.fling * dt;
+        focus.fling *= 1.0 - (6.0 * dt).min(0.9);
+        if focus.fling.abs() < FLING_MIN {
+            focus.fling = 0.0;
+            focus.scroll = nearest(focus.scroll);
+        }
+        ctx.request_repaint();
+    }
+}
+
 // The phone's volume: ◀ number ▶ cells, the track below.
 #[expect(clippy::too_many_arguments, reason = "one painted control")]
 fn phone_volume(
@@ -2438,13 +2493,8 @@ fn phone_volume(
     let span = egui::Rangef::new(cells.min.x, cells.max.x);
     theme::track(p, span, ty, frac, focused);
     let tr = Rect::from_x_y_ranges(span, ty - 16.0..=ty + 16.0);
-    let resp = ui.interact(tr, id.with("vtrack"), Sense::click_and_drag());
-    if (resp.clicked() || resp.dragged())
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
-        out = Some(CtlOut::Frac(
-            ((pos.x - tr.min.x) / tr.width()).clamp(0.0, 1.0),
-        ));
+    if let Some(f) = theme::drag(ui, id, tr) {
+        out = Some(CtlOut::Frac(f));
     }
     out
 }
@@ -2791,6 +2841,7 @@ fn settings_ui(
         focus.tab = i;
         focus.row = focus.row.min(1);
         focus.scroll = 0.0;
+        focus.fling = 0.0;
         focus.reset = false;
     }
     let Some(&g) = tabs.get(focus.tab) else {
@@ -2905,6 +2956,16 @@ fn settings_ui(
         let d = ui.input(|i| i.smooth_scroll_delta.y);
         focus.scroll -= d;
     }
+    let nearest = |v: f32| {
+        tops[..n]
+            .iter()
+            .copied()
+            .min_by(|a, b| (a - v).abs().total_cmp(&(b - v).abs()))
+            .unwrap_or(0.0)
+    };
+    if theme::touch_input(ui.ctx()) {
+        drag_list(ui, list, focus, nearest);
+    }
     if focus.moved && focus.row > 0 {
         let (ft, fb) = (tops[focus.row - 1], tops[focus.row]);
         if ft < focus.scroll {
@@ -2921,13 +2982,28 @@ fn settings_ui(
     let shown = tops[..n]
         .iter()
         .copied()
-        .rfind(|&t| t <= focus.scroll + 0.5)
+        .min_by(|a, b| {
+            (a - focus.scroll)
+                .abs()
+                .total_cmp(&(b - focus.scroll).abs())
+        })
         .unwrap_or(0.0);
     let visible = |i: usize| tops[i] >= shown - 0.5 && tops[i + 1] <= shown + list.height() + 0.5;
     let lp = p.with_clip_rect(list);
     let ui_clip = ui.clip_rect();
     ui.set_clip_rect(list);
     let top = list.min.y - shown;
+    crate::uicheck::note_rows(
+        ui.ctx(),
+        (0..n)
+            .filter(|&i| visible(i))
+            .map(|i| {
+                let r = Rect::from_x_y_ranges(x..=x + w, top + tops[i]..=top + tops[i + 1]);
+                (i, r)
+            })
+            .collect(),
+        n,
+    );
     for (k, key) in keys.iter().enumerate() {
         if !visible(k) {
             continue;
@@ -3017,9 +3093,11 @@ fn settings_ui(
             }
         }
     }
-    // More rows above / below: a small triangle at the list's edge.
+    // More rows above / below: a triangle in the right margin; the margin beside it pages the list.
+    let margin = (x + w)..=geo.screen.max.x;
+    let cx = x + w + (geo.safe.max.x - x - w) / 2.0;
     let mark = |y: f32, down: bool| {
-        let (cx, h) = (x + w - 10.0, 7.0);
+        let h = if split { 10.0 } else { 7.0 };
         let (tip, base) = if down { (y + h, y) } else { (y - h, y) };
         p.add(egui::Shape::convex_polygon(
             vec![pos2(cx - h, base), pos2(cx + h, base), pos2(cx, tip)],
@@ -3027,16 +3105,34 @@ fn settings_ui(
             egui::Stroke::NONE,
         ));
     };
+    let page = |ui: &Ui, r: Rect, name: &str| {
+        ui.interact(r, Id::unique(("settings page", name)), Sense::click())
+            .clicked()
+    };
     if shown > 0.5 {
-        mark(list.min.y - 2.0, false);
+        mark(list.min.y + 12.0, false);
+        let zone = Rect::from_x_y_ranges(margin.clone(), geo.screen.min.y..=list.center().y);
+        if page(ui, zone, "up") {
+            focus.scroll = tops[..n]
+                .iter()
+                .copied()
+                .find(|&t| shown - t <= list.height())
+                .unwrap_or(0.0);
+            focus.fling = 0.0;
+        }
     }
     // The list ends under its last whole row: the ▾ and the help line follow it rather than a gap.
     let end = (0..=n)
         .rev()
         .find(|&i| i > 0 && visible(i - 1))
         .map_or(bottom, |i| (top + tops[i]).min(bottom));
-    if (0..n).any(|i| tops[i] >= shown - 0.5 && !visible(i)) {
-        mark(end + 2.0, true);
+    if let Some(next) = (0..n).find(|&i| tops[i] >= shown - 0.5 && !visible(i)) {
+        mark(end - 14.0, true);
+        let zone = Rect::from_x_y_ranges(margin, list.center().y..=geo.safe.max.y);
+        if page(ui, zone, "down") {
+            focus.scroll = tops[next];
+            focus.fling = 0.0;
+        }
     }
     ui.set_clip_rect(ui_clip);
     let by = bottom + 14.0;
@@ -3218,25 +3314,33 @@ pub fn render_image(
         frame: gfx.frame_rect(w, h),
     };
     let mut img = None;
-    shot_passes(&ctx, s, (w, h), safe, shot, |last, out| {
-        pending.append(out.textures_delta);
-        if !last {
-            return;
-        }
-        let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
-        let mut enc = gfx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        paint(
-            &mut renderer,
-            &mut pending,
-            &jobs,
-            out.pixels_per_point,
-            &target,
-            &mut enc,
-        );
-        img = Some(gfx.read_texture(enc, &tex));
-    });
+    shot_passes(
+        &ctx,
+        s,
+        (w, h),
+        safe,
+        shot,
+        &mut |_, _| None,
+        |last, out| {
+            pending.append(out.textures_delta);
+            if !last {
+                return;
+            }
+            let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
+            let mut enc = gfx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            paint(
+                &mut renderer,
+                &mut pending,
+                &jobs,
+                out.pixels_per_point,
+                &target,
+                &mut enc,
+            );
+            img = Some(gfx.read_texture(enc, &tex));
+        },
+    );
     img.expect("last pass")
 }
 
@@ -3251,7 +3355,7 @@ pub fn check_frame(
     let ctx = new_ctx(s);
     crate::uicheck::mark_stock_slots(&ctx);
     let mut shapes = Vec::new();
-    shot_passes(&ctx, s, size, safe, shot, |last, out| {
+    shot_passes(&ctx, s, size, safe, shot, &mut |_, _| None, |last, out| {
         let out = crate::uicheck::shapes(out);
         if last {
             shapes = out;
@@ -3268,8 +3372,9 @@ fn shot_passes(
     (w, h): (u32, u32),
     safe: SafeArea,
     shot: &Shot,
+    script: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
     mut each: impl FnMut(bool, egui::FullOutput),
-) {
+) -> (launcher::Model, Focus) {
     let mut model = launcher::Model::port_menu(s, shot.touch);
     let lay = layout(
         safe,
@@ -3342,6 +3447,96 @@ fn shot_passes(
         });
         each(i + 1 == PASSES, out);
     }
+    focus.moved = false;
+    let mut k = 0;
+    while let Some(events) = script(k, ctx) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(w as f32 / ppp, h as f32 / ppp),
+            )),
+            time: Some(f64::from(PASSES) / 10.0 + f64::from(k) / 60.0),
+            safe_area_insets: Some(insets(safe, ppp)),
+            events,
+            ..Default::default()
+        };
+        crate::uicheck::shapes(ctx.run_pass(raw, |ctx| {
+            menu_ui(ctx, &m, &mut model, &mut focus, &lay);
+        }));
+        k += 1;
+    }
+    (model, focus)
+}
+
+// Rows of a settings page (`shot.settings`) that no input reaches: touch drags (touch screens), the wheel and keys.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_reach(
+    s: &Settings,
+    size: (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+) -> Vec<crate::uicheck::Issue> {
+    use crate::uicheck::{self as uc, Issue, Kind};
+    let mut out = Vec::new();
+    let screen = egui::Rect::NOTHING;
+    let mut fail = |how: &str, seen: &std::collections::BTreeSet<usize>, n: usize| {
+        let missing: Vec<usize> = (0..n).filter(|i| !seen.contains(i)).collect();
+        if !missing.is_empty() || n == 0 {
+            out.push(Issue {
+                kind: Kind::Unreachable,
+                what: format!("rows {missing:?} of {n} by {how}"),
+                rect: screen,
+            });
+        }
+    };
+    let run = |how: u8, shot: &Shot| {
+        let ctx = new_ctx(s);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut n = 0;
+        let mut script = |k: u32, ctx: &egui::Context| {
+            let (rows, total) = uc::rows(ctx);
+            n = total;
+            seen.extend(rows.iter().map(|r| r.0));
+            let list = rows.iter().fold(egui::Rect::NOTHING, |a, r| a.union(r.1));
+            if k >= 600 || (total > 0 && seen.len() == total) || (how == 2 && k > 0) {
+                return None;
+            }
+            Some(match how {
+                0 => uc::swipe(k % 41, list.center(), list.height() * 0.7).unwrap_or_default(),
+                1 => vec![
+                    egui::Event::PointerMoved(list.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -40.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                _ => Vec::new(),
+            })
+        };
+        shot_passes(&ctx, s, size, safe, shot, &mut script, |_, o| {
+            drop(crate::uicheck::shapes(o));
+        });
+        (seen, n)
+    };
+    if shot.touch {
+        let (seen, n) = run(0, shot);
+        fail("touch", &seen, n);
+    }
+    let (seen, n) = run(1, shot);
+    fail("wheel", &seen, n);
+    let (mut seen, n) = run(2, shot);
+    for d in 1..=n {
+        let keyed = Shot {
+            navs: vec![Nav::Down; d],
+            ..shot.clone()
+        };
+        seen.extend(run(2, &keyed).0);
+    }
+    fail("keys", &seen, n);
+    out
 }
 
 // The number of settings tabs the menu shows for `s`.
@@ -3374,6 +3569,181 @@ mod tests {
 
     fn run(f: &mut Focus, m: &MenuState<'_>, model: &mut launcher::Model, navs: &[Nav]) -> Vec<Do> {
         navs.iter().map(|&n| f.nav(n, m, model)).collect()
+    }
+
+    const PHONES: [((u32, u32), f32, SafeArea); 2] = [
+        (
+            (2400, 1080),
+            2.75,
+            SafeArea {
+                left: 110,
+                top: 0,
+                right: 48,
+                bottom: 0,
+            },
+        ),
+        (
+            (1600, 720),
+            2.0,
+            SafeArea {
+                left: 72,
+                top: 0,
+                right: 32,
+                bottom: 0,
+            },
+        ),
+    ];
+
+    fn phone_shot(tab: usize, density: f32) -> Shot {
+        Shot {
+            quit: true,
+            touch: true,
+            density,
+            settings: Some(tab),
+            ..Shot::default()
+        }
+    }
+
+    fn tabs() -> usize {
+        settings_tabs(&Settings::default(), true)
+    }
+
+    // Swipes up starting at `x` of the row width until the last row shows; the rows seen and the final state.
+    fn swipe_to_end(
+        size: (u32, u32),
+        safe: SafeArea,
+        shot: &Shot,
+        x: f32,
+        then: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
+    ) -> (bool, launcher::Model, Focus) {
+        let s = Settings::default();
+        let ctx = new_ctx(&s);
+        let mut end = None;
+        let mut reached = false;
+        let mut script = |k: u32, ctx: &egui::Context| {
+            let (rows, n) = crate::uicheck::rows(ctx);
+            if let Some(e) = end {
+                return then(k - e, ctx);
+            }
+            if rows.iter().any(|r| r.0 + 1 == n) && k.is_multiple_of(41) {
+                reached = true;
+                end = Some(k);
+                return then(0, ctx);
+            }
+            if k > 41 * 40 {
+                return None;
+            }
+            let list = rows.iter().fold(egui::Rect::NOTHING, |a, r| a.union(r.1));
+            let from = egui::pos2(list.left() + list.width() * x, list.center().y);
+            crate::uicheck::swipe(k % 41, from, list.height() * 0.7)
+        };
+        let (model, focus) = shot_passes(&ctx, &s, size, safe, shot, &mut script, |_, o| {
+            drop(crate::uicheck::shapes(o));
+        });
+        (reached, model, focus)
+    }
+
+    #[test]
+    fn a_drag_reaches_the_last_row_of_every_tab() {
+        for (size, density, safe) in PHONES {
+            for tab in 0..tabs() {
+                let (ok, ..) =
+                    swipe_to_end(size, safe, &phone_shot(tab, density), 0.1, &mut |_, _| None);
+                assert!(ok, "tab {tab} at {size:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_drag_changes_no_value() {
+        for (size, density, safe) in PHONES {
+            for tab in 0..tabs() {
+                let start = live_values(&launcher::Model::port_menu(&Settings::default(), true));
+                // From a label, a stepper, a slider track and a right-hand cell.
+                for x in [0.1, 0.45, 0.62, 0.95] {
+                    let shot = phone_shot(tab, density);
+                    let (ok, model, _) = swipe_to_end(size, safe, &shot, x, &mut |_, _| None);
+                    assert!(ok, "tab {tab} x {x}");
+                    assert_eq!(live_values(&model), start, "tab {tab} x {x} at {size:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tap_works_after_scrolling() {
+        for (size, density, safe) in PHONES {
+            for tab in 0..tabs() {
+                let shot = phone_shot(tab, density);
+                let mut then = |k: u32, ctx: &egui::Context| {
+                    let (rows, n) = crate::uicheck::rows(ctx);
+                    let last = rows.iter().find(|r| r.0 + 1 == n)?.1.center();
+                    match k {
+                        0 => Some(crate::uicheck::finger(egui::TouchPhase::Start, last)),
+                        1 => Some(crate::uicheck::finger(egui::TouchPhase::End, last)),
+                        2..=4 => Some(Vec::new()),
+                        _ => None,
+                    }
+                };
+                let (ok, _, focus) = swipe_to_end(size, safe, &shot, 0.1, &mut then);
+                assert!(ok && focus.reset, "reset row at tab {tab}, {size:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_slider_keeps_its_horizontal_drag() {
+        let ((w, h), density, safe) = PHONES[1];
+        let s = Settings::default();
+        let ctx = new_ctx(&s);
+        let shot = phone_shot(0, density);
+        let mut script = |k: u32, ctx: &egui::Context| {
+            let (rows, _) = crate::uicheck::rows(ctx);
+            let r = rows.first()?.1;
+            let at = egui::pos2(r.left() + r.width() * 0.6, r.center().y);
+            let left = |d: f32| at - egui::vec2(d, 0.0);
+            match k {
+                0 => Some(crate::uicheck::finger(egui::TouchPhase::Start, at)),
+                1..=4 => Some(crate::uicheck::finger(
+                    egui::TouchPhase::Move,
+                    left(k as f32 * 16.0),
+                )),
+                5 => Some(crate::uicheck::finger(egui::TouchPhase::End, left(64.0))),
+                _ => None,
+            }
+        };
+        let (model, _) = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
+            drop(crate::uicheck::shapes(o));
+        });
+        let start = live_values(&launcher::Model::port_menu(&s, true));
+        assert_ne!(live_values(&model), start);
+    }
+
+    #[test]
+    fn the_marks_page_the_list() {
+        let ((w, h), density, safe) = PHONES[1];
+        let s = Settings::default();
+        let tab = 1;
+        let ctx = new_ctx(&s);
+        let shot = phone_shot(tab, density);
+        let mut first = None;
+        let mut script = |k: u32, ctx: &egui::Context| {
+            let (rows, n) = crate::uicheck::rows(ctx);
+            first.get_or_insert_with(|| rows.first().map_or(0, |r| r.0));
+            assert!(rows.len() < n, "tab {tab} does not scroll");
+            let r = rows.iter().fold(egui::Rect::NOTHING, |a, r| a.union(r.1));
+            let at = egui::pos2(ctx.viewport_rect().max.x - 8.0, r.max.y - 8.0);
+            match k {
+                0 => Some(crate::uicheck::finger(egui::TouchPhase::Start, at)),
+                1 => Some(crate::uicheck::finger(egui::TouchPhase::End, at)),
+                2..=4 => Some(Vec::new()),
+                _ => None,
+            }
+        };
+        let (_, focus) = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
+            drop(crate::uicheck::shapes(o));
+        });
+        assert!(focus.scroll > 0.0);
     }
 
     #[test]

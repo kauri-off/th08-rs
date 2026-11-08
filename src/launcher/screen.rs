@@ -235,15 +235,22 @@ impl Model {
             .nav
             .focus
             .and_then(|f| order.iter().position(|&t| t == f));
+        // Past the last (first) target the list itself moves: rows that take no focus are read this way.
         if pressed(Key::ArrowDown) {
-            self.nav.focus = order
-                .get(at.map_or(0, |a| (a + 1).min(order.len() - 1)))
-                .copied();
-            self.nav.moved = true;
+            if at.is_some() && at == order.len().checked_sub(1) {
+                theme::ask_scroll(ui.ctx(), ROW_H * 2.0);
+            } else {
+                self.nav.focus = order.get(at.map_or(0, |a| a + 1)).copied();
+                self.nav.moved = true;
+            }
         }
         if pressed(Key::ArrowUp) {
-            self.nav.focus = order.get(at.map_or(0, |a| a.saturating_sub(1))).copied();
-            self.nav.moved = true;
+            if at == Some(0) {
+                theme::ask_scroll(ui.ctx(), -ROW_H * 2.0);
+            } else {
+                self.nav.focus = order.get(at.map_or(0, |a| a - 1)).copied();
+                self.nav.moved = true;
+            }
         }
         for (k, dir) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
             if pressed(k) {
@@ -466,7 +473,9 @@ impl Model {
     #[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
     pub(super) fn settings_screen(&mut self, ui: &mut Ui) -> Option<Action> {
         let lang = self.lang();
-        self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
+        self.nav
+            .input
+            .begin(ui.ctx(), cfg!(target_os = "android") || self.touch);
         let mut act = self.keys(ui);
         let full = ui.max_rect();
         let screen = ui.ctx().viewport_rect();
@@ -691,7 +700,9 @@ impl Model {
         let lang = self.lang();
         let error = matches!(status, Status::Error(_));
         if error {
-            self.nav.input.begin(ui.ctx(), cfg!(target_os = "android"));
+            self.nav
+                .input
+                .begin(ui.ctx(), cfg!(target_os = "android") || self.touch);
         }
         let dir = self.game_dir().to_string();
         let mut act = if error { self.keys(ui) } else { None };
@@ -783,6 +794,7 @@ impl Model {
         let out = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
+                theme::apply_scroll(ui);
                 let p = ui.painter().clone();
                 let cg = theme::wrap(
                     &p,
@@ -837,7 +849,7 @@ impl Model {
                 }
                 ui.add_space(8.0);
             });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body, out.content_size.y);
+        crate::uicheck::note_scroll(ui.ctx(), &out, body);
         theme::scroll_edges(ui, &out);
         theme::shadowed(&p, pos2(x, help_y), help_g, theme::HELP_HI);
         let mut hints = vec![
@@ -1113,6 +1125,7 @@ impl Model {
         let out = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                theme::apply_scroll(ui);
                 ui.add_space(4.0);
                 if self.nav.folder_in_content {
                     let full = ui.max_rect();
@@ -1162,7 +1175,7 @@ impl Model {
                 self.more_rows(ui, x, w, lang);
                 ui.add_space(12.0);
             });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, ui.max_rect(), out.content_size.y);
+        crate::uicheck::note_scroll(ui.ctx(), &out, ui.max_rect());
         theme::scroll_edges(ui, &out);
         act
     }
@@ -1734,12 +1747,13 @@ impl Model {
         let out = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                theme::apply_scroll(ui);
                 ui.add_space(4.0);
                 let r = f(ui);
                 ui.add_space(12.0);
                 r
             });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, space, out.content_size.y);
+        crate::uicheck::note_scroll(ui.ctx(), &out, space);
         theme::scroll_edges(ui, &out);
         out.inner
     }
