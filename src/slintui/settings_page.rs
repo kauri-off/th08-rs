@@ -141,6 +141,7 @@ impl Page {
         touch: bool,
     ) -> Result<Self, slint::PlatformError> {
         host::use_gpu(gpu.clone())?;
+        log::info!("slintui: settings page opened");
         let ui = SettingsPage::new()?;
         ui.show()?;
         let adapter = host::take_adapter().ok_or(slint::PlatformError::NoPlatform)?;
