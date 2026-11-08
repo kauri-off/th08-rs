@@ -120,5 +120,5 @@ cargo run --release -- "/path/to/TH08 - Imperishable Night"
 
 ## ライセンス
 
-GPL-3.0-or-later（`LICENSE` を参照）。対象はこのリポジトリのコードと文書のみです。東方Project とすべての
+GPL-3.0-or-later（`LICENSE` を参照）。配布ビルドは Slint を GPL-3.0-only の条件でリンクするため、バイナリは GPL-3.0-only です（ソースは GPL-3.0-or-later のまま）。対象はこのリポジトリのコードと文書のみです。東方Project とすべての
 ゲーム素材の権利は上海アリス幻樂団にあります。

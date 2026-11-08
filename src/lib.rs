@@ -22,6 +22,7 @@ pub mod scoreview;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub mod selfupdate;
 pub mod settings;
+pub mod slintui;
 pub mod sources;
 pub mod stats;
 pub mod theme;

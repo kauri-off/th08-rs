@@ -1,0 +1,447 @@
+// The component set of docs/UI_RULES.md; screens compose these and never draw their own controls.
+import { Tk, Ui, Modality } from "tokens.slint";
+
+export struct Cap { text: string, disc: bool }
+export struct Hint { caps: [Cap], word: string }
+// kind: 0 choice / toggle, 1 slider, 2 path or action, 3 danger action.
+export struct RowData {
+    kind: int, label: string, help: string, words: [string], sel: int,
+    frac: float, number: string, unit: string, value: string, rule: bool, pieces: [string],
+}
+
+// `accessible-id` is read only by the layout check, so its measurements cost nothing in play.
+export component Label inherits Text {
+    in property <bool> serif: true;
+    font-family: serif ? Tk.serif : Tk.sans;
+    vertical-alignment: center;
+    accessible-label: self.text;
+    accessible-id: "t|" + (self.wrap == TextWrap.word-wrap ? "w" : "n") + "|" + (self.font-size / 1px) + "|"
+        + (serif ? "s" : "n") + "|" + (self.preferred-width / 1px) + "|" + (self.preferred-height / 1px);
+}
+
+// The label face: 1 px dark ring (Slint has no text shadow).
+export component Ringed inherits Label {
+    stroke: #000000;
+    stroke-width: 1px;
+    stroke-style: outside;
+}
+
+export component Arrow inherits Path {
+    in property <int> dir; // 0 left, 1 right, 2 up, 3 down
+    in property <color> tint;
+    width: 14px;
+    height: 14px;
+    fill: tint;
+    viewbox-width: 10;
+    viewbox-height: 10;
+    commands: dir == 0 ? "M9 0 L9 10 L1 5 Z" : dir == 1 ? "M1 0 L1 10 L9 5 Z" : dir == 2 ? "M0 9 L10 9 L5 1 Z" : "M0 1 L10 1 L5 9 Z";
+}
+
+// Tick and band of the single focused row (`bar`), the band alone when lit or pressed.
+export component FocusMark inherits Rectangle {
+    in property <bool> bar;
+    in property <bool> lit;
+    in property <bool> down;
+    background: down ? Tk.pressed : (bar || lit) ? Tk.band : transparent;
+    if bar: Rectangle {
+        accessible-role: text;
+        accessible-id: "focus";
+        x: 0;
+        width: Ui.split ? 5px : 4px;
+        height: 100%;
+        background: Tk.accent;
+    }
+}
+
+export component Keycap inherits Rectangle {
+    in property <Cap> cap;
+    in property <length> size;
+    property <bool> arrows: cap.text == "↑↓" || cap.text == "←→";
+    width: cap.disc ? size * 1.5 : max(size * 1.5, (arrows ? size * 2.2 : t.preferred-width + size * 0.8));
+    height: size * 1.5;
+    border-width: cap.disc ? 0 : 1px;
+    border-color: Tk.dim;
+    border-radius: cap.disc ? self.height / 2 : 3px;
+    background: cap.disc ? Tk.keycap : transparent;
+    t := Label {
+        text: root.arrows ? "" : cap.text;
+        serif: false;
+        font-size: root.size;
+        color: cap.disc ? Tk.panel : Tk.keycap;
+    }
+    if arrows: HorizontalLayout {
+        alignment: center;
+        spacing: 2px;
+        VerticalLayout { alignment: center; Arrow { width: root.size * 0.7; height: root.size * 0.7; tint: Tk.keycap; dir: cap.text == "↑↓" ? 2 : 0; } }
+        VerticalLayout { alignment: center; Arrow { width: root.size * 0.7; height: root.size * 0.7; tint: Tk.keycap; dir: cap.text == "↑↓" ? 3 : 1; } }
+    }
+}
+
+// Heading token: serif word, small lavender caption offset right and below.
+export component Heading inherits VerticalLayout {
+    in property <string> word;
+    in property <string> caption;
+    in property <length> size;
+    in property <length> caption-size;
+    spacing: -2px;
+    Ringed { text: word; font-size: size; color: Tk.text-hi; horizontal-alignment: left; }
+    HorizontalLayout {
+        padding-left: size * 1.15;
+        Ringed { text: caption; font-size: caption-size; color: Tk.accent; horizontal-alignment: left; }
+    }
+}
+
+// A tap target at least 48 dp tall on touch; the layout check reads `accessible-id`.
+export component Target inherits TouchArea {
+    in property <string> name;
+    accessible-role: button;
+    accessible-label: name;
+    accessible-id: "target|" + name;
+}
+
+export component BackLink inherits Target {
+    in property <string> text;
+    in property <string> key; // empty: no keycap
+    in property <length> size;
+    in property <bool> rail;
+    name: "back";
+    min-height: Ui.touch ? 120px : 48px;
+    HorizontalLayout {
+        alignment: rail ? start : end;
+        spacing: size * 0.6;
+        if key != "": VerticalLayout { alignment: center; Keycap { cap: { text: key, disc: false }; size: size; } }
+        Ringed { text: "‹ " + root.text; serif: !rail ? false : true; font-size: size; color: rail ? Tk.text : Tk.help; horizontal-stretch: 0; }
+    }
+}
+
+// One tab; the selected one white with an underline.
+component TabCell inherits Target {
+    in property <string> text;
+    in property <bool> sel;
+    in property <length> size;
+    in property <bool> wrap-text;
+    name: "tab|" + text;
+    preferred-width: l.preferred-width;
+    min-height: Ui.touch ? 120px : 48px;
+    l := Ringed {
+        width: 100%;
+        text: root.text;
+        font-size: root.size;
+        color: root.sel ? Tk.text-hi : Tk.help;
+        horizontal-alignment: left;
+        wrap: root.wrap-text ? word-wrap : no-wrap;
+    }
+    Rectangle {
+        x: 0;
+        y: parent.height - (Ui.split ? 16px : 6px);
+        width: min(l.preferred-width, parent.width);
+        height: Ui.split ? 3px : 2px;
+        background: root.sel ? Tk.accent : transparent;
+    }
+}
+
+// Tabs: an underline row (wide) with shoulder keycaps, or a rail of cells (phone).
+export component Tabs inherits Rectangle {
+    in property <[string]> tabs;
+    in property <int> current;
+    in property <bool> rail;
+    in property <bool> bar; // key focus on the tab bar
+    in property <string> prev-key;
+    in property <string> next-key;
+    in property <length> size;
+    callback pick(int);
+
+    property <float> fit: min(1, (self.width - (prev-key == "" ? 0 : 2 * size * 3)) / max(1px, measure.preferred-width));
+    Rectangle {
+        visible: false;
+        measure := HorizontalLayout {
+            spacing: 32px;
+            for t in tabs: Text { text: t; font-family: Tk.serif; font-size: root.size; }
+        }
+    }
+    if bar: FocusMark { bar: true; x: -12px; width: parent.width + 24px; }
+    if !rail: HorizontalLayout {
+        spacing: 32px * fit;
+        alignment: start;
+        if prev-key != "": VerticalLayout { alignment: center; Keycap { cap: { text: prev-key, disc: false }; size: root.size * 0.7; } }
+        for t[i] in tabs: TabCell {
+            text: t; sel: i == root.current; size: max(root.size * root.fit, Ui.font(0, 13));
+            clicked => { root.pick(i); }
+        }
+        if next-key != "": VerticalLayout { alignment: center; Keycap { cap: { text: next-key, disc: false }; size: root.size * 0.7; } }
+    }
+    if rail: VerticalLayout {
+        alignment: start;
+        for t[i] in tabs: TabCell {
+            text: t; sel: i == root.current; size: root.size; wrap-text: true;
+            clicked => { root.pick(i); }
+        }
+    }
+}
+
+export component StepCell inherits Target {
+    in property <int> dir;
+    in property <bool> hot;
+    in property <bool> cell;
+    name: "step";
+    width: cell ? 120px : 40px;
+    min-height: cell ? 120px : 40px;
+    Rectangle {
+        background: root.cell ? (root.hot || root.pressed ? Tk.pressed : Tk.cell) : transparent;
+        Arrow { width: root.cell ? 26px : 14px; height: self.width; dir: root.dir; tint: root.hot ? Tk.text-hi : Tk.dim; }
+    }
+}
+
+// ◀ track ▶ number. A press on the track sets it only after 8 pt sideways, so a vertical list drag changes nothing.
+export component SliderValue inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <bool> hot;
+    callback step(int);
+    callback set(float);
+    out property <bool> hover: track.has-hover;
+    spacing: 8px;
+    StepCell { dir: 0; hot: root.hot; cell: Ui.split; clicked => { root.step(-1); } }
+    track := Target {
+        name: "track";
+        horizontal-stretch: 1;
+        min-width: 80px;
+        property <bool> dragging;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { self.dragging = false; }
+        }
+        moved => {
+            if (self.pressed && abs(self.mouse-x - self.pressed-x) > 8px) { self.dragging = true; }
+            if (self.dragging) { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
+        }
+        clicked => { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
+        Rectangle { y: parent.height / 2 - 1px; height: 2px; background: Tk.track; }
+        Rectangle { x: 0; y: parent.height / 2 - 1px; height: 2px; width: parent.width * data.frac; background: Tk.fill; }
+        Rectangle {
+            x: parent.width * data.frac - self.width / 2;
+            y: parent.height / 2 - self.height / 2;
+            width: root.hot ? 16px : 11px;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: root.hot ? Tk.accent : Tk.text;
+        }
+    }
+    StepCell { dir: 1; hot: root.hot; cell: Ui.split; clicked => { root.step(1); } }
+    HorizontalLayout {
+        width: Ui.split ? 110px : 100px;
+        alignment: end;
+        spacing: 3px;
+        Label { text: data.number; serif: false; font-size: Ui.font(22, 13); color: root.hot ? Tk.text-hi : Tk.text; horizontal-alignment: right; }
+        if data.unit != "": Label { text: data.unit; serif: false; font-size: Ui.font(16, 11); color: Tk.help; }
+    }
+}
+
+// Choices side by side, the selected one white.
+component ChoiceInline inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <length> size;
+    callback pick(int);
+    out property <bool> hover: false;
+    spacing: Ui.split ? 0 : size * 1.2;
+    alignment: start;
+    for w[i] in data.words: Target {
+        name: "choice|" + w;
+        min-width: Ui.split ? 150px : 0;
+        min-height: Ui.split ? 120px : 40px;
+        preferred-width: l.preferred-width + (Ui.split ? 32px : 0);
+        horizontal-stretch: 0;
+        clicked => { root.pick(i); }
+        l := Ringed { text: w; font-size: root.size; color: i == data.sel ? Tk.text-hi : Tk.dim; }
+    }
+}
+
+// ◀ value ▶ for choices that do not fit on one line.
+component ChoiceStepper inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <bool> hot;
+    in property <length> size;
+    callback step(int);
+    spacing: 8px;
+    StepCell { dir: 0; hot: root.hot; cell: Ui.split; clicked => { root.step(-1); } }
+    Ringed {
+        horizontal-stretch: 1;
+        text: data.sel >= 0 ? data.words[data.sel] : data.value;
+        font-size: root.size;
+        color: root.hot ? Tk.text-hi : Tk.text;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+    StepCell { dir: 1; hot: root.hot; cell: Ui.split; clicked => { root.step(1); } }
+}
+
+export component ActionValue inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <bool> hot;
+    spacing: 12px;
+    Label {
+        horizontal-stretch: 1;
+        text: data.value;
+        serif: false;
+        font-size: Ui.font(20, 13);
+        color: root.hot ? Tk.text-hi : Tk.text;
+        horizontal-alignment: left;
+        wrap: word-wrap;
+    }
+    Label { text: "›"; font-size: Ui.font(24, 14); color: Tk.help; horizontal-stretch: 0; }
+}
+
+// The in-place question of a danger action: a second press confirms; `options` adds named answers (index 0 = yes).
+export component Confirm inherits HorizontalLayout {
+    in property <string> question;
+    in property <[string]> options;
+    in property <length> size;
+    callback answer(bool);
+    spacing: 24px;
+    Ringed { text: root.question; font-size: root.size; color: Tk.question; horizontal-alignment: left; horizontal-stretch: 1; wrap: word-wrap; }
+    for a[i] in root.options: Target {
+        name: "confirm|" + a;
+        horizontal-stretch: 0;
+        min-width: Ui.touch ? 150px : 60px;
+        preferred-width: t.preferred-width + 24px;
+        min-height: Ui.touch ? 120px : 40px;
+        clicked => { root.answer(i == 0); }
+        t := Ringed { text: a; font-size: root.size; color: i == 0 ? Tk.danger : Tk.text; }
+    }
+}
+
+// The value control of any row kind.
+component ValueControl inherits Rectangle {
+    in property <RowData> data;
+    in property <bool> hot;
+    in property <bool> as-stepper;
+    in property <length> size;
+    callback step(int);
+    callback pick(int);
+    callback set(float);
+    if data.kind == 0 && !as-stepper: ChoiceInline { data: root.data; size: root.size; pick(i) => { root.pick(i); } }
+    if data.kind == 0 && as-stepper: ChoiceStepper { data: root.data; hot: root.hot; size: root.size; step(d) => { root.step(d); } }
+    if data.kind == 1: SliderValue { data: root.data; hot: root.hot; step(d) => { root.step(d); } set(f) => { root.set(f); } }
+    if data.kind == 2: ActionValue { data: root.data; hot: root.hot; }
+}
+
+// One row: label column + value column on the page's grid; the control goes under the label when it cannot fit.
+export component SettingRow inherits Rectangle {
+    in property <RowData> data;
+    in property <bool> bar;
+    in property <length> label-w;
+    in property <length> inset;
+    in property <length> content-w;
+    in property <length> row-h;
+    in property <length> size;
+    in property <bool> armed;
+    in property <string> ask;
+    out property <bool> hovering: area.has-hover;
+    callback step(int);
+    callback pick(int);
+    callback set(float);
+    callback activate();
+    callback answer(bool);
+    callback press();
+
+    property <length> gap: Ui.split ? 0 : root.size * 1.2;
+    property <length> value-w: content-w - label-w;
+    property <length> cell-sum: Ui.split ? 256px : 96px;
+    property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > value-w;
+    property <bool> stacked: (as-stepper && widest-m.preferred-width + cell-sum > value-w) || label-m.preferred-width > label-w - 24px;
+    property <bool> lit: area.has-hover && Ui.modality == Modality.mouse;
+    property <bool> hot: bar || lit;
+    min-height: max(row-h, body.preferred-height);
+
+    Rectangle {
+        visible: false;
+        inline-m := HorizontalLayout {
+            spacing: root.gap;
+            for w in data.words: Rectangle {
+                min-width: Ui.split ? 150px : 0;
+                preferred-width: wm.preferred-width + (Ui.split ? 32px : 0);
+                wm := Text { text: w; font-family: Tk.serif; font-size: root.size; }
+            }
+        }
+        label-m := VerticalLayout {
+            for p in data.pieces: Text { text: p; font-family: Tk.serif; font-size: root.size; }
+        }
+        widest-m := VerticalLayout {
+            for w in data.words: Text { text: w; font-family: Tk.serif; font-size: root.size; }
+        }
+    }
+    FocusMark { bar: root.bar; lit: root.lit; down: area.pressed && Ui.modality == Modality.touch; }
+    area := Target {
+        name: "row|" + data.label;
+        clicked => { root.press(); root.activate(); }
+        if data.rule: Rectangle { x: inset; y: 0; width: content-w; height: 1px; background: Tk.rule; }
+    }
+    body := VerticalLayout {
+        x: inset;
+        width: content-w;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        if !stacked: HorizontalLayout {
+            if data.kind != 3: Ringed {
+                text: data.label; font-size: root.size; color: hot ? Tk.text-hi : Tk.text;
+                width: label-w - 24px; horizontal-alignment: left; wrap: word-wrap;
+            }
+            if data.kind != 3: Rectangle { width: 24px; }
+            if data.kind == 3 && !armed: Ringed {
+                text: data.label; font-size: root.size; color: Tk.danger; horizontal-alignment: left; wrap: word-wrap;
+            }
+            if data.kind == 3 && armed: Confirm {
+                question: root.ask; size: root.size;
+                answer(y) => { root.answer(y); }
+            }
+            if data.kind != 3: ValueControl {
+                data: root.data; hot: root.hot; as-stepper: root.as-stepper; size: root.size * 0.96; horizontal-stretch: 1;
+                step(d) => { root.press(); root.step(d); } pick(i) => { root.press(); root.pick(i); } set(f) => { root.press(); root.set(f); }
+            }
+        }
+        if stacked: Ringed { text: data.label; font-size: root.size; color: hot ? Tk.text-hi : Tk.text; horizontal-alignment: left; wrap: word-wrap; }
+        if stacked: ValueControl {
+            min-height: Ui.split ? 120px : 48px;
+            data: root.data; hot: root.hot; as-stepper: inline-m.preferred-width > content-w; size: root.size * 0.96;
+            step(d) => { root.press(); root.step(d); } pick(i) => { root.press(); root.pick(i); } set(f) => { root.press(); root.set(f); }
+        }
+    }
+}
+
+export component HelpLine inherits Label {
+    serif: false;
+    color: Tk.help-hi;
+    wrap: word-wrap;
+    vertical-alignment: top;
+    horizontal-alignment: left;
+}
+
+export component HintLine inherits HorizontalLayout {
+    in property <[Hint]> hints;
+    in property <string> device;
+    in property <length> size;
+    spacing: 18px;
+    for h in hints: HorizontalLayout {
+        spacing: 5px;
+        horizontal-stretch: 0;
+        for c in h.caps: VerticalLayout { alignment: center; Keycap { cap: c; size: root.size * 0.85; } }
+        Label { text: h.word; serif: false; font-size: root.size; color: Tk.help; }
+    }
+    Rectangle { horizontal-stretch: 1; }
+    Label { text: root.device; serif: false; font-size: root.size; color: Tk.help; horizontal-stretch: 0; }
+}
+
+// The scrolling list: rows passed as children, `reveal` keeps a row in view, marks page it.
+export component ScrollList inherits Flickable {
+    accessible-role: list;
+    accessible-id: "list";
+    out property <length> scroll: -self.content-y;
+    out property <length> scroll-max: max(0, self.content-height - self.height);
+    mouse-drag-pan-enabled: Ui.modality == Modality.touch;
+    public function reveal(y: length, h: length) {
+        if (y + self.content-y < 0) { self.content-y = -y; }
+        else if (y + h + self.content-y > self.height) { self.content-y = self.height - y - h; }
+    }
+    public function page(dir: int) {
+        self.content-y = clamp(self.content-y - dir * self.height * 0.9, -self.scroll-max, 0);
+    }
+    public function top() { self.content-y = 0; }
+}

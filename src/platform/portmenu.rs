@@ -570,6 +570,7 @@ fn has_volume(model: &launcher::Model) -> bool {
     model.live_keys().contains(&VOLUME)
 }
 
+#[expect(clippy::struct_excessive_bools, reason = "independent menu flags")]
 pub struct PortMenu {
     ctx: egui::Context,
     state: egui_winit::State,
@@ -609,6 +610,9 @@ pub struct PortMenu {
     navs: Vec<Nav>,
     mods: winit::keyboard::ModifiersState,
     axes: [i32; 2],
+    // Developer setting `slint_ui`: the settings page on Slint; the page exists only while it is open.
+    use_slint: bool,
+    slint: Option<Box<crate::slintui::settings_page::Page>>,
 }
 
 impl PortMenu {
@@ -655,6 +659,8 @@ impl PortMenu {
             navs: Vec::new(),
             mods: winit::keyboard::ModifiersState::empty(),
             axes: [0; 2],
+            use_slint: s.slint_ui,
+            slint: None,
         }
     }
 
@@ -733,6 +739,9 @@ impl PortMenu {
                 return false;
             }
         }
+        if let Some(p) = &mut self.slint {
+            return p.on_event(ev);
+        }
         self.state.on_window_event(window, ev).repaint
     }
 
@@ -750,6 +759,11 @@ impl PortMenu {
             touch_ui,
             gfx.blit_options.integer,
         );
+        if self.use_slint && self.focus.page == Page::Settings && self.edit.is_none() {
+            self.redraw_slint(window, gfx, lay);
+            return None;
+        }
+        self.slint = None;
         let ppp = if self.edit.is_some() {
             lay.edit_ppp
         } else {
@@ -855,10 +869,120 @@ impl PortMenu {
         }
         let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, &t, enc));
         gfx.safe = s;
-        if !shown {
+        if !shown || (self.use_slint && self.focus.page == Page::Settings) {
             window.request_redraw();
         }
         act
+    }
+
+    // One pass of the Slint settings page; texture work only when the page changed.
+    fn redraw_slint(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) {
+        use crate::slintui::settings_page::{Page as SlintPage, Place};
+        let safe = gfx.safe;
+        let size = gfx.surface_size();
+        gfx.recover_if_lost();
+        let lang = self.model.lang();
+        let words = page_words(lang, self.controller.as_deref(), &lay);
+        let stale = self
+            .slint
+            .as_ref()
+            .is_none_or(|p| p.generation() != gfx.generation() || *p.words() != words);
+        if stale {
+            let gpu = crate::slintui::host::Gpu {
+                instance: gfx.instance().clone(),
+                device: gfx.device.clone(),
+                queue: gfx.queue.clone(),
+            };
+            match SlintPage::new(gpu, gfx.generation(), words, lay.touch) {
+                Ok(mut p) => {
+                    p.place(Place { lay, safe, size });
+                    p.show_tab(self.focus.tab, &self.model, lang);
+                    self.slint = Some(Box::new(p));
+                }
+                Err(e) => {
+                    log::error!("slintui: {e}; falling back to the egui page");
+                    self.use_slint = false;
+                    window.request_redraw();
+                    return;
+                }
+            }
+        }
+        let Some(page) = &mut self.slint else {
+            return;
+        };
+        page.place(Place { lay, safe, size });
+        for n in self.navs.drain(..) {
+            page.nav(n);
+        }
+        let before = live_values(&self.model);
+        let back = page.apply(&mut self.model, lang);
+        self.focus.tab = page.tab();
+        if live_values(&self.model) != before {
+            self.changed = true;
+            window.request_redraw();
+        }
+        self.repaint_at = page.tick().map(|d| web_time::Instant::now() + d);
+        if back {
+            self.focus.back();
+            self.slint = None;
+            window.request_redraw();
+            return;
+        }
+        gfx.safe = lay.picture;
+        let shown = gfx.present_last(|t, enc| page.paint(&t, enc));
+        gfx.safe = safe;
+        if !shown {
+            window.request_redraw();
+        }
+    }
+}
+
+// The Slint settings page's fixed strings.
+pub(crate) fn page_words(
+    lang: Lang,
+    pad: Option<&str>,
+    lay: &Layout,
+) -> crate::slintui::settings_page::Words {
+    let w = Words { lang };
+    let m = MenuState {
+        pad,
+        touch: lay.touch,
+        cheats: &[],
+        hitboxes: Hitboxes::Off,
+        status: None,
+        speed: None,
+        no_saves: false,
+        quit: false,
+        stage: None,
+    };
+    let keyed = pad.is_some() || !lay.touch;
+    let (prev, next) = if pad.is_some() {
+        ("LB", "RB")
+    } else if lay.touch {
+        ("", "")
+    } else {
+        ("Q", "E")
+    };
+    let back_key = match (keyed, pad.is_some()) {
+        (false, _) => "",
+        (true, true) => "B",
+        (true, false) => "X",
+    };
+    crate::slintui::settings_page::Words {
+        heading: w.ui("settings_heading").into(),
+        caption: w.ui("settings_caption").into(),
+        back: w.ui("paused_title").into(),
+        back_key: back_key.into(),
+        prev_key: prev.into(),
+        next_key: next.into(),
+        device: w.device(&m, lay),
+        ask: w.ui("reset_page_ask").into(),
+        reset: w.ui("reset_page").into(),
+        reset_help: sentence(w.ui("help_reset_page")),
+        hints: hint_items(&w, &m, lay, &Hints::Settings)
+            .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
+            .collect(),
     }
 }
 
@@ -1054,7 +1178,7 @@ impl Words {
 }
 
 // The table's help texts start lower-case (they are also `--help` lines); the menu shows them as a sentence.
-fn sentence(s: &str) -> String {
+pub(crate) fn sentence(s: &str) -> String {
     let mut c = s.chars();
     c.next()
         .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
@@ -3537,6 +3661,37 @@ pub fn check_reach(
     }
     fail("keys", &seen, n);
     out
+}
+
+// The tool-side view of a Slint settings page: its model, language and place for `s`, `size` and `shot`.
+#[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
+pub fn slint_parts(
+    s: &Settings,
+    size: (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+) -> (
+    launcher::Model,
+    Lang,
+    crate::slintui::settings_page::Words,
+    crate::slintui::settings_page::Place,
+) {
+    let lay = layout(
+        safe,
+        size,
+        shot.density.max(1.0),
+        shot.touch,
+        s.blit.integer,
+    );
+    let model = launcher::Model::port_menu(s, shot.touch);
+    let lang = model.lang();
+    let words = page_words(lang, shot.pad.as_deref(), &lay);
+    (
+        model,
+        lang,
+        words,
+        crate::slintui::settings_page::Place { lay, safe, size },
+    )
 }
 
 // The number of settings tabs the menu shows for `s`.

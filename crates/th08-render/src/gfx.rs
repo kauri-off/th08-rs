@@ -1316,6 +1316,11 @@ impl Gfx {
         g
     }
 
+    // For toolkits that create their own renderer on this device.
+    pub fn instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
     // Number of `rebuild`s so far: a caller holding its own GPU objects (egui renderer) remakes them when it changes.
     pub fn generation(&self) -> u32 {
         self.generation

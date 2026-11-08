@@ -122,5 +122,5 @@ cargo run --release -- "/путь/к/TH08 - Imperishable Night"
 
 ## Лицензия
 
-GPL-3.0-or-later (см. `LICENSE`). Она распространяется только на код и документы этого репозитория. Touhou Project и
+GPL-3.0-or-later (см. `LICENSE`). Распространяемые сборки компонуются со Slint по его варианту GPL-3.0-only, поэтому бинарный файл — GPL-3.0-only; исходный код остаётся GPL-3.0-or-later. Она распространяется только на код и документы этого репозитория. Touhou Project и
 все игровые ресурсы принадлежат Team Shanghai Alice.

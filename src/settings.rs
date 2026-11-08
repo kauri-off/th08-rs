@@ -307,6 +307,8 @@ pub struct Settings {
     pub blit: th08_render::gfx::BlitOptions,
     pub render_scale: th08_render::gfx::RenderScale,
     pub hitboxes: crate::platform::hitbox::Hitboxes,
+    // Port menu settings page on Slint (developer switch for the UI migration).
+    pub slint_ui: bool,
     pub keys: crate::platform::keymap::KeyMap,
     pub pads: crate::platform::padmap::PadMap,
     // F12 / port-menu screenshots at the window size (else 640×480).
@@ -409,6 +411,7 @@ impl Settings {
             },
             render_scale: th08_render::gfx::RenderScale::default(),
             hitboxes: crate::platform::hitbox::Hitboxes::Off,
+            slint_ui: false,
             keys: crate::platform::keymap::KeyMap::default(),
             pads: crate::platform::padmap::PadMap::default(),
             screenshot_window: false,
@@ -1561,6 +1564,26 @@ pub const ENTRIES: &[Entry] = &[
         help: "Japanese font for dialogue text (native)",
         set: |s, v| {
             s.font = Some(v.to_string());
+            Ok(())
+        },
+    },
+    Entry {
+        key: "slint_ui",
+        env: "TH08_SLINT_UI",
+        kind: Kind::Bool,
+        default: "false",
+        group: Group::Tools,
+        label: "Slint settings page",
+        summary: "Port menu settings on the new UI toolkit",
+        unit: "",
+        words: &[],
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: true,
+        live: false,
+        help: "draw the port menu's settings page with Slint instead of egui (UI migration, developers only)",
+        set: |s, v| {
+            s.slint_ui = parse_bool(v)?;
             Ok(())
         },
     },

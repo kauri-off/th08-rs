@@ -60,6 +60,9 @@ toml = "1.1"
 th08-thcrap = { path = "crates/th08-thcrap" }
 web-time = "1.1.0"
 wgpu = "30"
+# The port's own UI toolkit, GPL-3.0-only option; versions and the Android crate are explained in src/slintui.rs.
+slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "std", "renderer-femtovg-wgpu", "unstable-wgpu-30"] }
+i-slint-backend-testing = { version = "=1.18.1", optional = true }
 winit = "0.30"
 # Presentation packs (packs.rs) and save backups (saves.rs) as .zip.
 zip = { version = "9", default-features = false, features = ["deflate"] }
@@ -70,6 +73,8 @@ default = ["gamepad-linux", "discord"]
 discord = ["dep:discord-rich-presence"]
 # Joystick on Linux (gilrs links libudev); `--no-default-features` builds without it where libudev-dev is missing.
 gamepad-linux = ["dep:gilrs"]
+# Element queries for the Slint layout check (uishots, tests).
+ui-check = ["dep:i-slint-backend-testing"]
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 gilrs = "0.11.2"
@@ -89,6 +94,7 @@ ab_glyph = "0.2"
 
 [build-dependencies]
 winresource = { version = "0.1.34", default-features = false }
+slint-build = "=1.18.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "wayland", "x11"] }
@@ -120,6 +126,8 @@ ndk-context = "0.1.1"
 # Import of picked game files into <internal>/game (gameimport.rs).
 th08-repack = { path = "crates/th08-repack", features = ["device"] }
 winit = { version = "0.30", features = ["android-native-activity"] }
+# slint compiles its public femtovg module out on Android; same pin as slint.
+i-slint-renderer-femtovg = { version = "=1.18.1", default-features = false, features = ["wgpu-30"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 discord-rich-presence = { version = "1.1.0", optional = true }

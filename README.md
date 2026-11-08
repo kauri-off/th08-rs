@@ -124,5 +124,5 @@ How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-GPL-3.0-or-later (see `LICENSE`). It covers only the code and documents in this repository. Touhou Project and all
+GPL-3.0-or-later (see `LICENSE`). Distributed builds link [Slint](https://slint.dev) under its GPL-3.0-only option, so a binary is GPL-3.0-only; the source stays GPL-3.0-or-later. It covers only the code and documents in this repository. Touhou Project and all
 game assets belong to Team Shanghai Alice.

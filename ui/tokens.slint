@@ -1,0 +1,46 @@
+// Palette, faces and the page's global state; every value in px is a mock-up point.
+import "../i18n/fonts/NotoSerifJP-ui.otf";
+import "../i18n/fonts/NotoSansJP-launcher.otf";
+
+export global Tk {
+    out property <color> panel: #170c0d;
+    out property <color> edge: #5a4038;
+    out property <color> edge-in: #33221f;
+    out property <color> rule: #5a4038cc;
+    out property <color> band: #2c181b;
+    out property <color> pressed: #3a2226;
+    out property <color> cell: #221214;
+    out property <color> track: #4a3a3f;
+    out property <color> text-hi: #fcfcfc;
+    out property <color> text: #c4bccb;
+    out property <color> help: #9a93a6;
+    out property <color> help-hi: #b6aebf;
+    out property <color> dim: #6c6474;
+    out property <color> disabled: #5f5866;
+    out property <color> accent: #cac2d1;
+    out property <color> fill: #966ca8;
+    out property <color> danger: #ecc0c3;
+    out property <color> question: #f6c1c1;
+    out property <color> keycap: #ece6f0;
+    out property <color> wash: #06010380;
+    out property <string> serif: "Noto Serif CJK JP";
+    out property <string> sans: "Noto Sans CJK JP";
+}
+
+// Last input kind: the focus bar shows only for Keys; Touch gets pressed feedback; Mouse lights the hovered row.
+export enum Modality { keys, mouse, touch }
+
+export global Ui {
+    in-out property <Modality> modality: Modality.keys;
+    // A touch screen is the main input: 48 dp targets, no key hints.
+    in property <bool> touch;
+    // Side-bar layout of a landscape phone.
+    in property <bool> split;
+    // Mock-up points per dp (touch) or OS point (desktop).
+    in property <float> pt-per-dp: 1;
+    in property <bool> ru;
+    out property <bool> bar: modality == Modality.keys;
+    public pure function font(mock: float, dp: float) -> length {
+        return max(mock, dp * pt-per-dp) * 1px;
+    }
+}

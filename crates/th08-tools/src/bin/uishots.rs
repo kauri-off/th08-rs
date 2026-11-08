@@ -7,7 +7,7 @@ use th08::platform::portmenu::{Nav, Shot, ShotAsk};
 use th08::uicheck::{Issue, Kind};
 use th08_render::gfx::SafeArea;
 
-const USAGE: &str = "usage: uishots [OUT_DIR] [--only=launcher|portmenu] [--lang=en,ja,ru] [--size=SUBSTR] [--all]
+const USAGE: &str = "usage: uishots [OUT_DIR] [--only=launcher|portmenu|slint] [--lang=en,ja,ru] [--size=SUBSTR] [--all]
 Renders every launcher view and port-menu page × window size × OS scale × language over a fixture (temp config /
 save dir with stats and replays, nested game folder) and runs the layout check; exit 1 when it finds issues.
 Without OUT_DIR only the check runs (no GPU); with it: PNGs, index.html and sheet_*.png contact sheets.
@@ -224,6 +224,7 @@ fn stats(save: &Path) -> anyhow::Result<()> {
 enum Page {
     Launcher(&'static str),
     Menu(&'static str, Shot),
+    Slint(&'static str, Shot),
 }
 
 impl Page {
@@ -231,6 +232,7 @@ impl Page {
         match self {
             Page::Launcher(n) => format!("launcher_{n}"),
             Page::Menu(n, _) => format!("portmenu_{n}"),
+            Page::Slint(n, _) => format!("slint_{n}"),
         }
     }
 }
@@ -299,6 +301,16 @@ fn menu_pages(fx: &Fixture, phone: bool) -> Vec<Page> {
         ));
     }
     v
+}
+
+fn slint_pages(fx: &Fixture, phone: bool) -> Vec<Page> {
+    menu_pages(fx, phone)
+        .into_iter()
+        .filter_map(|p| match p {
+            Page::Menu(n, shot) if shot.settings.is_some() => Some(Page::Slint(n, shot)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn launcher_model(
@@ -497,12 +509,24 @@ fn main() -> anyhow::Result<()> {
                 .is_none_or(|f| s.name.contains(f.as_str()))
         })
         .collect();
-    let gfx = match &args.out {
-        Some(o) => {
-            std::fs::create_dir_all(o)?;
-            Some(pollster::block_on(th08_render::gfx::Gfx::headless())?)
+    if let Some(o) = &args.out {
+        std::fs::create_dir_all(o)?;
+    }
+    let wants_slint = args.only.as_deref().is_none_or(|o| o == "slint");
+    let headless = (args.out.is_some() || wants_slint)
+        .then(|| pollster::block_on(th08_render::gfx::Gfx::headless()));
+    let slint_gfx = match &headless {
+        Some(Ok(g)) if wants_slint => Some(g),
+        Some(Err(e)) if args.out.is_none() => {
+            eprintln!("uishots: no GPU, the Slint pages are not checked: {e}");
+            None
         }
-        None => None,
+        _ => None,
+    };
+    let gfx = match (&headless, &args.out) {
+        (Some(Ok(g)), Some(_)) => Some(g),
+        (Some(Err(e)), Some(_)) => anyhow::bail!("no GPU for screenshots: {e}"),
+        _ => None,
     };
     let stage = gfx
         .as_ref()
@@ -522,11 +546,14 @@ fn main() -> anyhow::Result<()> {
     for &lang in &langs {
         for sz in &sizes {
             let mut pages: Vec<Page> = Vec::new();
-            if args.only.as_deref() != Some("portmenu") {
+            if matches!(args.only.as_deref(), None | Some("launcher")) {
                 pages.extend(LAUNCHER.iter().map(|v| Page::Launcher(v)));
             }
-            if args.only.as_deref() != Some("launcher") {
+            if matches!(args.only.as_deref(), None | Some("portmenu")) {
                 pages.extend(menu_pages(&fx, sz.phone));
+            }
+            if slint_gfx.is_some() {
+                pages.extend(slint_pages(&fx, sz.phone));
             }
             for page in pages {
                 let file = format!("{}_{}_{lang}.png", page.name(), sz.name);
@@ -578,6 +605,22 @@ fn main() -> anyhow::Result<()> {
                             .save(dir.join(&file))?;
                         }
                         (issues, "portmenu")
+                    }
+                    Page::Slint(_, shot) => {
+                        let shot = Shot {
+                            density: sz.density,
+                            ..shot.clone()
+                        };
+                        let g = slint_gfx.expect("slint pages only with a GPU");
+                        let issues =
+                            th08::slintui::check::check_page(g, &s, sz.px, sz.safe, &shot)?;
+                        if let Some(dir) = &args.out {
+                            let mut h =
+                                th08::slintui::check::Harness::new(g, &s, sz.px, sz.safe, &shot)?;
+                            h.image(&backdrop(stage.as_ref(), sz, &shot))
+                                .save(dir.join(&file))?;
+                        }
+                        (issues, "slint")
                     }
                 };
                 frames.push(Frame {
@@ -664,7 +707,7 @@ fn html(s: &str) -> String {
 fn sheets(dir: &Path, frames: &[Frame]) -> anyhow::Result<()> {
     const TW: u32 = 320;
     const COLS: u32 = 8;
-    for surface in ["launcher", "portmenu"] {
+    for surface in ["launcher", "portmenu", "slint"] {
         for lang in ["en", "ja", "ru"] {
             let set: Vec<&Frame> = frames
                 .iter()

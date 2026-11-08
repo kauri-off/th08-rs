@@ -300,7 +300,7 @@ fn ja_mid_phrase(g: &egui::Galley) -> Option<(char, char)> {
 }
 
 // A code identifier in visible text: snake_case or a --flag; file names and paths are real text.
-fn raw_id(text: &str) -> Option<&str> {
+pub fn raw_id(text: &str) -> Option<&str> {
     text.split_whitespace().find_map(|w| {
         let t = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
         let snake = t.contains('_')

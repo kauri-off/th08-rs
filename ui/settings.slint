@@ -1,0 +1,240 @@
+// The port menu's settings page (docs/UI_RULES.md).
+import { Tk, Ui, Modality } from "tokens.slint";
+import { Label, Ringed, Arrow, FocusMark, Keycap, Heading, Target, BackLink, Tabs, SettingRow, RowData, Cap, Hint, HelpLine, HintLine, ScrollList } from "components.slint";
+
+export { Ui, Modality, RowData, Cap, Hint }
+
+// Panel geometry from `portmenu::layout`, points.
+export struct Geometry {
+    panel-x: length, x: length, w: length, top: length, bottom: length, rail-w: length, rail-x: length, rail-text-w: length,
+}
+
+// Measures one string for the layout check.
+export component TextProbe inherits Window {
+    in property <string> text;
+    in property <length> size;
+    in property <bool> serif;
+    out property <length> natural: t.preferred-width;
+    t := Text { text: root.text; font-size: root.size; font-family: root.serif ? Tk.serif : Tk.sans; }
+}
+
+export component SettingsPage inherits Window {
+    background: transparent;
+    in property <Geometry> geo;
+    in property <[string]> tabs;
+    in property <[RowData]> rows;
+    in property <[string]> label-pieces;
+    in property <[Hint]> hints;
+    in property <string> heading;
+    in property <string> caption;
+    in property <string> back-word;
+    in property <string> back-key;
+    in property <string> prev-key;
+    in property <string> next-key;
+    in property <string> device;
+    in property <string> ask;
+    in-out property <int> tab;
+    in-out property <int> cursor: 0;
+    in-out property <bool> armed;
+    out property <int> hovered: hovered-v;
+    out property <length> scroll: list.scroll;
+    out property <length> scroll-max: list.scroll-max;
+    property <int> hovered-v: -1;
+    callback step(int, int);
+    callback pick(int, int);
+    callback set-frac(int, float);
+    callback activate(int);
+    callback reset-page();
+    callback back();
+    callback tab-changed(int);
+    public function scroll-top() { list.top(); }
+
+    property <length> row-h: Ui.split ? 132px : 70px;
+    property <length> row-size: Ui.split ? Ui.font(28, 14) : Ui.font(25, 14);
+    property <length> help-size: Ui.split ? Ui.font(24, 12) : Ui.font(19, 12);
+    property <length> hint-size: Ui.font(16, 11);
+    property <length> tab-size: Ui.split ? Ui.font(Ui.ru ? 28 : 30, 14) : Ui.font(Ui.ru ? 20 : 22, 13);
+    property <length> base-label: Ui.split || geo.w < 720px ? geo.w * (Ui.split ? 0.36 : 0.42) : min(440px, geo.w * 0.36);
+    property <length> label-w: min(geo.w * 0.5, max(base-label, pieces.preferred-width + 24px));
+    property <int> help-row: Ui.bar ? cursor : Ui.modality == Modality.touch ? max(cursor, 0) : hovered-v;
+    property <string> help: help-row >= 0 && help-row < rows.length ? rows[help-row].help : "";
+
+    function go-tab(i: int) {
+        cursor = min(cursor, 0);
+        armed = false;
+        list.top();
+        tab-changed(i);
+    }
+    function press(i: int) {
+        cursor = i;
+        if (rows[i].kind != 3) { armed = false; }
+    }
+    function act(i: int) {
+        press(i);
+        if (rows[i].kind == 3) {
+            if (armed) { armed = false; reset-page(); } else { armed = true; }
+        } else {
+            activate(i);
+        }
+    }
+    function move(i: int) {
+        armed = false;
+        cursor = clamp(i, -1, rows.length - 1);
+        if (cursor < 0) { list.top(); }
+    }
+    // First key after pointer or touch: the bar appears on the hovered row and moves nothing.
+    function wake(direction: bool) -> bool {
+        if (Ui.modality == Modality.keys) { return false; }
+        Ui.modality = Modality.keys;
+        if (hovered-v >= 0) { cursor = hovered-v; }
+        return direction;
+    }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            let dir = e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow;
+            if (root.wake(dir)) { return accept; }
+            if (e.text == Key.UpArrow) { root.move(cursor - 1); return accept; }
+            if (e.text == Key.DownArrow) { root.move(cursor + 1); return accept; }
+            if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                let d = e.text == Key.LeftArrow ? -1 : 1;
+                armed = false;
+                if (cursor < 0) {
+                    let t = clamp(tab + d, 0, tabs.length - 1);
+                    if (t != tab) { root.go-tab(t); }
+                } else {
+                    root.step(cursor, d);
+                }
+                return accept;
+            }
+            if (e.text == Key.Return) { if (cursor >= 0) { root.act(cursor); } return accept; }
+            if (e.text == Key.Escape) { root.back(); return accept; }
+            if (e.text == Key.PageUp) { root.go-tab(tab == 0 ? tabs.length - 1 : tab - 1); return accept; }
+            if (e.text == Key.PageDown) { root.go-tab(tab == tabs.length - 1 ? 0 : tab + 1); return accept; }
+            reject
+        }
+    }
+
+    Rectangle { background: Tk.wash; }
+    Rectangle {
+        visible: false;
+        pieces := VerticalLayout {
+            for p in label-pieces: Text { text: p; font-family: Tk.serif; font-size: root.row-size; }
+        }
+    }
+
+    if Ui.split: Rectangle {
+        x: 0;
+        width: geo.rail-w;
+        background: Tk.panel;
+        Rectangle { x: parent.width - 1px; width: 1px; background: Tk.edge; }
+        VerticalLayout {
+            x: geo.rail-x;
+            y: geo.top + 24px;
+            width: geo.rail-text-w;
+            height: geo.bottom - geo.top - 24px;
+            spacing: 12px;
+            BackLink { text: root.back-word; size: root.row-size * 1.14; rail: true; clicked => { root.back(); } }
+            Rectangle { height: 1px; background: Tk.rule; }
+            Tabs {
+                tabs: root.tabs; current: root.tab; rail: true; size: root.tab-size;
+                bar: Ui.bar && root.cursor < 0; vertical-stretch: 1;
+                pick(i) => { root.go-tab(i); }
+            }
+            Label { text: root.device; serif: false; font-size: Ui.font(19, 12); color: Tk.help; horizontal-alignment: left; wrap: word-wrap; vertical-stretch: 0; }
+        }
+    }
+
+    panel := Rectangle {
+        x: geo.panel-x;
+        width: parent.width - self.x;
+        background: Tk.panel;
+        Rectangle { x: 0; width: 1px; background: Tk.edge; }
+        Rectangle { x: 3px; width: 1px; background: Tk.edge-in; }
+        VerticalLayout {
+            x: 0;
+            width: parent.width;
+            y: geo.top;
+            height: geo.bottom - geo.top;
+            if !Ui.split: VerticalLayout {
+                vertical-stretch: 0;
+                padding-left: geo.x - geo.panel-x;
+                padding-right: root.width - geo.x - geo.w;
+                padding-top: 30px;
+                spacing: 12px;
+                HorizontalLayout {
+                    Heading { alignment: start; word: root.heading; caption: root.caption; size: Ui.font(40, 18); caption-size: Ui.font(16, 11); horizontal-stretch: 0; }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: start;
+                        horizontal-stretch: 0;
+                        BackLink { text: root.back-word; key: root.back-key; size: Ui.font(17, 11); clicked => { root.back(); } }
+                    }
+                }
+                Tabs {
+                    tabs: root.tabs; current: root.tab; size: root.tab-size; prev-key: root.prev-key; next-key: root.next-key;
+                    bar: Ui.bar && root.cursor < 0; height: 52px;
+                    pick(i) => { root.go-tab(i); }
+                }
+                Rectangle { height: 1px; background: Tk.rule; }
+            }
+            if Ui.split: Rectangle { height: 24px; }
+            list := ScrollList {
+                width: panel.width;
+                vertical-stretch: 1;
+                content-height: col.preferred-height;
+                content-width: self.width;
+                col := VerticalLayout {
+                    width: list.width;
+                    for r[i] in root.rows: SettingRow {
+                        width: list.width;
+                        data: r;
+                        bar: Ui.bar && i == root.cursor;
+                        inset: geo.x - geo.panel-x;
+                        content-w: geo.w;
+                        label-w: root.label-w;
+                        row-h: root.row-h;
+                        size: root.row-size;
+                        armed: root.armed && r.kind == 3;
+                        ask: root.ask;
+                        changed bar => { if (self.bar) { list.reveal(self.y, self.height); } }
+                        changed hovering => {
+                            if (self.hovering) { root.hovered-v = i; } else if (root.hovered-v == i) { root.hovered-v = -1; }
+                        }
+                        press => { root.press(i); }
+                        step(d) => { root.step(i, d); }
+                        pick(c) => { root.pick(i, c); }
+                        set(f) => { root.set-frac(i, f); }
+                        activate => { root.act(i); }
+                        answer(y) => { root.armed = false; if (y) { root.reset-page(); } }
+                    }
+                }
+            }
+            VerticalLayout {
+                padding-left: geo.x - geo.panel-x;
+                padding-right: root.width - geo.x - geo.w;
+                vertical-stretch: 0;
+                padding-bottom: Ui.split ? 12px : 24px;
+                spacing: 10px;
+                Rectangle { height: 1px; background: Tk.rule; }
+                HelpLine { text: root.help; font-size: root.help-size; min-height: root.help-size * 3; }
+                if !Ui.split: HintLine { hints: root.hints; device: root.device; size: root.hint-size; }
+            }
+        }
+        // More rows above / below: a mark in the right margin; the margin beside it pages the list.
+        property <length> mark-x: geo.x + geo.w - geo.panel-x + (root.width - geo.x - geo.w) / 2 - 8px;
+        if list.scroll > 0.5px: Target {
+            x: geo.x + geo.w - geo.panel-x; y: 0; width: parent.width - self.x; height: parent.height / 2;
+            name: "page-up";
+            clicked => { list.page(-1); }
+            Arrow { x: panel.mark-x - parent.x; y: list.y + 8px; dir: 2; tint: Tk.help; }
+        }
+        if list.scroll < list.scroll-max - 0.5px: Target {
+            x: geo.x + geo.w - geo.panel-x; y: parent.height / 2; width: parent.width - self.x; height: parent.height / 2;
+            name: "page-down";
+            clicked => { list.page(1); }
+            Arrow { x: panel.mark-x - parent.x; y: list.y + list.height - 22px - parent.y; dir: 3; tint: Tk.help; }
+        }
+    }
+    init => { keys.focus(); }
+}

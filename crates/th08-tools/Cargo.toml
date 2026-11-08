@@ -10,7 +10,7 @@ workspace = true
 
 # Debug tooling: the lib is empty on wasm32 (lib.rs), so its native deps stay off the web build.
 [dependencies]
-th08 = { path = "../.." }
+th08 = { path = "../..", features = ["ui-check"] }
 th08-audio = { path = "../th08-audio" }
 th08-core = { path = "../th08-core" }
 th08-formats = { path = "../th08-formats" }

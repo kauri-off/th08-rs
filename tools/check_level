@@ -92,7 +92,7 @@ elif [[ -n $full ]]; then echo full; echo "$full" | sed 's/^/  /' | head -20
 else echo light; fi
 [[ -n $due && -z $batch ]] &&
   echo "batch-due: $due; after landing: tools/batch_job due COMMIT (the batch train runs it)"
-grep -qE '^src/(launcher|platform/portmenu|theme|uicheck)|^crates/th08-tools/src/bin/uishots\.rs$' <<<"$files" &&
+grep -qE '^src/(launcher|platform/portmenu|theme|uicheck|slintui)|^ui/|^crates/th08-tools/src/bin/uishots\.rs$' <<<"$files" &&
   echo "ui: uishots (layout check of the launcher / port-menu matrix; tools/check runs it)"
 grep -q '^crates/th08-render/' <<<"$files" &&
   echo "pixels: hirescmp SRC --scale 1 --save OLD on the old build, --ref OLD on the new one (TH08_DIR, GPU); cargo test -p th08-render"
