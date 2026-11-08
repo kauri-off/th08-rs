@@ -55,7 +55,7 @@ export component SettingsPage inherits Window {
     property <length> help-size: Ui.split ? Ui.font(24, 12) : Ui.font(19, 12);
     property <length> hint-size: Ui.font(16, 11);
     property <length> tab-size: Ui.split ? Ui.font(Ui.ru ? 28 : 30, 14) : Ui.font(Ui.ru ? 20 : 22, 13);
-    property <length> base-label: Ui.split || geo.w < 720px ? geo.w * (Ui.split ? 0.36 : 0.42) : min(440px, geo.w * 0.36);
+    property <length> base-label: Ui.split || geo.w < 720px ? geo.w * (Ui.split ? 0.36 : 0.42) : min(440px, geo.w * 0.5);
     property <length> label-w: min(geo.w * 0.5, max(base-label, pieces.preferred-width + 24px));
     property <int> help-row: Ui.bar ? cursor : Ui.modality == Modality.touch ? max(cursor, 0) : hovered-v;
     property <string> help: help-row >= 0 && help-row < rows.length ? rows[help-row].help : "";

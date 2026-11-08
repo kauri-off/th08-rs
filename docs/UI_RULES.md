@@ -6,7 +6,7 @@ Sizes are mock-up points: 1 pt = 1 px at 1920×1080 (`portmenu::layout`). On a t
 from `Tk` (`ui/tokens.slint`). Corners 0 (keycap 3). Text is a `Label` / `Ringed`, targets are a `Target`.
 
 **Grid.** A page has one label column and one value column. Label column = the widest unbreakable label piece + 24,
-at least 36 % of the content (42 % under 720 pt, at most 440 on wide panes), at most 50 %. Values start at the value
+at least 440 pt on wide panes (42 % of the content under 720 pt, 36 % on a phone), at most 50 %. Values start at the value
 column; sliders fill it.
 
 **Row heights.** Wide 70, split phone 132; a row grows with wrapped content, in steps of its own content height.
