@@ -349,9 +349,14 @@ impl<'a> Harness<'a> {
             });
         };
         let texts = self.texts();
+        let rows: Vec<R> = self.ids("target|row|").into_iter().map(|x| x.1).collect();
         let mut shown: Vec<(usize, R)> = Vec::new();
         for (i, t) in texts.iter().enumerate() {
-            let scrolled = t.r.hits(list);
+            // Row text scrolled out of the list is not drawn; membership comes from the row, not from where it lies.
+            let (cx, cy) = (t.r.x + t.r.w / 2.0, t.r.y + t.r.h / 2.0);
+            let scrolled = rows
+                .iter()
+                .any(|r| cx >= r.x && cx <= r.right() && cy >= r.y && cy <= r.bottom());
             let view = if scrolled { t.r.cut(list) } else { t.r };
             if view.h < 1.0 || view.w < 1.0 {
                 continue;
