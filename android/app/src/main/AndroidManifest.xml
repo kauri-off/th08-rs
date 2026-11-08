@@ -10,7 +10,8 @@
       android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/data_extraction_rules">
     <!-- Auto Backup keeps score.dat, th08.cfg, port.cfg and replay/ only (res/xml); "keep app data" on uninstall. -->
     <!-- Compose settings screen; writes port.cfg / launch.cfg in filesDir and starts the game below. -->
-    <activity android:name=".LauncherActivity" android:exported="true" android:theme="@style/Theme.Th08">
+    <activity android:name=".LauncherActivity" android:exported="true" android:theme="@style/Theme.Th08"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|fontWeightAdjustment|locale|layoutDirection">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>

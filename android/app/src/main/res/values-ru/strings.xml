@@ -165,4 +165,9 @@
   <string name="stats_cleared">Всё пройдено</string>
   <string name="stats_clears">Отметки прохождения</string>
   <string name="stats_clears_hint">A / B: пройден финальный уровень A или B; * — ещё и без продолжений.</string>
+  <string name="nav_home">Главная</string>
+  <string name="nav_settings">Настройки</string>
+  <string name="play_need_data">Сначала импортируйте файлы игры</string>
+  <string name="play_fix_settings">Сначала исправьте отмеченную настройку</string>
+  <string name="reset_confirm">Вернуть все настройки к значениям по умолчанию?</string>
 </resources>

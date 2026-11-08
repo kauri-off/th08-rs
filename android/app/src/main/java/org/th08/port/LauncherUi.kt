@@ -1,11 +1,40 @@
-// Launcher screen (MATERIAL2), Geode-launcher style: section headers over segmented row blocks, whole-row taps, values
-// edited in dialogs, long help behind an info button; two panes (title, status, Play | settings) in wide windows.
+// Launcher screen: Home, Settings, Replays and Stats behind a navigation bar (rail in wide windows) with Play always on screen.
 package org.th08.port
 
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Resources
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridScope
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -29,11 +58,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,7 +74,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,7 +84,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -177,8 +201,8 @@ fun localized(ctx: Context, lang: String): Resources {
 
 // "versionName (channel)", from the Gradle build (th08.versionName, th08.channel).
 @Composable
-private fun VersionLine() = Text("${BuildConfig.VERSION_NAME} (${BuildConfig.CHANNEL})",
-    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun VersionLine() = Text("${str(R.string.subtitle)} · ${BuildConfig.VERSION_NAME} (${BuildConfig.CHANNEL})",
+    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
 @Composable
 internal fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
@@ -192,86 +216,132 @@ private fun Entry.show(v: String) = display(v, LocalLang.current, LocalStrings.c
 @Composable
 private fun Setting.errorText(): String? = (e.kind as? Kind.IntRange)?.let { intError(it, value, LocalStrings.current) }
 
+
 private val BLOCK = RoundedCornerShape(16.dp)
 private val ROW = RoundedCornerShape(4.dp)
+internal val GRID_CELL = 300.dp
+internal val FAB_CLEARANCE = 88.dp
+
+private enum class Dest { Home, Settings, Replays, Stats }
+
+private val Dest.icon: ImageVector
+    get() = when (this) {
+        Dest.Home -> Icons.Default.Home
+        Dest.Settings -> Icons.Default.Settings
+        Dest.Replays -> Icons.Default.Refresh
+        Dest.Stats -> Icons.Default.List
+    }
+
+private val Dest.label: Int
+    get() = when (this) {
+        Dest.Home -> R.string.nav_home
+        Dest.Settings -> R.string.nav_settings
+        Dest.Replays -> R.string.replays_title
+        Dest.Stats -> R.string.stats_title
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act: LauncherActions) {
-    val size = currentWindowAdaptiveInfo().windowSizeClass
-    // Landscape phones and large screens: two panes; portrait tablets keep one column (capped width).
-    val w = size.windowWidthSizeClass
-    val wide = w == WindowWidthSizeClass.EXPANDED ||
-        (w == WindowWidthSizeClass.MEDIUM && size.windowHeightSizeClass == WindowHeightSizeClass.COMPACT)
+    val rail = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass != WindowWidthSizeClass.COMPACT
+    var dest by rememberSaveable { mutableStateOf(Dest.Home) }
+    BackHandler(dest != Dest.Home) { dest = Dest.Home }
+    var info by rememberSaveable { mutableStateOf<List<String>?>(null) }
+    val showInfo = { title: String, text: String -> info = listOf(title, text) }
+    val snacks = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val needData = str(R.string.play_need_data)
+    val fixSettings = str(R.string.play_fix_settings)
     val canPlay = data.ok() && rows.all { it.ok() }
-    var info by remember { mutableStateOf<Pair<String, String>?>(null) }
-    val showInfo = { title: String, text: String -> info = title to text }
-    if (wide) {
-        Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                Column(
-                    Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(str(R.string.title), style = MaterialTheme.typography.headlineMedium)
-                            Text(str(R.string.subtitle), style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            VersionLine()
-                        }
-                        ResetMenu(act)
+    val play = {
+        if (canPlay) {
+            act.play()
+        } else {
+            dest = if (data.ok()) Dest.Settings else Dest.Home
+            scope.launch { snacks.showSnackbar(if (data.ok()) fixSettings else needData) }
+            Unit
+        }
+    }
+    val fabColor = if (canPlay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
+    Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        if (rail) {
+            val large = androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.15f
+            NavigationRail(
+                modifier = Modifier.width(if (large) 120.dp else 88.dp),
+                windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
+            ) {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Dest.entries.forEach { d ->
+                        NavigationRailItem(selected = dest == d, onClick = { dest = d },
+                            icon = { Icon(d.icon, null) }, label = { Text(str(d.label), maxLines = 1, overflow = TextOverflow.Ellipsis) })
                     }
-                    LocalUpdate.current.takeIf { it.shown }?.let { Block { UpdateRow(it, act) } }
-                    LocalLastError.current?.let { Block { LastErrorRow(it, act) } }
-                    Block { StatusRow(data, act, showInfo) }
-                    PlayButton(canPlay, act)
-                }
-                Box(Modifier.weight(0.6f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                    SettingsList(groups, rows, act, showInfo, PaddingValues(16.dp), status = null)
                 }
             }
         }
-    } else {
-        val scroll = TopAppBarDefaults.pinnedScrollBehavior()
+        val barSides = WindowInsetsSides.Top + WindowInsetsSides.End + if (rail) WindowInsetsSides.Bottom else WindowInsetsSides.Start
         Scaffold(
-            modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+            modifier = Modifier.weight(1f),
             containerColor = MaterialTheme.colorScheme.surface,
-            contentWindowInsets = WindowInsets.safeDrawing,
+            contentWindowInsets = WindowInsets.safeDrawing.only(
+                WindowInsetsSides.End + WindowInsetsSides.Bottom + if (rail) WindowInsetsSides.Top else WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
+            snackbarHost = { SnackbarHost(snacks) },
             topBar = {
                 TopAppBar(
+                    windowInsets = WindowInsets.safeDrawing.only(barSides),
                     title = {
-                        Column {
-                            Text(str(R.string.title))
-                            VersionLine()
+                        if (dest == Dest.Home) {
+                            Column {
+                                Text(str(R.string.title), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                VersionLine()
+                            }
+                        } else {
+                            Text(str(dest.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     },
-                    actions = { ResetMenu(act) },
-                    scrollBehavior = scroll,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
+                    actions = {
+                        when (dest) {
+                            Dest.Settings -> ResetMenu(act)
+                            Dest.Replays -> ReplaysActions(act)
+                            else -> {}
+                        }
+                        if (rail) {
+                            Button(onClick = play, colors = ButtonDefaults.buttonColors(
+                                containerColor = if (canPlay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = if (canPlay) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                            ), modifier = Modifier.padding(horizontal = 8.dp)) {
+                                Icon(Icons.Default.PlayArrow, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(str(R.string.play), maxLines = 1)
+                            }
+                        }
+                    },
                 )
             },
             bottomBar = {
-                Surface(color = MaterialTheme.colorScheme.surface) {
-                    Box(
-                        Modifier.fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        contentAlignment = Alignment.Center,
-                    ) { PlayButton(canPlay, act, Modifier.widthIn(max = 640.dp)) }
+                if (!rail) {
+                    NavigationBar {
+                        Dest.entries.forEach { d ->
+                            NavigationBarItem(selected = dest == d, onClick = { dest = d },
+                                icon = { Icon(d.icon, null) }, label = { Text(str(d.label), maxLines = 1) })
+                        }
+                    }
+                }
+            },
+            floatingActionButton = {
+                if (!rail) {
+                    ExtendedFloatingActionButton(onClick = play, containerColor = fabColor,
+                        icon = { Icon(Icons.Default.PlayArrow, null) }, text = { Text(str(R.string.play), maxLines = 1) })
                 }
             },
         ) { pad ->
-            Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.TopCenter) {
-                SettingsList(groups, rows, act, showInfo, PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    status = {
-                        LocalUpdate.current.takeIf { it.shown }?.let { UpdateRow(it, act) }
-                        LocalLastError.current?.let { LastErrorRow(it, act) }
-                        StatusRow(data, act, showInfo)
-                    })
+            val bottom = if (rail) 16.dp else FAB_CLEARANCE
+            Box(Modifier.fillMaxSize().padding(pad)) {
+                when (dest) {
+                    Dest.Home -> HomeScreen(data, act, showInfo, bottom)
+                    Dest.Settings -> SettingsList(groups, rows, act, showInfo, bottom)
+                    Dest.Replays -> ReplaysScreen(rows, act, bottom)
+                    Dest.Stats -> StatsScreen(rows, bottom)
+                }
             }
         }
     }
@@ -281,20 +351,36 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
 @Composable
 private fun ResetMenu(act: LauncherActions) {
     var menu by remember { mutableStateOf(false) }
+    var confirm by rememberSaveable { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, str(R.string.more)) }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text(str(R.string.reset_all)) }, onClick = { menu = false; act.reset() })
+            DropdownMenuItem(text = { Text(str(R.string.reset_all)) }, onClick = { menu = false; confirm = true })
         }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text(str(R.string.reset_all)) },
+            text = { Text(str(R.string.reset_confirm)) },
+            confirmButton = { TextButton(onClick = { confirm = false; act.reset() }) { Text(str(R.string.ok), maxLines = 1) } },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text(str(R.string.cancel), maxLines = 1) } },
+        )
     }
 }
 
 @Composable
-private fun PlayButton(enabled: Boolean, act: LauncherActions, modifier: Modifier = Modifier) {
-    Button(onClick = act::play, enabled = enabled, modifier = modifier.fillMaxWidth().height(56.dp)) {
-        Icon(Icons.Default.PlayArrow, null)
-        Spacer(Modifier.width(8.dp))
-        Text(str(R.string.play), style = MaterialTheme.typography.titleMedium)
+private fun HomeScreen(data: GameData, act: LauncherActions, showInfo: (String, String) -> Unit, bottom: Dp) {
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(GRID_CELL),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
+        verticalItemSpacing = 12.dp,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item(key = "data") { Block { StatusRow(data, act, showInfo) } }
+        item(key = "update") { LocalUpdate.current.takeIf { it.shown }?.let { Block { UpdateRow(it, act) } } }
+        item(key = "error") { LocalLastError.current?.let { Block { LastErrorRow(it, act) } } }
     }
 }
 
@@ -304,42 +390,38 @@ private fun SettingsList(
     rows: List<Setting>,
     act: LauncherActions,
     showInfo: (String, String) -> Unit,
-    pad: PaddingValues,
-    status: (@Composable () -> Unit)?,
+    bottom: Dp,
 ) {
     var devOpen by rememberSaveable { mutableStateOf(rows.any { it.e.developer && it.value != it.e.default }) }
     val player = rows.filterNot { it.e.developer }
     val dev = rows.filter { it.e.developer }
-    LazyColumn(
-        modifier = Modifier.widthIn(max = 640.dp).fillMaxSize(),
-        contentPadding = pad,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(GRID_CELL),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
+        verticalItemSpacing = 12.dp,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (status != null) item(key = "status") { Block { status() } }
         groupBlocks(groups, player, act, showInfo)
-        item(key = "replays") {
-            Header(str(R.string.replays_title))
-            Block { ReplaysBlock(rows, act) }
-        }
-        item(key = "stats") {
-            Header(str(R.string.stats_title))
-            Block { StatsBlock(rows) }
-        }
         item(key = "saves") {
-            Header(str(R.string.saves_title))
-            SavesBlock(act)
+            Column {
+                Header(str(R.string.saves_title))
+                SavesBlock(act)
+            }
         }
         if (dev.isNotEmpty()) {
-            item(key = "dev") {
+            item(key = "dev", span = StaggeredGridItemSpan.FullLine) {
                 val changed = dev.count { it.value != it.e.default }
-                Header(str(R.string.developer))
-                Block {
-                    ShellRow(
-                        title = str(R.string.developer_options),
-                        summary = str(R.string.developer_summary) +
-                            if (changed > 0) str(R.string.changed_count, changed) else "",
-                        modifier = Modifier.clickable { devOpen = !devOpen },
-                    ) { Icon(if (devOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null) }
+                Column {
+                    Header(str(R.string.developer))
+                    Block {
+                        ShellRow(
+                            title = str(R.string.developer_options),
+                            summary = str(R.string.developer_summary) +
+                                if (changed > 0) str(R.string.changed_count, changed) else "",
+                            modifier = Modifier.clickable { devOpen = !devOpen },
+                        ) { Icon(if (devOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null) }
+                    }
                 }
             }
             if (devOpen) groupBlocks(groups, dev, act, showInfo)
@@ -347,7 +429,7 @@ private fun SettingsList(
     }
 }
 
-private fun LazyListScope.groupBlocks(
+private fun LazyStaggeredGridScope.groupBlocks(
     groups: List<Group>,
     rows: List<Setting>,
     act: LauncherActions,
@@ -357,11 +439,13 @@ private fun LazyListScope.groupBlocks(
         val rs = rows.filter { it.e.group == g.id }
         if (rs.isEmpty()) continue
         item(key = "g:" + g.id + rs.first().e.developer) {
-            Header(g.title(LocalLang.current))
-            Block { rs.forEach { SettingRow(it, act, showInfo) } }
-            if (g.id == "language" && !rs.first().e.developer) {
-                Spacer(Modifier.size(8.dp))
-                TranslationsBlock(act)
+            Column {
+                Header(g.title(LocalLang.current))
+                Block { rs.forEach { SettingRow(it, act, showInfo) } }
+                if (g.id == "language" && !rs.first().e.developer) {
+                    Spacer(Modifier.size(8.dp))
+                    TranslationsBlock(act)
+                }
             }
         }
     }
@@ -425,6 +509,7 @@ private fun headline(report: String): String {
         .minOrNull().let { if (it == null) body else body.substring(0, it) }.trim()
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UpdateRow(u: UpdateUi, act: LauncherActions) {
     val info = u.info
@@ -458,35 +543,36 @@ private fun UpdateRow(u: UpdateUi, act: LauncherActions) {
             UpdateStep.Verifying, UpdateStep.Installing -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
             else -> {}
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             when (step) {
                 is UpdateStep.Downloading, UpdateStep.Verifying ->
-                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel)) }
+                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel), maxLines = 1) }
                 UpdateStep.NeedPermission -> {
-                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel)) }
-                    TextButton(onClick = act::updatePermission) { Text(str(R.string.update_permission_open)) }
+                    TextButton(onClick = act::updateCancel) { Text(str(R.string.update_cancel), maxLines = 1) }
+                    TextButton(onClick = act::updatePermission) { Text(str(R.string.update_permission_open), maxLines = 1) }
                 }
                 UpdateStep.Installing -> {}
-                is UpdateStep.Updated -> TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss)) }
+                is UpdateStep.Updated -> TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss), maxLines = 1) }
                 UpdateStep.Idle, is UpdateStep.Failed -> if (info != null) {
-                    TextButton(onClick = { act.openUrl(info.page) }) { Text(str(R.string.update_notes)) }
+                    TextButton(onClick = { act.openUrl(info.page) }) { Text(str(R.string.update_notes), maxLines = 1) }
                     val inApp = u.inApp && info.asset != null && info.sums != null
                     // A failed in-app update keeps the browser download as fallback.
                     if (!inApp || step is UpdateStep.Failed) {
-                        TextButton(onClick = { act.openUrl(info.download) }) { Text(str(R.string.update_download)) }
+                        TextButton(onClick = { act.openUrl(info.download) }) { Text(str(R.string.update_download), maxLines = 1) }
                     }
                     if (inApp) {
                         val label = if (step is UpdateStep.Failed) R.string.update_retry else R.string.update_install
-                        TextButton(onClick = act::updateStart) { Text(str(label)) }
+                        TextButton(onClick = act::updateStart) { Text(str(label), maxLines = 1) }
                     }
                 } else {
-                    TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss)) }
+                    TextButton(onClick = act::updateDismiss) { Text(str(R.string.update_dismiss), maxLines = 1) }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LastErrorRow(report: String, act: LauncherActions) {
     Column(
@@ -501,9 +587,9 @@ private fun LastErrorRow(report: String, act: LauncherActions) {
         }
         Text(headline(report), style = MaterialTheme.typography.bodyMedium, maxLines = 6,
             color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = act::shareError) { Text(str(R.string.last_failed_share)) }
-            TextButton(onClick = act::dismissError) { Text(str(R.string.last_failed_dismiss)) }
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = act::shareError) { Text(str(R.string.last_failed_share), maxLines = 1) }
+            TextButton(onClick = act::dismissError) { Text(str(R.string.last_failed_dismiss), maxLines = 1) }
         }
     }
 }
@@ -532,12 +618,12 @@ private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, Stri
             Text(summary, style = MaterialTheme.typography.bodyMedium,
                 color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
         }
-        if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again)) }
+        if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again), maxLines = 1) }
     }
     if (d !is GameData.Bundled) ImportRows(d, act)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit) {
     val e = r.e
@@ -554,40 +640,95 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
     } else emptyMap()
     val opts = e.options()?.let { it + packs.keys.filter { k -> k !in it } }
     val shown: @Composable (String) -> String = { v -> packs[v] ?: e.show(v) }
+    val k = e.kind
     when {
-        e.kind == Kind.Bool -> ShellRow(
+        k == Kind.Bool -> ShellRow(
             t.label, t.summary, info = info,
             modifier = Modifier.toggleable(r.value == "on", role = Role.Switch) { act.change(r, if (it) "on" else "off") },
         ) { Switch(checked = r.value == "on", onCheckedChange = null) }
-        // 2–3 options: segmented buttons in the row.
-        opts != null && opts.size <= 3 && e.key != "game_text" -> ShellRow(t.label, t.summary, info = info, below = {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                opts.forEachIndexed { i, v ->
-                    SegmentedButton(
-                        selected = r.value == v,
-                        onClick = { act.change(r, v) },
-                        shape = SegmentedButtonDefaults.itemShape(i, opts.size),
-                        colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
-                    ) { Text(e.show(v), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        opts != null -> {
+            val labels = opts.map { shown(it) }
+            BoxWithConstraints {
+                // Segments only while every label fits on one line; otherwise a dropdown, so no label is cut.
+                val measurer = rememberTextMeasurer()
+                val style = MaterialTheme.typography.labelLarge
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                val perSegment = (maxWidth - 32.dp) / opts.size - 24.dp
+                val fits = opts.size <= 3 && e.key != "game_text" && labels.all { l ->
+                    with(density) { measurer.measure(l, style).size.width.toDp() } <= perSegment
                 }
-            }
-        })
-        else -> {
-            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }) {
-                Text(shown(r.value), style = MaterialTheme.typography.labelLarge,
-                    color = if (!r.ok()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
-            }
-            if (editing) {
-                val done = { editing = false }
-                val k = e.kind
-                when {
-                    opts != null -> ChoiceDialog(r, opts, act, done, shown)
-                    k is Kind.IntRange && k.max - k.min <= 400 -> SliderDialog(r, k, act, done)
-                    else -> TextDialog(r, act, done)
+                if (fits) {
+                    ShellRow(t.label, t.summary, info = info, below = {
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            opts.forEachIndexed { i, v ->
+                                SegmentedButton(
+                                    selected = r.value == v,
+                                    onClick = { act.change(r, v) },
+                                    shape = SegmentedButtonDefaults.itemShape(i, opts.size),
+                                    icon = {},
+                                    colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
+                                ) { Text(labels[i], maxLines = 1, softWrap = false) }
+                            }
+                        }
+                    })
+                } else {
+                    ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
+                        Box {
+                            ValueField(shown(r.value), r.ok())
+                            DropdownMenu(expanded = editing, onDismissRequest = { editing = false }) {
+                                opts.forEachIndexed { i, v ->
+                                    DropdownMenuItem(
+                                        text = { Text(labels[i]) },
+                                        trailingIcon = { if (r.value == v) Icon(Icons.Default.Check, null) },
+                                        onClick = { editing = false; act.change(r, v) },
+                                    )
+                                }
+                            }
+                        }
+                    })
                 }
             }
         }
+        k is Kind.IntRange && k.max - k.min <= 400 -> {
+            val current = (r.value.toLongOrNull() ?: r.e.default.toLongOrNull() ?: k.min).coerceIn(k.min, k.max)
+            var v by remember(r.value) { mutableStateOf(current.toFloat()) }
+            val n = Math.round(v).toLong()
+            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
+                Slider(
+                    value = v,
+                    onValueChange = { v = it },
+                    onValueChangeFinished = { act.change(r, Math.round(v).toLong().toString()) },
+                    valueRange = k.min.toFloat()..k.max.toFloat(),
+                    steps = if (k.max - k.min <= 20) (k.max - k.min - 1).toInt().coerceAtLeast(0) else 0,
+                )
+            }) {
+                Text(if (r.value.isEmpty() && n == current) e.show("") else e.show(n.toString()),
+                    style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                    color = if (!r.ok()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            }
+            if (editing) TextDialog(r, act) { editing = false }
+        }
+        else -> {
+            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true },
+                below = { ValueField(shown(r.value), r.ok()) })
+            if (editing) TextDialog(r, act) { editing = false }
+        }
+    }
+}
+
+// Read-only look of a field under a row: the whole row is the tap target, this only shows the value.
+@Composable
+private fun ValueField(text: String, ok: Boolean) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .border(BorderStroke(1.dp, if (ok) c.outline else c.error), RoundedCornerShape(8.dp))
+            .padding(start = 16.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, Modifier.weight(1f).padding(vertical = 8.dp), style = MaterialTheme.typography.bodyLarge,
+            color = if (ok) c.onSurface else c.error)
+        Icon(Icons.Default.ArrowDropDown, null, tint = c.onSurfaceVariant)
     }
 }
 
@@ -752,76 +893,6 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
     )
 }
 
-// Radio list; the replay row adds the attract demos' and a picked file's entries and a file chooser.
-@Composable
-private fun ChoiceDialog(
-    r: Setting,
-    opts: List<String>,
-    act: LauncherActions,
-    close: () -> Unit,
-    shown: @Composable (String) -> String = { r.e.show(it) },
-) {
-    AlertDialog(
-        onDismissRequest = close,
-        title = { Text(r.e.t().label) },
-        text = {
-            Column(Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
-                opts.forEach { v ->
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
-                            .selectable(r.value == v, role = Role.RadioButton) { act.change(r, v); close() }
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = r.value == v, onClick = null)
-                        Spacer(Modifier.width(16.dp))
-                        Text(shown(v), style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = close) { Text(str(R.string.cancel)) } },
-    )
-}
-
-@Composable
-private fun SliderDialog(r: Setting, k: Kind.IntRange, act: LauncherActions, close: () -> Unit) {
-    val start = r.value.toLongOrNull() ?: r.e.default.toLongOrNull() ?: k.min
-    var v by remember { mutableStateOf(start.toFloat()) }
-    val n = Math.round(v).toLong()
-    AlertDialog(
-        onDismissRequest = close,
-        title = { Text(r.e.t().label) },
-        text = {
-            Column {
-                Text(r.e.show(n.toString()), style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.CenterHorizontally))
-                Slider(
-                    value = v,
-                    onValueChange = { v = it },
-                    valueRange = k.min.toFloat()..k.max.toFloat(),
-                    steps = if (k.max - k.min <= 20) (k.max - k.min - 1).toInt().coerceAtLeast(0) else 0,
-                )
-                Row {
-                    Text(r.e.show(k.min.toString()), style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.weight(1f))
-                    Text(r.e.show(k.max.toString()), style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = { act.change(r, n.toString()); close() }) { Text(str(R.string.ok)) } },
-        dismissButton = {
-            Row {
-                TextButton(onClick = { act.change(r, r.e.default); close() }) {
-                    Text(str(if (r.e.default.isEmpty()) R.string.clear else R.string.default_value))
-                }
-                TextButton(onClick = close) { Text(str(R.string.cancel)) }
-            }
-        },
-    )
-}
 
 // Number or text entry; the replay row also offers a file chooser.
 @Composable
@@ -838,7 +909,7 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
         onDismissRequest = close,
         title = { Text(r.e.t().label) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = t,
                     onValueChange = { t = it },
@@ -851,6 +922,12 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                val reset = r.e.default.isEmpty() || r.value != r.e.default
+                if (reset) {
+                    TextButton(onClick = { act.change(r, r.e.default); close() }) {
+                        Text(str(if (r.e.default.isEmpty()) R.string.clear else R.string.default_value), maxLines = 1)
+                    }
+                }
                 if (r.e.key == "replay") {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     (0..3).forEach { i ->
@@ -861,14 +938,9 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = { act.change(r, t.trim()); close() }, enabled = err == null) { Text(str(R.string.ok)) }
+            TextButton(onClick = { act.change(r, t.trim()); close() }, enabled = err == null) { Text(str(R.string.ok), maxLines = 1) }
         },
-        dismissButton = {
-            Row {
-                if (r.e.default.isEmpty()) TextButton(onClick = { act.change(r, ""); close() }) { Text(str(R.string.clear)) }
-                TextButton(onClick = close) { Text(str(R.string.cancel)) }
-            }
-        },
+        dismissButton = { TextButton(onClick = close) { Text(str(R.string.cancel), maxLines = 1) } },
     )
 }
 

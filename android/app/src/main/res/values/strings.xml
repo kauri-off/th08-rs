@@ -166,4 +166,9 @@
   <string name="stats_cleared">All clear</string>
   <string name="stats_clears">Clear flags</string>
   <string name="stats_clears_hint">A / B: final stage A or B cleared; * also without continues.</string>
+  <string name="nav_home">Home</string>
+  <string name="nav_settings">Settings</string>
+  <string name="play_need_data">Import the game files first</string>
+  <string name="play_fix_settings">Fix the marked setting first</string>
+  <string name="reset_confirm">Put every setting back to its default?</string>
 </resources>

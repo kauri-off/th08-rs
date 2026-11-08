@@ -1,41 +1,34 @@
-// Stats screen of the settings screen: play statistics and the score.dat viewer from the Rust bridge (libth08,
+// Stats screen: play statistics and the score.dat viewer from the Rust bridge (libth08,
 // stats.rs `bridge`) in one JSON call.
 package org.th08.port
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridScope
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,8 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -67,13 +58,6 @@ object Stats {
 
 private const val SHOTS = 12
 
-@Composable
-fun StatsBlock(rows: List<Setting>) {
-    var open by remember { mutableStateOf(false) }
-    ShellRow(str(R.string.stats_open), str(R.string.stats_open_summary), modifier = Modifier.clickable { open = true })
-    if (open) StatsDialog(rows) { open = false }
-}
-
 private fun digits(n: Long) = NumberFormat.getIntegerInstance(Locale.US).format(n)
 
 private fun playTime(frames: Long): String {
@@ -83,12 +67,11 @@ private fun playTime(frames: Long): String {
 
 private fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun StatsDialog(rows: List<Setting>, close: () -> Unit) {
+fun StatsScreen(rows: List<Setting>, bottom: Dp) {
     val dir = LocalContext.current.filesDir
     val lang = LocalLang.current
-    val reply by produceState<Result<JSONObject>?>(null) {
+    val reply by produceState<Result<JSONObject>?>(null, lang) {
         value = withContext(Dispatchers.Default) {
             runCatching {
                 val req = JSONObject().put("dir", dir.path).put("game", File(dir, "game").path).put("lang", lang)
@@ -96,40 +79,26 @@ private fun StatsDialog(rows: List<Setting>, close: () -> Unit) {
             }
         }
     }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentWindowInsets = WindowInsets.safeDrawing,
-            topBar = {
-                TopAppBar(
-                    title = { Text(str(R.string.stats_title)) },
-                    navigationIcon = {
-                        IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, str(R.string.cancel)) }
-                    },
-                )
-            },
-        ) { pad ->
-            var shot by remember { mutableStateOf(SHOTS) }
-            var allCards by remember { mutableStateOf(false) }
-            val words = Words(rows)
-            LazyColumn(
-                Modifier.fillMaxSize().padding(pad),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                val r = reply
-                when {
-                    r == null -> item(key = "busy") { LinearProgressIndicator(Modifier.widthIn(max = 640.dp).fillMaxWidth()) }
-                    r.isFailure -> item(key = "err") {
-                        Text(r.exceptionOrNull()?.message ?: "", color = MaterialTheme.colorScheme.error)
-                    }
-                    else -> {
-                        val o = r.getOrThrow()
-                        playItems(o, words)
-                        scoreDatItems(o, words, shot, { shot = it }, allCards, { allCards = it })
-                    }
-                }
+    var shot by rememberSaveable { mutableStateOf(SHOTS) }
+    var allCards by rememberSaveable { mutableStateOf(false) }
+    val words = Words(rows)
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(GRID_CELL),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
+        verticalItemSpacing = 8.dp,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val r = reply
+        when {
+            r == null -> item(key = "busy", span = StaggeredGridItemSpan.FullLine) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            r.isFailure -> item(key = "err", span = StaggeredGridItemSpan.FullLine) {
+                Text(r.exceptionOrNull()?.message ?: "", color = MaterialTheme.colorScheme.error)
+            }
+            else -> {
+                val o = r.getOrThrow()
+                playItems(o, words)
+                scoreDatItems(o, words, shot, { shot = it }, allCards, { allCards = it })
             }
         }
     }
@@ -148,7 +117,7 @@ private class Words(private val rows: List<Setting>) {
 @Composable
 private fun Card(content: @Composable () -> Unit) {
     Column(
-        Modifier.widthIn(max = 640.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) { content() }
@@ -188,7 +157,7 @@ private fun Cells(first: String, cells: List<String>, weak: Boolean = false) {
 private fun Weak(t: String) =
     Text(t, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-private fun LazyListScope.playItems(o: JSONObject, w: Words) {
+private fun LazyStaggeredGridScope.playItems(o: JSONObject, w: Words) {
     val st = o.getJSONObject("stats")
     val stageKeys = o.getJSONArray("stage_keys")
     item(key = "head") {
@@ -257,7 +226,7 @@ private fun LazyListScope.playItems(o: JSONObject, w: Words) {
     }
 }
 
-private fun LazyListScope.scoreDatItems(
+private fun LazyStaggeredGridScope.scoreDatItems(
     o: JSONObject,
     w: Words,
     shot: Int,
@@ -265,7 +234,7 @@ private fun LazyListScope.scoreDatItems(
     allCards: Boolean,
     setAll: (Boolean) -> Unit,
 ) {
-    item(key = "sd") { Title(str(R.string.stats_scoredat)) }
+    item(key = "sd", span = StaggeredGridItemSpan.FullLine) { Title(str(R.string.stats_scoredat)) }
     if (!o.has("scoredat")) {
         item(key = "sd_err") { Card { Weak(str(R.string.stats_sd_error, o.optString("sd_error"))) } }
         return
@@ -288,7 +257,7 @@ private fun LazyListScope.scoreDatItems(
             }
         }
     }
-    item(key = "clears") {
+    item(key = "clears", span = StaggeredGridItemSpan.FullLine) {
         Card {
             Title(str(R.string.stats_clears))
             Weak(str(R.string.stats_clears_hint))
@@ -303,7 +272,7 @@ private fun LazyListScope.scoreDatItems(
             }
         }
     }
-    item(key = "cards_head") {
+    item(key = "cards_head", span = StaggeredGridItemSpan.FullLine) {
         Card {
             Title(str(R.string.stats_cards))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +38,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+
+private const val ONCE_KEYS = "once_keys"
+private const val ONCE_VALUES = "once_values"
 
 class LauncherActivity : ComponentActivity(), LauncherActions {
     private val cfgFile get() = File(filesDir, "port.cfg")
@@ -70,6 +74,9 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             val saved = cfg[e.key]?.takeUnless { e.developer }?.let { norm(e.kind, it) }?.takeIf { it.isNotEmpty() }
             Setting(e, saved ?: e.default)
         }
+        // After process death the next-start-only rows come back from the saved state.
+        savedInstanceState?.getStringArray(ONCE_KEYS)?.zip(savedInstanceState.getStringArray(ONCE_VALUES).orEmpty())
+            ?.forEach { (k, v) -> rows.firstOrNull { it.e.key == k }?.value = v }
         Thread {
             val failed = runCatching { copyBundledPacks() }.onFailure { Log.e("th08", "bundled packs: $it") }
                 .getOrDefault(emptyList())
@@ -146,7 +153,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 // The `language` row picks the texts and switches the screen live; the game reads the same value from
                 // port.cfg (auto: its own Locale.getDefault(), i18n.rs `os_locale`).
                 val lang = currentLang()
-                val res = remember(lang) { localized(this, lang) }
+                val res = remember(lang, LocalConfiguration.current) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
                     LocalSaves provides saves, LocalReplays provides replays, LocalImport provides importer.state, LocalLastError provides lastError,
                     LocalUpdate provides UpdateUi(update, AppUpdate.step, inAppUpdate)) {
@@ -154,6 +161,13 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 }
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        val once = rows.filter { !it.e.persist }
+        outState.putStringArray(ONCE_KEYS, once.map { it.e.key }.toTypedArray())
+        outState.putStringArray(ONCE_VALUES, once.map { it.value }.toTypedArray())
     }
 
     private var pickFile: (Setting) -> Unit = {}

@@ -1,27 +1,25 @@
-// Replay browser of the settings screen: the Rust list / import / delete (libth08, replays.rs `bridge`) behind one
-// JSON call, and its full-screen list with Watch, Export, Share and Delete.
+// Replay browser: the Rust list / import / delete (libth08, replays.rs `bridge`) behind one
+// JSON call, and its list screen with Watch, Export, Share and Delete.
 package org.th08.port
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
@@ -34,13 +32,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -51,8 +47,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import org.json.JSONObject
 import java.text.NumberFormat
 
@@ -121,98 +115,83 @@ fun parseReplayList(s: String): List<ReplayItem> {
     }
 }
 
-// The settings-screen block: opens the list and imports.
 @Composable
-fun ReplaysBlock(rows: List<Setting>, act: LauncherActions) {
+fun ReplaysActions(act: LauncherActions) {
     val st = LocalReplays.current
-    var open by remember { mutableStateOf(false) }
-    val n = st.items?.size ?: 0
-    ShellRow(str(R.string.replays_browse),
-        if (n == 0) str(R.string.replays_none) else str(R.string.replays_count, n),
-        modifier = Modifier.clickable { open = true })
-    ShellRow(str(R.string.replays_import), str(R.string.replays_import_summary),
-        modifier = Modifier.clickable(enabled = !st.busy) { act.replayImport() })
-    if (open) ReplaysDialog(rows, act) { open = false }
+    IconButton(onClick = act::replayImport, enabled = !st.busy) { Icon(Icons.Default.Add, str(R.string.replays_import)) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReplaysDialog(rows: List<Setting>, act: LauncherActions, close: () -> Unit) {
+fun ReplaysScreen(rows: List<Setting>, act: LauncherActions, bottom: Dp) {
     val st = LocalReplays.current
     var confirm by remember { mutableStateOf<ReplayItem?>(null) }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentWindowInsets = WindowInsets.safeDrawing,
-            topBar = {
-                TopAppBar(
-                    title = { Text(str(R.string.replays_title)) },
-                    navigationIcon = {
-                        IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, str(R.string.cancel)) }
-                    },
-                    actions = {
-                        IconButton(onClick = act::replayImport, enabled = !st.busy) {
-                            Icon(Icons.Default.Add, str(R.string.replays_import))
-                        }
-                    },
-                )
-            },
-        ) { pad ->
-            LazyColumn(
-                Modifier.fillMaxSize().padding(pad),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                item(key = "sort") {
-                    SingleChoiceSegmentedButtonRow(Modifier.widthIn(max = 640.dp).fillMaxWidth()) {
-                        listOf(false to R.string.replays_sort_date, true to R.string.replays_sort_score)
-                            .forEachIndexed { i, (score, label) ->
-                                SegmentedButton(
-                                    selected = st.byScore == score,
-                                    onClick = { act.replaySort(score) },
-                                    shape = SegmentedButtonDefaults.itemShape(i, 2),
-                                ) { Text(str(label)) }
-                            }
+    LazyVerticalStaggeredGrid(
+        columns = StaggeredGridCells.Adaptive(GRID_CELL),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
+        verticalItemSpacing = 8.dp,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "sort", span = StaggeredGridItemSpan.FullLine) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf(false to R.string.replays_sort_date, true to R.string.replays_sort_score)
+                    .forEachIndexed { i, (score, label) ->
+                        SegmentedButton(
+                            selected = st.byScore == score,
+                            onClick = { act.replaySort(score) },
+                            shape = SegmentedButtonDefaults.itemShape(i, 2),
+                            icon = {},
+                        ) { Text(str(label), maxLines = 1) }
                     }
-                }
-                if (st.busy) item(key = "busy") { LinearProgressIndicator(Modifier.widthIn(max = 640.dp).fillMaxWidth()) }
-                st.message?.let { m ->
-                    item(key = "msg") {
-                        Text(m, style = MaterialTheme.typography.bodyMedium,
-                            color = if (st.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth())
-                    }
-                }
-                val items = st.items.orEmpty()
-                if (items.isEmpty() && !st.busy) {
-                    item(key = "none") { Text(str(R.string.replays_none), Modifier.padding(16.dp)) }
-                }
-                items(items, key = { it.file }) { r -> ReplayCard(r, rows, act) { confirm = r } }
             }
         }
-        confirm?.let { r ->
-            AlertDialog(
-                onDismissRequest = { confirm = null },
-                text = { Text(str(R.string.replays_delete_confirm, r.file)) },
-                confirmButton = {
-                    TextButton(onClick = { confirm = null; act.replayDelete(r) }) {
-                        Text(str(R.string.replays_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                },
-                dismissButton = { TextButton(onClick = { confirm = null }) { Text(str(R.string.cancel)) } },
-            )
+        if (st.busy || st.items == null) {
+            item(key = "busy", span = StaggeredGridItemSpan.FullLine) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         }
+        st.message?.let { m ->
+            item(key = "msg", span = StaggeredGridItemSpan.FullLine) {
+                Text(m, style = MaterialTheme.typography.bodyMedium,
+                    color = if (st.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth())
+            }
+        }
+        val items = st.items.orEmpty()
+        if (st.items != null && items.isEmpty() && !st.busy) {
+            item(key = "none", span = StaggeredGridItemSpan.FullLine) {
+                Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(str(R.string.replays_none), style = MaterialTheme.typography.titleMedium)
+                    Text(str(R.string.replays_import_summary), style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = act::replayImport) { Text(str(R.string.replays_import), maxLines = 1) }
+                }
+            }
+        }
+        items(items.size, key = { items[it].file }) { i -> val r = items[i]; ReplayCard(r, rows, act) { confirm = r } }
+    }
+    confirm?.let { r ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            text = { Text(str(R.string.replays_delete_confirm, r.file)) },
+            confirmButton = {
+                TextButton(onClick = { confirm = null; act.replayDelete(r) }) {
+                    Text(str(R.string.replays_delete), color = MaterialTheme.colorScheme.error, maxLines = 1)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text(str(R.string.cancel), maxLines = 1) } },
+        )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReplayCard(r: ReplayItem, rows: List<Setting>, act: LauncherActions, delete: () -> Unit) {
     val lang = LocalLang.current
     val res = LocalStrings.current
     fun word(key: String, v: String) = rows.firstOrNull { it.e.key == key }?.e?.display(v, lang, res) ?: v
     Column(
-        Modifier.widthIn(max = 640.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -238,9 +217,9 @@ private fun ReplayCard(r: ReplayItem, rows: List<Setting>, act: LauncherActions,
                 Button(onClick = { act.replayWatch(r) }) {
                     Icon(Icons.Default.PlayArrow, null)
                     Spacer(Modifier.width(4.dp))
-                    Text(str(R.string.replays_watch))
+                    Text(str(R.string.replays_watch), maxLines = 1)
                 }
-                OutlinedButton(onClick = { act.replayExport(r) }) { Text(str(R.string.replays_export)) }
+                OutlinedButton(onClick = { act.replayExport(r) }) { Text(str(R.string.replays_export), maxLines = 1) }
                 IconButton(onClick = { act.replayShare(r) }) { Icon(Icons.Default.Share, str(R.string.replays_share)) }
             }
             IconButton(onClick = delete) { Icon(Icons.Default.Delete, str(R.string.replays_delete)) }

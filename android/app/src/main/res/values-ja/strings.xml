@@ -165,4 +165,9 @@
   <string name="stats_cleared">オールクリア</string>
   <string name="stats_clears">クリア状況</string>
   <string name="stats_clears_hint">A / B: 最終ステージ A または B をクリア。* はノーコンティニューでも。</string>
+  <string name="nav_home">ホーム</string>
+  <string name="nav_settings">設定</string>
+  <string name="play_need_data">先にゲームファイルをインポートしてください</string>
+  <string name="play_fix_settings">先に印の付いた設定を修正してください</string>
+  <string name="reset_confirm">すべての設定を既定値に戻しますか？</string>
 </resources>
