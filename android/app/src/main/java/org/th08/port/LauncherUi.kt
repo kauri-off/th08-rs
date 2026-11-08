@@ -30,6 +30,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -266,13 +267,15 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         if (rail) {
             val large = androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.15f
+            val startInset = WindowInsets.safeDrawing.asPaddingValues()
+                .calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current)
             NavigationRail(
-                modifier = Modifier.width(if (large) 120.dp else 88.dp),
+                modifier = Modifier.width((if (large) 120.dp else 88.dp) + startInset),
                 windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
             ) {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Dest.entries.forEach { d ->
-                        NavigationRailItem(selected = dest == d, onClick = { dest = d },
+                        NavigationRailItem(selected = dest == d, onClick = { dest = d }, modifier = Modifier.fillMaxWidth(),
                             icon = { Icon(d.icon, null) }, label = { Text(str(d.label), maxLines = 1, overflow = TextOverflow.Ellipsis) })
                     }
                 }

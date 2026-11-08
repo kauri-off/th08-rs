@@ -523,9 +523,10 @@ def walk(ui, emu, c, full_controls, sc):
     check_play(ui, st, "home")
     if not c["imported"]:
         ui.tap_label(st["play"])
-        ui.shot("play_blocked")
-        if ui.dump().find(st["play_need_data"]) is None:
+        s = ui.dump()
+        if s.find(st["play_need_data"]) is None:
             ui.problem("no message for blocked Play", "missing data")
+        ui.shot("play_blocked", s)
         ui.wait(5)
     elif full_controls:
         n = ui.dump().find(st["update_install"], clickable=True)
