@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: hirescmp SOURCE [--scale K[,K…]] [--every N] [--frames A,B,..] [--events] [--to N] [--threshold T]
-                [--worst N] [--out DIR] [--save DIR] [--ref DIR]
+                [--worst N] [--out DIR] [--save DIR] [--ref DIR] [--switch K,K,… --switch-every P]
   SOURCE: a recorded session directory, or demo:N (attract demo N of the archive).
   Renders SOURCE headless at scale 1 and at scale K (default 2), box-downsamples each chosen K× frame to 640×480 and
   compares it with the scale-1 frame: max / mean channel difference, % of pixels whose largest channel difference
@@ -15,6 +15,9 @@ const USAGE: &str = "usage: hirescmp SOURCE [--scale K[,K…]] [--every N] [--fr
   frames get side-by-side PNGs (scale 1 | downsampled K× | difference ×4) and the full K× frame.
   --save DIR: only render at the (first) scale K and keep the chosen frames as DIR/NNNNNN.png (no comparison).
   --ref DIR: compare the scale-K frames with the PNGs of a --save run instead of a scale-1 run of this build.
+  --switch K,K,…: change the render scale every --switch-every P (default 120) Frame_Runs, going round the list, and
+  compare frames 1, 2, 3 and P/2 after each change with an unswitched run at the same scale; exits 1 on a difference
+  over T (--threshold) or a changed game state.
   Needs TH08_DIR; the session's own settings come from the usual port.cfg (set XDG_CONFIG_HOME for a clean one).";
 
 struct Args {
@@ -29,6 +32,8 @@ struct Args {
     out: PathBuf,
     save: Option<PathBuf>,
     reference: Option<PathBuf>,
+    switch: Vec<u32>,
+    switch_every: u64,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
@@ -44,6 +49,8 @@ fn parse_args() -> anyhow::Result<Args> {
         out: PathBuf::from("/tmp/hirescmp"),
         save: None,
         reference: None,
+        switch: Vec::new(),
+        switch_every: 120,
     };
     let mut it = std::env::args().skip(1);
     let num = |v: Option<String>, what: &str| -> anyhow::Result<u64> {
@@ -70,6 +77,11 @@ fn parse_args() -> anyhow::Result<Args> {
             "--out" => a.out = it.next().map(PathBuf::from).unwrap_or(a.out),
             "--save" => a.save = it.next().map(PathBuf::from),
             "--ref" => a.reference = it.next().map(PathBuf::from),
+            "--switch" => {
+                let v = it.next().unwrap_or_default();
+                a.switch = v.split(',').map(str::parse).collect::<Result<_, _>>()?;
+            }
+            "--switch-every" => a.switch_every = num(it.next(), "--switch-every")?.max(4),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 std::process::exit(0);
@@ -87,7 +99,21 @@ fn parse_args() -> anyhow::Result<Args> {
 }
 
 impl Args {
+    // Scale of the plan entry `j` (`--switch`).
+    fn plan(&self, j: u64) -> u32 {
+        self.switch[usize::try_from(j).unwrap_or(0) % self.switch.len()]
+    }
+
+    // Scale Frame_Run n renders at in a `--switch` run: the change after Frame_Run jP applies from the next one.
+    fn scale_at(&self, n: u64) -> u32 {
+        self.plan((n.max(1) - 1) / self.switch_every)
+    }
+
     fn wanted(&self, n: u64) -> bool {
+        if !self.switch.is_empty() {
+            let d = n % self.switch_every;
+            return n > self.switch_every && (matches!(d, 1..=3) || d == self.switch_every / 2);
+        }
         (self.every > 0 && n.is_multiple_of(self.every)) || self.frames.contains(&n)
     }
 }
@@ -100,7 +126,18 @@ fn gfx(ctx: &mut th08_core::game::Ctx) -> &mut th08_render::gfx::Gfx {
 }
 
 // Plays the source at render scale `k`; `shot(n, frame)` gets the frame after each wanted Frame_Run n.
-fn render(a: &Args, k: u32, mut shot: impl FnMut(u64, image::RgbaImage)) -> anyhow::Result<()> {
+fn render(a: &Args, k: u32, shot: impl FnMut(u64, image::RgbaImage)) -> anyhow::Result<()> {
+    render_with(a, k, false, shot, |_, _| {})
+}
+
+// `render`; with `switching` the scale follows `--switch`; `state` gets (Frame_Run, game state) after every one.
+fn render_with(
+    a: &Args,
+    k: u32,
+    switching: bool,
+    mut shot: impl FnMut(u64, image::RgbaImage),
+    mut state: impl FnMut(u64, u64),
+) -> anyhow::Result<()> {
     let dir = th08::settings::test_game_dir().ok_or_else(|| anyhow::anyhow!("set TH08_DIR"))?;
     let mut g = pollster::block_on(th08_render::gfx::Gfx::headless())?;
     g.offscreen = true;
@@ -124,6 +161,11 @@ fn render(a: &Args, k: u32, mut shot: impl FnMut(u64, image::RgbaImage)) -> anyh
         if a.wanted(n) || extra.remove(&n) {
             let img = gfx(ctx).read_frame();
             shot(n, img);
+        }
+        state(n, game_state(ctx));
+        if switching && n.is_multiple_of(a.switch_every) {
+            let next = a.plan(n / a.switch_every);
+            gfx(ctx).render_scale = th08_render::gfx::RenderScale::Fixed(next);
         }
         n < a.to
     };
@@ -167,6 +209,89 @@ fn render(a: &Args, k: u32, mut shot: impl FnMut(u64, image::RgbaImage)) -> anyh
         |_, _| true,
     );
     Ok(())
+}
+
+// What a render setting must not change: the RNG state, advanced by all game logic.
+fn game_state(ctx: &th08_core::game::Ctx) -> u64 {
+    u64::from(ctx.w.rng.state)
+}
+
+// Renders with the `--switch` plan and against an unswitched run per scale; returns false on any difference.
+fn switch_check(a: &Args) -> anyhow::Result<bool> {
+    let mut scales = a.switch.clone();
+    scales.sort_unstable();
+    scales.dedup();
+    let mut clean = std::collections::BTreeMap::new();
+    let mut clean_state = Vec::new();
+    for &k in &scales {
+        let mut frames = Frames::new();
+        let keep = k == scales[0];
+        render_with(
+            a,
+            k,
+            false,
+            |n, img| {
+                if a.scale_at(n) == k {
+                    frames.insert(n, img);
+                }
+            },
+            |n, s| {
+                if keep {
+                    clean_state.push((n, s));
+                }
+            },
+        )?;
+        eprintln!("unswitched {k}×: {} frames", frames.len());
+        clean.insert(k, frames);
+    }
+    std::fs::create_dir_all(&a.out)?;
+    let (mut bad, mut checked, mut worst) = (0u32, 0u32, Vec::new());
+    let mut state = Vec::new();
+    render_with(
+        a,
+        a.plan(0),
+        true,
+        |n, img| {
+            let k = a.scale_at(n);
+            let Some(base) = clean.get(&k).and_then(|f| f.get(&n)) else {
+                return;
+            };
+            checked += 1;
+            if img.dimensions() != base.dimensions() {
+                bad += 1;
+                println!("frame {n}: {:?} instead of {k}×", img.dimensions());
+                return;
+            }
+            let m = compare(n, base, &img, a.threshold);
+            if m.over > 0.0 {
+                bad += 1;
+                let from = a.plan(((n - 1) / a.switch_every).saturating_sub(1));
+                println!(
+                    "frame {n} ({from}→{k}, +{}): max {} mean {:.3} over {:.3}% bbox {:?}",
+                    (n - 1) % a.switch_every + 1,
+                    m.max,
+                    m.mean,
+                    m.over,
+                    m.bbox
+                );
+                worst.push((m.over, n, side_by_side(base, &img)));
+                worst.sort_by(|x, y| y.0.total_cmp(&x.0));
+                worst.truncate(a.worst);
+            }
+        },
+        |n, s| state.push((n, s)),
+    )?;
+    for (_, n, img) in &worst {
+        img.save(a.out.join(format!("switch_{n:06}.png")))?;
+    }
+    let same = state == clean_state;
+    println!(
+        "switch: {checked} frames compared, {bad} differ over {}; game state over {} frames {}",
+        a.threshold,
+        state.len(),
+        if same { "identical" } else { "DIFFERS" }
+    );
+    Ok(bad == 0 && same)
 }
 
 // Mean of each k×k block (rounded), back to 640×480.
@@ -255,6 +380,16 @@ type Frames = std::collections::BTreeMap<u64, image::RgbaImage>;
 fn main() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
     let a = parse_args()?;
+    if !a.switch.is_empty() {
+        anyhow::ensure!(
+            a.switch.iter().all(|k| (1..=3).contains(k)),
+            "--switch K,K,…: each 1 … 3"
+        );
+        if !switch_check(&a)? {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(dir) = &a.save {
         std::fs::create_dir_all(dir)?;
         let mut err = None;
