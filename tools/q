@@ -6,7 +6,7 @@
        tools/q wait ID [--max SECONDS] [--tail N] | ls | top [--once] | stats [--since 24h] [--id ID] | cancel ID | kill ID
        tools/q selftest | legacy [-w SECS] -- CMD…  (exclusive QLOCK, wait/run logged as kind=legacy)
 Job queue for heavy runs: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
-check 2, test 1, emu 1 + one of 2 emulator slots, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
+check 2, test 1, emu 2 + one of 2 emulator slots, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
 runs); prio high first, strict FIFO behind the head), holds QLOCK SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
 Stall watchdog: a running job whose process tree used < QSTALL_CPU % of one core and whose out.log did not grow for
 QSTALL s (or --stall) shows as `stalled` in ls / top with its blocked threads; wait on it exits 76. It is not killed:
@@ -25,7 +25,7 @@ QLOCK = os.path.realpath(os.environ.get("QLOCK") or f"{QDIR}/compat.lock")
 ARCH_TIMES = f"{MAIN}/devdata/arch_ref/times.txt"
 POLL = float(os.environ.get("QPOLL", "2"))
 CAP = 4
-WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2, "long": 2}
+WEIGHT = {"check": 2, "test": 1, "emu": 2, "full": 4, "batch": 2, "long": 2}
 EMU_SLOTS = 2
 WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
 EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
