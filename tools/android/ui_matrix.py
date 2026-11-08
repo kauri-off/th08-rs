@@ -638,7 +638,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--apk", default=str(REPO / "target/android/th08-debug.apk"))
     p.add_argument("--out", required=True)
-    p.add_argument("--port", type=int, default=5586)
+    p.add_argument("--port", type=int, default=os.environ.get("QEMU_PORT"), required="QEMU_PORT" not in os.environ, help="emulator console port (default: $QEMU_PORT of the emu job)")
     p.add_argument("--matrix", choices=["smoke", "audit", "full"], default="full")
     p.add_argument("--basic", action="store_true", help="only the home screen and the settings scroll")
     p.add_argument("--only", help="substring filter on the combo name")
@@ -678,7 +678,11 @@ def main():
             for pr in ui.problems:
                 print(f"  [{pr['kind']}] {pr['detail']}", flush=True)
             results += ui.problems
-            logcat = emu.adb("logcat", "-d", "-b", "crash", check=False).decode(errors="replace")
+            try:
+                logcat = emu.adb("logcat", "-d", "-b", "crash", check=False).decode(errors="replace")
+            except subprocess.TimeoutExpired:
+                logcat = ""
+                results.append({"combo": c, "kind": "driver error", "detail": "adb logcat timed out"})
             if PKG in logcat:
                 print("  CRASH\n" + logcat[-1500:], flush=True)
                 results.append({"combo": c, "kind": "crash", "detail": name})
