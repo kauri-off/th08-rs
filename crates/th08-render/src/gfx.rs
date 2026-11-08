@@ -74,6 +74,8 @@ struct Provenance {
     rgba: Option<Arc<[u8]>>,
     // Writes (text rasters included) and copies into the slot, in order; an edit inside a later one's rect is dropped.
     edits: Vec<Edit>,
+    // Text rows in the slot, in order: rasterised again when the render scale changes.
+    texts: Vec<th08_out::drawlist::TextCmd>,
 }
 
 #[cfg_attr(
@@ -94,6 +96,14 @@ enum Edit {
         to: [u32; 2],
         size: [u32; 2],
     },
+}
+
+fn text_rect(t: &th08_out::drawlist::TextCmd) -> [u32; 4] {
+    [0, t.y, t.w, t.size]
+}
+
+fn rects_meet(a: [u32; 4], b: [u32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
 impl Edit {
@@ -1572,6 +1582,7 @@ impl Gfx {
         if !self.captures() || t.tex.format() != wgpu::TextureFormat::Rgba8Unorm {
             return;
         }
+        self.drop_texts(dst, [to[0], to[1], w, h]);
         // At render scale k the destination is made k× too, so the capture keeps the frame's detail.
         self.rescale_texture(dst, self.scale);
         let t = self.tex(dst);
@@ -1648,6 +1659,7 @@ impl Gfx {
             // The web never rebuilds (`recover_if_lost`): no second copy of the pixels there.
             rgba: rgba.filter(|_| cfg!(not(target_arch = "wasm32"))).cloned(),
             edits: Vec::new(),
+            texts: Vec::new(),
         };
         if self.textures.len() <= id.index() {
             self.textures.resize_with(id.index() + 1, || None);
@@ -1817,6 +1829,7 @@ impl Gfx {
         }
         // No K record: the original's texture-to-texture copy (D3DXLoadSurfaceFromSurface) makes no device call
         // (specs/data/drawlog/FORMAT.md §3 K).
+        self.drop_texts(dst, [to[0], to[1], w, h]);
         let mut enc = encoder(&self.device);
         self.copy_scaled(&mut enc, src, from, dst, to, [w, h]);
         self.queue.submit([enc.finish()]);
@@ -2392,6 +2405,34 @@ impl Gfx {
             self.gpu.set_frame_scale(&self.device, &self.queue, k);
             self.scale = k;
             self.depth = None;
+            self.rescale_slots(k);
+        }
+    }
+
+    // Slots made at another scale after a change to `k`: text is rasterised again, and anything finer than the frame
+    // is reduced now (a sprite would sample it with gaps). Coarser captures stay: their detail no longer exists.
+    fn rescale_slots(&mut self, k: u32) {
+        for i in 0..self.textures.len() {
+            let Some(scale) = self.textures[i].as_ref().map(|t| t.scale) else {
+                continue;
+            };
+            let id = TexId(i as u32);
+            let texts = self.prov[i]
+                .as_ref()
+                .map_or(Vec::new(), |p| p.texts.clone());
+            if scale > k || !texts.is_empty() {
+                self.rescale_texture(id, k);
+            }
+            for t in &texts {
+                self.raster_text(t);
+            }
+        }
+    }
+
+    // Text rows of slot `id` that a non-text write or copy to `rect` paints over stop being made again.
+    fn drop_texts(&mut self, id: TexId, rect: [u32; 4]) {
+        if let Some(Some(p)) = self.prov.get_mut(id.index()) {
+            p.texts.retain(|t| !rects_meet(text_rect(t), rect));
         }
     }
 
@@ -2793,7 +2834,10 @@ impl Gfx {
                 w,
                 h,
                 rgba,
-            } => self.do_write_texture(*id, *x, *y, *w, *h, rgba, 1),
+            } => {
+                self.drop_texts(*id, [*x, *y, *w, *h]);
+                self.do_write_texture(*id, *x, *y, *w, *h, rgba, 1);
+            }
             ResCmd::Copy {
                 src,
                 from,
@@ -2822,6 +2866,15 @@ impl Gfx {
     // At render scale k the strip's texture is made k× and the text rasterised at k×.
     fn do_text(&mut self, t: &th08_out::drawlist::TextCmd) {
         self.rescale_texture(t.dst, self.scale);
+        self.raster_text(t);
+        if let Some(Some(p)) = self.prov.get_mut(t.dst.index()) {
+            let r = text_rect(t);
+            p.texts.retain(|o| !rect_within(text_rect(o), r));
+            p.texts.push(t.clone());
+        }
+    }
+
+    fn raster_text(&mut self, t: &th08_out::drawlist::TextCmd) {
         let k = self
             .textures
             .get(t.dst.index())
@@ -3161,6 +3214,61 @@ mod tests {
             .filter(|(a, b)| a.0[..3] != b.0[..3])
             .count();
         assert_eq!(diff, 0, "scale 2 differs from scale 1 in {diff} pixels");
+    }
+
+    // A text row made before a scale change is drawn like one made after it, down and up.
+    #[test]
+    fn render_scale_change_remakes_text() {
+        let _gpu = gpu_lock();
+        let run = |switch: Option<u32>, k: u32| -> Option<image::RgbaImage> {
+            let mut gfx = pollster::block_on(Gfx::headless()).ok()?;
+            gfx.offscreen = true;
+            gfx.render_scale = RenderScale::Fixed(switch.unwrap_or(k));
+            let mut rec = Recorder::new();
+            gfx.capture(&mut rec, None);
+            let strip = rec.create_texture(256, 32, &[0; 256 * 32 * 4]);
+            let raw = th08_out::textref::SjisString(b"Render scale".to_vec());
+            rec.text(th08_out::drawlist::TextCmd {
+                dst: strip,
+                y: 0,
+                w: 256,
+                size: 16,
+                key: th08_out::textref::TextRef::Dynamic,
+                text: raw,
+                color: [255, 255, 255],
+                x: 0.0,
+                edge: 256.0,
+                outline: 0,
+                align: th08_out::drawlist::Align::Left,
+                site: th08_out::drawlist::TextSite::Dialogue,
+            });
+            let dst = Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 256.0,
+                h: 32.0,
+            };
+            let uv = [0.0, 0.0, 1.0, 1.0];
+            rec.sprite(strip, Blend::Alpha, dst, uv, [255; 4]);
+            gfx.capture(&mut rec, None);
+            gfx.render_scale = RenderScale::Fixed(k);
+            rec.sprite(strip, Blend::Alpha, dst, uv, [255; 4]);
+            Some(gfx.capture(&mut rec, None))
+        };
+        for (from, to) in [(3, 1), (1, 3), (2, 3), (3, 2)] {
+            let (Some(switched), Some(clean)) = (run(Some(from), to), run(None, to)) else {
+                th08_testkit::skip(th08_testkit::NO_GPU);
+                return;
+            };
+            assert!(
+                switched.pixels().any(|p| p.0[3] > 0 && p.0[0] > 0),
+                "no text drawn"
+            );
+            assert!(
+                switched == clean,
+                "text after {from}x -> {to}x differs from a clean {to}x"
+            );
+        }
     }
 
     #[test]
