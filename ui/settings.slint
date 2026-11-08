@@ -3,6 +3,7 @@ import { Tk, Ui, Modality } from "tokens.slint";
 import { Label, Ringed, Arrow, FocusMark, Keycap, Heading, Target, BackLink, Tabs, SettingRow, RowData, Cap, Hint, HelpLine, HintLine, ScrollList } from "components.slint";
 
 export { Ui, Modality, RowData, Cap, Hint }
+export { PauseCard, CardGeo } from "card.slint";
 
 // Panel geometry from `portmenu::layout`, points.
 export struct Geometry {
@@ -50,12 +51,14 @@ export component SettingsPage inherits Window {
     callback tab-changed(int);
     public function scroll-top() { list.top(); }
 
-    property <length> row-h: Ui.split ? 132px : 70px;
-    property <length> row-size: Ui.split ? Ui.font(28, 14) : Ui.font(25, 14);
-    property <length> help-size: Ui.split ? Ui.font(24, 12) : Ui.font(19, 12);
+    property <length> row-h: Ui.split ? 120px : max(70px, Ui.tap);
+    property <length> row-size: Ui.split ? Ui.font(28, 11) : Ui.font(25, 14);
+    property <length> help-size: Ui.split ? Ui.font(24, 9.5) : Ui.font(19, 12);
     property <length> hint-size: Ui.font(16, 11);
-    property <length> tab-size: Ui.split ? Ui.font(Ui.ru ? 28 : 30, 14) : Ui.font(Ui.ru ? 20 : 22, 13);
-    property <length> base-label: Ui.split || geo.w < 720px ? geo.w * (Ui.split ? 0.36 : 0.42) : min(440px, geo.w * 0.5);
+    property <length> tab-size: Ui.split ? Ui.font(Ui.ru ? 28 : 30, 11) : Ui.font(Ui.ru ? 20 : 22, 13);
+    // Phone: as narrow as the page's whole labels allow, so the sliders keep a long track.
+    property <length> phone-label: clamp(whole.preferred-width + 16px, geo.w * 0.3, geo.w * 0.36);
+    property <length> base-label: Ui.split ? phone-label : geo.w < 720px ? geo.w * 0.42 : min(440px, geo.w * 0.5);
     property <length> label-w: min(geo.w * 0.5, max(base-label, pieces.preferred-width + 24px));
     property <int> help-row: Ui.bar ? cursor : Ui.modality == Modality.touch ? max(cursor, 0) : hovered-v;
     property <string> help: help-row >= 0 && help-row < rows.length ? rows[help-row].help : "";
@@ -122,6 +125,9 @@ export component SettingsPage inherits Window {
         pieces := VerticalLayout {
             for p in label-pieces: Text { text: p; font-family: Tk.serif; font-size: root.row-size; }
         }
+        whole := VerticalLayout {
+            for r in root.rows: Text { text: r.kind == 3 ? "" : r.label; font-family: Tk.serif; font-size: root.row-size; }
+        }
     }
 
     if Ui.split: Rectangle {
@@ -142,7 +148,7 @@ export component SettingsPage inherits Window {
                 bar: Ui.bar && root.cursor < 0; vertical-stretch: 1;
                 pick(i) => { root.go-tab(i); }
             }
-            Label { text: root.device; serif: false; font-size: Ui.font(19, 12); color: Tk.help; horizontal-alignment: left; wrap: word-wrap; vertical-stretch: 0; }
+            Label { text: root.device; serif: false; font-size: Ui.font(19, 8); color: Tk.help; horizontal-alignment: left; wrap: word-wrap; vertical-stretch: 0; }
         }
     }
 
@@ -198,6 +204,7 @@ export component SettingsPage inherits Window {
                         size: root.row-size;
                         armed: root.armed && r.kind == 3;
                         ask: root.ask;
+                        shown: list.shown(self.y, self.height);
                         changed bar => { if (self.bar) { list.reveal(self.y, self.height); } }
                         changed hovering => {
                             if (self.hovering) { root.hovered-v = i; } else if (root.hovered-v == i) { root.hovered-v = -1; }
@@ -207,7 +214,6 @@ export component SettingsPage inherits Window {
                         pick(c) => { root.pick(i, c); }
                         set(f) => { root.set-frac(i, f); }
                         activate => { root.act(i); }
-                        answer(y) => { root.armed = false; if (y) { root.reset-page(); } }
                     }
                 }
             }

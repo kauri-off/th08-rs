@@ -64,16 +64,16 @@ fn idx(i: i32) -> usize {
     usize::try_from(i).unwrap_or(usize::MAX)
 }
 
-fn s(t: &str) -> SharedString {
+pub(super) fn s(t: &str) -> SharedString {
     t.into()
 }
 
-fn strings(v: Vec<String>) -> ModelRc<SharedString> {
+pub(super) fn strings(v: Vec<String>) -> ModelRc<SharedString> {
     let v: Vec<SharedString> = v.into_iter().map(SharedString::from).collect();
     ModelRc::new(VecModel::from(v))
 }
 
-fn hints(items: &[(String, String)]) -> ModelRc<Hint> {
+pub(super) fn hints(items: &[(String, String)]) -> ModelRc<Hint> {
     let cap = |t: &str| match t {
         "Ⓐ" => Cap {
             text: s("A"),
@@ -109,7 +109,11 @@ fn geometry(p: &Place) -> Geometry {
     let (panel, x, w) = match p.lay.shape {
         Shape::Split => {
             let panel = fx + 416.0 * gs;
-            (panel, panel + 48.0, right - 64.0 - panel - 48.0)
+            (
+                panel,
+                panel + 48.0,
+                (right - 16.0).min(sw - 64.0) - panel - 48.0,
+            )
         }
         Shape::Pillar => {
             let panel = fx + 421.33 * gs;
@@ -222,6 +226,7 @@ impl Page {
 
     // Opens tab `tab`, the rows from `model`.
     pub fn show_tab(&mut self, tab: usize, model: &Model, lang: crate::i18n::Lang) {
+        Ui::get(&self.ui).set_ru(lang == crate::i18n::Lang::Ru);
         let tabs = model.live_tabs();
         self.tab = tab.min(tabs.len().saturating_sub(1));
         self.ui.set_tab(i32::try_from(self.tab).unwrap_or(0));

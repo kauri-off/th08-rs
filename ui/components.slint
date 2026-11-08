@@ -3,10 +3,10 @@ import { Tk, Ui, Modality } from "tokens.slint";
 
 export struct Cap { text: string, disc: bool }
 export struct Hint { caps: [Cap], word: string }
-// kind: 0 choice / toggle, 1 slider, 2 path or action, 3 danger action.
+// kind: 0 choice / toggle, 1 slider, 2 path or action, 3 danger action, 4 plain item.
 export struct RowData {
     kind: int, label: string, help: string, words: [string], sel: int,
-    frac: float, number: string, unit: string, value: string, rule: bool, pieces: [string],
+    frac: float, number: string, unit: string, value: string, rule: bool, pieces: [string], caption: string,
 }
 
 // `accessible-id` is read only by the layout check, so its measurements cost nothing in play.
@@ -42,15 +42,31 @@ export component FocusMark inherits Rectangle {
     in property <bool> bar;
     in property <bool> lit;
     in property <bool> down;
-    background: down ? Tk.pressed : (bar || lit) ? Tk.band : transparent;
-    if bar: Rectangle {
+    // The tick without key focus: the touch screen's primary action.
+    in property <bool> tick;
+    // Over the playfield the band is a lavender fade, so the game stays visible.
+    in property <bool> over-game;
+    background: down ? Tk.pressed : !(bar || lit) ? transparent : over-game ? @linear-gradient(90deg, #cac2d129 0%, #cac2d10a 100%) : Tk.band;
+    if bar || tick: Rectangle {
         accessible-role: text;
-        accessible-id: "focus";
+        accessible-id: root.bar ? "focus" : "";
         x: 0;
+        y: parent.height * 0.2;
         width: Ui.split ? 5px : 4px;
-        height: 100%;
+        height: 60%;
         background: Tk.accent;
     }
+}
+
+// The thin arrow of the key hints.
+component KeyArrow inherits Path {
+    in property <int> dir; // 0 left, 1 right, 2 up, 3 down
+    in property <color> tint;
+    stroke: tint;
+    stroke-width: 1.2px;
+    viewbox-width: 10;
+    viewbox-height: 10;
+    commands: dir == 0 ? "M10 5 L1 5 M4.5 1.5 L1 5 L4.5 8.5" : dir == 1 ? "M0 5 L9 5 M5.5 1.5 L9 5 L5.5 8.5" : dir == 2 ? "M5 10 L5 1 M1.5 4.5 L5 1 L8.5 4.5" : "M5 0 L5 9 M1.5 5.5 L5 9 L8.5 5.5";
 }
 
 export component Keycap inherits Rectangle {
@@ -72,8 +88,8 @@ export component Keycap inherits Rectangle {
     if arrows: HorizontalLayout {
         alignment: center;
         spacing: 2px;
-        VerticalLayout { alignment: center; Arrow { width: root.size * 0.7; height: root.size * 0.7; tint: Tk.keycap; dir: cap.text == "↑↓" ? 2 : 0; } }
-        VerticalLayout { alignment: center; Arrow { width: root.size * 0.7; height: root.size * 0.7; tint: Tk.keycap; dir: cap.text == "↑↓" ? 3 : 1; } }
+        VerticalLayout { alignment: center; KeyArrow { width: root.size * 0.85; height: root.size * 0.85; tint: Tk.keycap; dir: cap.text == "↑↓" ? 2 : 0; } }
+        VerticalLayout { alignment: center; KeyArrow { width: root.size * 0.85; height: root.size * 0.85; tint: Tk.keycap; dir: cap.text == "↑↓" ? 3 : 1; } }
     }
 }
 
@@ -83,10 +99,11 @@ export component Heading inherits VerticalLayout {
     in property <string> caption;
     in property <length> size;
     in property <length> caption-size;
+    in property <length> caption-indent: size * 1.15;
     spacing: -2px;
     Ringed { text: word; font-size: size; color: Tk.text-hi; horizontal-alignment: left; }
     HorizontalLayout {
-        padding-left: size * 1.15;
+        padding-left: root.caption-indent;
         Ringed { text: caption; font-size: caption-size; color: Tk.accent; horizontal-alignment: left; }
     }
 }
@@ -189,56 +206,98 @@ export component Tabs inherits Rectangle {
 export component StepCell inherits Target {
     in property <int> dir;
     in property <bool> hot;
-    in property <bool> cell;
     name: "step";
-    width: cell ? 120px : 40px;
-    min-height: cell ? 120px : 40px;
+    width: Ui.split ? 120px : Ui.touch ? Ui.tap : 40px;
+    min-height: Ui.tap;
     Rectangle {
-        background: root.cell ? (root.hot || root.pressed ? Tk.pressed : Tk.cell) : transparent;
-        Arrow { width: root.cell ? 26px : 14px; height: self.width; dir: root.dir; tint: root.hot ? Tk.text-hi : Tk.dim; }
+        y: Ui.split ? 6px : 0;
+        height: parent.height - 2 * self.y;
+        background: Ui.touch ? (root.hot || root.pressed ? Tk.pressed : Tk.cell) : transparent;
+        Arrow { width: Ui.touch ? 26px : 14px; height: self.width; dir: root.dir; tint: root.hot ? Tk.text-hi : Tk.dim; }
     }
 }
 
-// ◀ track ▶ number. A press on the track sets it only after 8 pt sideways, so a vertical list drag changes nothing.
+component SliderNumber inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <bool> hot;
+    alignment: end;
+    spacing: 3px;
+    Label { text: data.number; serif: false; font-size: Ui.touch ? Ui.font(24, 10) : Ui.font(22, 13); color: root.hot ? Tk.text-hi : Tk.text; horizontal-alignment: right; }
+    if data.unit != "": Label { text: data.unit; serif: false; font-size: Ui.touch ? Ui.font(16, 8) : Ui.font(16, 11); color: Tk.help; }
+}
+
+// The rail, fill and knob, and the press rule: a press sets it only after 8 pt sideways, so a vertical list drag changes nothing.
+component SliderTrack inherits Target {
+    in property <RowData> data;
+    in property <bool> hot;
+    callback set(float);
+    name: "track";
+    property <bool> dragging;
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { self.dragging = false; }
+    }
+    moved => {
+        if (self.pressed && abs(self.mouse-x - self.pressed-x) > 8px) { self.dragging = true; }
+        if (self.dragging) { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
+    }
+    clicked => { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
+    Rectangle { y: parent.height / 2 - 1px; height: 2px; background: Tk.track; }
+    Rectangle { x: 0; y: parent.height / 2 - 1px; height: 2px; width: parent.width * data.frac; background: Tk.fill; }
+    Rectangle {
+        x: parent.width * data.frac - self.width / 2;
+        y: parent.height / 2 - self.height / 2;
+        width: root.hot ? 16px : 11px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.hot ? Tk.accent : Tk.text;
+    }
+}
+
+// Touch: ◀ track value ▶ as one 48 dp control. Keys and pointer: ◀ track ▶ value, the arrows optional.
 export component SliderValue inherits HorizontalLayout {
+    in property <RowData> data;
+    in property <bool> hot;
+    in property <bool> arrows: true;
+    callback step(int);
+    callback set(float);
+    spacing: Ui.touch ? 0 : 8px;
+    if arrows: StepCell { dir: 0; hot: root.hot; clicked => { root.step(-1); } }
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        padding-left: Ui.touch ? 14px : 0;
+        padding-right: Ui.touch ? 12px : 0;
+        spacing: 12px;
+        SliderTrack { data: root.data; hot: root.hot; horizontal-stretch: 1; min-width: 60px; set(f) => { root.set(f); } }
+        if Ui.touch: SliderNumber { data: root.data; hot: root.hot; width: 70px; }
+    }
+    if arrows: StepCell { dir: 1; hot: root.hot; clicked => { root.step(1); } }
+    if !Ui.touch: SliderNumber { data: root.data; hot: root.hot; width: 100px; }
+}
+
+// The phone's quick volume: ◀ number ▶ with the track under it; its target reaches behind the cells to stay 48 dp tall.
+export component SliderStacked inherits VerticalLayout {
     in property <RowData> data;
     in property <bool> hot;
     callback step(int);
     callback set(float);
-    out property <bool> hover: track.has-hover;
-    spacing: 8px;
-    StepCell { dir: 0; hot: root.hot; cell: Ui.split; clicked => { root.step(-1); } }
-    track := Target {
-        name: "track";
-        horizontal-stretch: 1;
-        min-width: 80px;
-        property <bool> dragging;
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { self.dragging = false; }
+    Rectangle {
+        height: 120px;
+        HorizontalLayout {
+            StepCell { dir: 0; hot: root.hot; clicked => { root.step(-1); } }
+            Rectangle { horizontal-stretch: 1; }
+            StepCell { dir: 1; hot: root.hot; clicked => { root.step(1); } }
         }
-        moved => {
-            if (self.pressed && abs(self.mouse-x - self.pressed-x) > 8px) { self.dragging = true; }
-            if (self.dragging) { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
-        }
-        clicked => { root.set(clamp(self.mouse-x / self.width, 0, 1)); }
-        Rectangle { y: parent.height / 2 - 1px; height: 2px; background: Tk.track; }
-        Rectangle { x: 0; y: parent.height / 2 - 1px; height: 2px; width: parent.width * data.frac; background: Tk.fill; }
-        Rectangle {
-            x: parent.width * data.frac - self.width / 2;
-            y: parent.height / 2 - self.height / 2;
-            width: root.hot ? 16px : 11px;
-            height: self.width;
-            border-radius: self.width / 2;
-            background: root.hot ? Tk.accent : Tk.text;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 4px;
+            Label { text: data.number; serif: false; font-size: Ui.font(30, 12); color: Tk.text-hi; }
+            if data.unit != "": Label { text: data.unit; serif: false; font-size: Ui.font(20, 9); color: Tk.help; }
         }
     }
-    StepCell { dir: 1; hot: root.hot; cell: Ui.split; clicked => { root.step(1); } }
-    HorizontalLayout {
-        width: Ui.split ? 110px : 100px;
-        alignment: end;
-        spacing: 3px;
-        Label { text: data.number; serif: false; font-size: Ui.font(22, 13); color: root.hot ? Tk.text-hi : Tk.text; horizontal-alignment: right; }
-        if data.unit != "": Label { text: data.unit; serif: false; font-size: Ui.font(16, 11); color: Tk.help; }
+    Rectangle {
+        height: 72px;
+        z: -1;
+        SliderTrack { y: parent.height / 2 - Ui.tap / 2; height: Ui.tap; data: root.data; hot: root.hot; set(f) => { root.set(f); } }
     }
 }
 
@@ -246,14 +305,14 @@ export component SliderValue inherits HorizontalLayout {
 component ChoiceInline inherits HorizontalLayout {
     in property <RowData> data;
     in property <length> size;
+    in property <bool> right;
     callback pick(int);
-    out property <bool> hover: false;
     spacing: Ui.split ? 0 : size * 1.2;
-    alignment: start;
+    alignment: right ? end : start;
     for w[i] in data.words: Target {
         name: "choice|" + w;
-        min-width: Ui.split ? 150px : 0;
-        min-height: Ui.split ? 120px : 40px;
+        min-width: Ui.split ? 150px : Ui.touch ? Ui.tap : 0;
+        min-height: Ui.tap;
         preferred-width: l.preferred-width + (Ui.split ? 32px : 0);
         horizontal-stretch: 0;
         clicked => { root.pick(i); }
@@ -267,8 +326,8 @@ component ChoiceStepper inherits HorizontalLayout {
     in property <bool> hot;
     in property <length> size;
     callback step(int);
-    spacing: 8px;
-    StepCell { dir: 0; hot: root.hot; cell: Ui.split; clicked => { root.step(-1); } }
+    spacing: Ui.touch ? 0 : 8px;
+    StepCell { dir: 0; hot: root.hot; clicked => { root.step(-1); } }
     Ringed {
         horizontal-stretch: 1;
         text: data.sel >= 0 ? data.words[data.sel] : data.value;
@@ -277,7 +336,7 @@ component ChoiceStepper inherits HorizontalLayout {
         horizontal-alignment: center;
         wrap: word-wrap;
     }
-    StepCell { dir: 1; hot: root.hot; cell: Ui.split; clicked => { root.step(1); } }
+    StepCell { dir: 1; hot: root.hot; clicked => { root.step(1); } }
 }
 
 export component ActionValue inherits HorizontalLayout {
@@ -296,37 +355,27 @@ export component ActionValue inherits HorizontalLayout {
     Label { text: "›"; font-size: Ui.font(24, 14); color: Tk.help; horizontal-stretch: 0; }
 }
 
-// The in-place question of a danger action: a second press confirms; `options` adds named answers (index 0 = yes).
+// The in-place question of the reset row: a second press confirms, anything else cancels.
 export component Confirm inherits HorizontalLayout {
     in property <string> question;
-    in property <[string]> options;
     in property <length> size;
-    callback answer(bool);
-    spacing: 24px;
     Ringed { text: root.question; font-size: root.size; color: Tk.question; horizontal-alignment: left; horizontal-stretch: 1; wrap: word-wrap; }
-    for a[i] in root.options: Target {
-        name: "confirm|" + a;
-        horizontal-stretch: 0;
-        min-width: Ui.touch ? 150px : 60px;
-        preferred-width: t.preferred-width + 24px;
-        min-height: Ui.touch ? 120px : 40px;
-        clicked => { root.answer(i == 0); }
-        t := Ringed { text: a; font-size: root.size; color: i == 0 ? Tk.danger : Tk.text; }
-    }
 }
 
 // The value control of any row kind.
-component ValueControl inherits Rectangle {
+export component ValueControl inherits Rectangle {
     in property <RowData> data;
     in property <bool> hot;
     in property <bool> as-stepper;
     in property <length> size;
+    in property <bool> right;
+    in property <bool> arrows: true;
     callback step(int);
     callback pick(int);
     callback set(float);
-    if data.kind == 0 && !as-stepper: ChoiceInline { data: root.data; size: root.size; pick(i) => { root.pick(i); } }
+    if data.kind == 0 && !as-stepper: ChoiceInline { data: root.data; size: root.size; right: root.right; pick(i) => { root.pick(i); } }
     if data.kind == 0 && as-stepper: ChoiceStepper { data: root.data; hot: root.hot; size: root.size; step(d) => { root.step(d); } }
-    if data.kind == 1: SliderValue { data: root.data; hot: root.hot; step(d) => { root.step(d); } set(f) => { root.set(f); } }
+    if data.kind == 1: SliderValue { data: root.data; hot: root.hot; arrows: root.arrows; step(d) => { root.step(d); } set(f) => { root.set(f); } }
     if data.kind == 2: ActionValue { data: root.data; hot: root.hot; }
 }
 
@@ -341,23 +390,27 @@ export component SettingRow inherits Rectangle {
     in property <length> size;
     in property <bool> armed;
     in property <string> ask;
+    // Share of the row inside the list's view.
+    in property <float> shown: 1;
     out property <bool> hovering: area.has-hover;
     callback step(int);
     callback pick(int);
     callback set(float);
     callback activate();
-    callback answer(bool);
     callback press();
 
     property <length> gap: Ui.split ? 0 : root.size * 1.2;
+    property <length> label-gap: Ui.split ? 16px : 24px;
     property <length> value-w: content-w - label-w;
-    property <length> cell-sum: Ui.split ? 256px : 96px;
+    property <length> cell-sum: Ui.split ? 240px : Ui.touch ? 2 * Ui.tap : 96px;
     property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > value-w;
-    property <length> slider-min: Ui.split ? 454px : 284px;
-    property <bool> stacked: (data.kind == 1 && slider-min > value-w) || (as-stepper && widest-m.preferred-width + cell-sum > value-w) || label-m.preferred-width > label-w - 24px;
+    property <length> slider-min: Ui.touch ? cell-sum + 196px : 284px;
+    property <bool> stacked: (data.kind == 1 && slider-min > value-w) || (as-stepper && widest-m.preferred-width + cell-sum > value-w) || label-m.preferred-width > label-w - label-gap;
     property <bool> lit: area.has-hover && Ui.modality == Modality.mouse;
     property <bool> hot: bar || lit;
     min-height: max(row-h, body.preferred-height);
+    // Under 70 % in view a row fades out whole, so no half row shows at a list's edge.
+    opacity: clamp((shown - 0.7) / 0.3, 0, 1);
 
     Rectangle {
         visible: false;
@@ -385,32 +438,36 @@ export component SettingRow inherits Rectangle {
     body := VerticalLayout {
         x: inset;
         width: content-w;
-        padding-top: 6px;
-        padding-bottom: 6px;
+        padding-top: Ui.touch ? 0 : 6px;
+        padding-bottom: Ui.touch ? 0 : 6px;
         if !stacked: HorizontalLayout {
             if data.kind != 3: Ringed {
                 text: data.label; font-size: root.size; color: hot ? Tk.text-hi : Tk.text;
-                width: label-w - 24px; horizontal-alignment: left; wrap: word-wrap;
+                width: label-w - label-gap; horizontal-alignment: left; wrap: word-wrap;
             }
-            if data.kind != 3: Rectangle { width: 24px; }
+            if data.kind != 3: Rectangle { width: root.label-gap; }
             if data.kind == 3 && !armed: Ringed {
                 text: data.label; font-size: root.size; color: Tk.danger; horizontal-alignment: left; wrap: word-wrap;
             }
             if data.kind == 3 && armed: Confirm {
                 question: root.ask; size: root.size;
-                answer(y) => { root.answer(y); }
             }
             if data.kind != 3: ValueControl {
-                data: root.data; hot: root.hot; as-stepper: root.as-stepper; size: root.size * 0.96; horizontal-stretch: 1;
+                data: root.data; hot: root.hot; as-stepper: root.as-stepper; size: Ui.split ? root.size * 1.07 : root.size * 0.96; horizontal-stretch: 1;
                 step(d) => { root.press(); root.step(d); } pick(i) => { root.press(); root.pick(i); } set(f) => { root.press(); root.set(f); }
             }
         }
         if stacked: Ringed { text: data.label; font-size: root.size; color: hot ? Tk.text-hi : Tk.text; horizontal-alignment: left; wrap: word-wrap; }
         if stacked: ValueControl {
-            min-height: Ui.split ? 120px : 48px;
-            data: root.data; hot: root.hot; as-stepper: inline-m.preferred-width > content-w; size: root.size * 0.96;
+            min-height: Ui.touch ? Ui.tap : 48px;
+            data: root.data; hot: root.hot; as-stepper: inline-m.preferred-width > content-w; size: Ui.split ? root.size * 1.07 : root.size * 0.96;
             step(d) => { root.press(); root.step(d); } pick(i) => { root.press(); root.pick(i); } set(f) => { root.press(); root.set(f); }
         }
+    }
+    // A faded row takes no taps; a drag on it still scrolls the list.
+    if shown < 0.7: TouchArea {
+        accessible-role: text;
+        accessible-id: "cut";
     }
 }
 
@@ -484,4 +541,8 @@ export component ScrollList inherits Flickable {
         self.content-y = clamp(self.content-y - dir * self.height * 0.9, -self.scroll-max, 0);
     }
     public function top() { self.content-y = 0; }
+    // The share of a row at `y`, `h` tall, inside the view.
+    public pure function shown(y: length, h: length) -> float {
+        return max(0, min(y + h + self.content-y, self.height) - max(y + self.content-y, 0)) / max(1px, h);
+    }
 }

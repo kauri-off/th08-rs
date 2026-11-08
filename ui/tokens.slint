@@ -40,6 +40,8 @@ export global Ui {
     in property <float> pt-per-dp: 1;
     in property <bool> ru;
     out property <bool> bar: modality == Modality.keys;
+    // The least size of a tap target on touch: 48 dp.
+    out property <length> tap: touch ? 48px * pt-per-dp : 40px;
     public pure function font(mock: float, dp: float) -> length {
         return max(mock, dp * pt-per-dp) * 1px;
     }
