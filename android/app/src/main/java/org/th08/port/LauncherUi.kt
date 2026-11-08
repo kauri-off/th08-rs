@@ -119,6 +119,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowWidthSizeClass
 import java.io.File
@@ -263,10 +266,11 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
             Unit
         }
     }
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
     val fabColor = if (canPlay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         if (rail) {
-            val large = androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.15f
+            val large = fontScale > 1.15f
             val startInset = WindowInsets.safeDrawing.asPaddingValues()
                 .calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current)
             NavigationRail(
@@ -325,14 +329,18 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                     NavigationBar {
                         Dest.entries.forEach { d ->
                             NavigationBarItem(selected = dest == d, onClick = { dest = d },
-                                icon = { Icon(d.icon, null) }, label = { Text(str(d.label), maxLines = 1) })
+                                icon = { Icon(d.icon, null) },
+                                label = { Text(str(d.label), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    fontSize = if (fontScale > 1.15f) 10.sp else MaterialTheme.typography.labelMedium.fontSize) })
                         }
                     }
                 }
             },
             floatingActionButton = {
                 if (!rail) {
+                    val playLabel = str(R.string.play)
                     ExtendedFloatingActionButton(onClick = play, containerColor = fabColor,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = playLabel },
                         icon = { Icon(Icons.Default.PlayArrow, null) }, text = { Text(str(R.string.play), maxLines = 1) })
                 }
             },

@@ -156,9 +156,12 @@ class Ui:
         window = [n for n in s.nodes if n.parent is None]
         leaves = [n for n in s.nodes if n.text]
         vp = self.scroll_region(s)
+        play = s.find(strings(self.combo["lang"])["play"])
         for n in s.nodes:
             full = n.y0 > 0 and n.y1 < H - 1 and not (vp and (n.y0 <= vp[1] + 2 or n.y1 >= vp[3] - 2))
-            if n.clickable and n.w and n.h and full and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
+            pad = 8 * self.dp
+            covered = play is not n and play is not None and n.x1 > play.x0 - pad and n.x0 < play.x1 + pad and n.y1 > play.y0 - pad and n.y0 < play.y1 + pad
+            if n.clickable and n.w and n.h and full and not covered and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
                 self.problem("small target", f"{where}: '{n.label or n.cls}' {round(n.w / self.dp)}x{round(n.h / self.dp)} dp")
             if n.label and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
                 self.problem("cut-out overlap", f"{where}: '{n.label[:40]}'")
