@@ -156,11 +156,12 @@ class Ui:
         window = [n for n in s.nodes if n.parent is None]
         leaves = [n for n in s.nodes if n.text]
         vp = self.scroll_region(s)
-        play = s.find(strings(self.combo["lang"])["play"])
+        st = strings(self.combo["lang"])
+        covers = [c for c in (s.find(st["play"]), s.find(st["play_need_data"])) if c is not None]
         for n in s.nodes:
             full = n.y0 > 0 and n.y1 < H - 1 and not (vp and (n.y0 <= vp[1] + 2 or n.y1 >= vp[3] - 2))
             pad = 8 * self.dp
-            covered = play is not n and play is not None and n.x1 > play.x0 - pad and n.x0 < play.x1 + pad and n.y1 > play.y0 - pad and n.y0 < play.y1 + pad
+            covered = any(c is not n and n.x1 > c.x0 - pad and n.x0 < c.x1 + pad and n.y1 > c.y0 - pad and n.y0 < c.y1 + pad for c in covers)
             if n.clickable and n.w and n.h and full and not covered and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
                 self.problem("small target", f"{where}: '{n.label or n.cls}' {round(n.w / self.dp)}x{round(n.h / self.dp)} dp")
             if n.label and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
@@ -184,6 +185,8 @@ class Ui:
                       self.emu.sh("dumpsys window displays", timeout=30))
         ins = [int(v) for v in m.groups() if v is not None] if m else [0, 0, 0, 0]
         l, t, r, b = ins
+        if W > H and t and not (l or r):
+            l, t = t, 0
         if l:
             return (0, 0, l, H)
         if r:
@@ -473,7 +476,7 @@ def exercise_row(ui, st, e, lang, n):
         ui.problem("control opened nothing", label)
         return
     ui.back()
-    if ui.dump().find(st["nav_settings"], clickable=True) is None:
+    if ui.dump().find(st["cancel"], clickable=True):
         ui.back()
 
 
