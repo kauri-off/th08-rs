@@ -111,6 +111,8 @@ pub struct Layout {
 const PILLAR: f32 = 480.0;
 // A phone side bar's least width, points.
 const SPLIT_BAR: f32 = 420.0;
+// A phone stepper or choice cell: 48 dp at the phone's scale, in points.
+const STEP_CELL: f32 = 120.0;
 // The picture may shrink to this share of its full size to make room for the pillar.
 const SHEET_MIN_PICTURE: f32 = 0.8;
 // Touch: 120 points are at least 48 dp.
@@ -1441,32 +1443,59 @@ fn item_ctl_layout(
     } else {
         w * 0.42
     };
-    let st = CtlStyle {
+    let mut st = CtlStyle {
         size: size * 0.93,
         num: size * 0.8,
         cells: false,
         right: true,
         indent: 0.0,
         track: cm.track,
-        numw: cm.numw,
+        numw: cm.numw.min(56.0),
         gap: size * 0.93,
         cell_w: 0.0,
         cell_h: 48.0,
         one_line: false,
     };
-    // The control starts a word's gap after the label when the label is wider than its column; right-aligned
+    // The control starts a short gap after the label when the label is wider than its column; right-aligned
     // choice words may use the whole width after the label.
     let lw = p
         .layout_no_wrap(words.item(it).to_string(), theme::serif(size), theme::TEXT)
         .size()
         .x
         .min(label_w);
-    let off = if matches!(ctl, Ctl::Choices { .. }) {
+    let off = if matches!(ctl, Ctl::Slider { .. }) {
+        lw + size * 0.6
+    } else if matches!(ctl, Ctl::Choices { .. }) {
         lw + size
     } else {
         label_w.max(lw + size)
-    };
-    (st, off.min(w - 10.0))
+    }
+    .min(w - 10.0);
+    // Choice words tighten, then shrink to 80 %, before one of them would drop to a second line.
+    if let Ctl::Choices { words: ws, .. } = ctl {
+        let room = w - off;
+        let wide: f32 = ws
+            .iter()
+            .map(|t| {
+                p.layout_no_wrap(t.clone(), theme::serif(st.size), theme::TEXT)
+                    .size()
+                    .x
+            })
+            .sum();
+        let gaps = ws.len().saturating_sub(1) as f32;
+        let tight = |s: f32| wide * s + gaps * st.size * s * 0.6;
+        if wide + gaps * st.gap > room && gaps > 0.0 {
+            let s = [1.0, 0.95, 0.9, 0.85, 0.8]
+                .into_iter()
+                .find(|&s| tight(s) <= room);
+            if let Some(s) = s {
+                st.size *= s;
+                st.gap = (room - wide * s) / gaps;
+                st.gap = st.gap.min(size * 0.93);
+            }
+        }
+    }
+    (st, off)
 }
 
 // One item row: focus band (or the 4:3 gradient), label, its control, the › on Settings / Touch layout.
@@ -1504,7 +1533,7 @@ fn item_row(
     let bar = live && focus.input.bar() && focus.item == it;
     let lit = live && focus.input.lit(Hit::Item(it));
     // On touch there is no focus to carry: Resume keeps the band as the screen's primary action.
-    let primary = it == Item::Resume && lay.touch && live && !bar;
+    let primary = it == Item::Resume && lay.touch && live && !focus.input.bar();
     let focused = bar || lit || primary;
     if primary {
         theme::focus(
@@ -1525,10 +1554,10 @@ fn item_row(
             live && resp.is_pointer_button_down_on(),
         );
     }
-    let color = if focused {
-        theme::TEXT_HI
-    } else if it.danger() {
+    let color = if it.danger() {
         theme::DANGER
+    } else if focused {
+        theme::TEXT_HI
     } else {
         theme::TEXT
     };
@@ -1631,8 +1660,12 @@ fn confirm_block(
         }
         let bar = focus.input.bar() && focus.yes == yes;
         let lit = focus.input.lit(Hit::Yes(yes));
-        let f = bar || lit;
-        if lay.shape == Shape::Column && f {
+        // On touch nothing has a marker: the safe answer keeps the plain band, as Resume does.
+        let rest = lay.touch && !yes && !focus.input.bar();
+        let f = bar || lit || rest;
+        if rest && !resp.is_pointer_button_down_on() {
+            p.rect_filled(b, 0.0, theme::BAND);
+        } else if lay.shape == Shape::Column && (bar || lit) {
             theme::focus_over_game(p, b, if bar { 4.0 } else { 0.0 });
         } else {
             theme::mark(p, b, 4.0, bar, lit, resp.is_pointer_button_down_on());
@@ -2258,7 +2291,7 @@ fn split_card(
         theme::ACCENT,
     );
     let ch = cap.size().y;
-    theme::caption_text(p, pos2(rx, y - ch - 24.0), cap);
+    theme::caption_text(&op, pos2(rx, y - ch - 24.0), cap);
     theme::rule(&op, egui::Rangef::new(rx, rx + rw), y - 12.0);
     for &it in &quick {
         let h = height(it);
@@ -2323,12 +2356,12 @@ fn split_card(
                 numw: 0.0,
                 gap: lab,
                 cell_w: 0.0,
-                cell_h: 48.0,
+                cell_h: STEP_CELL,
                 one_line: false,
             };
             let res = match &ctl {
                 Ctl::Slider { frac, text, unit } => {
-                    phone_volume(ui, &op, id, cells, *frac, text, unit, focused, lab)
+                    phone_volume(ui, &op, id, cells, &st, *frac, text, unit, focused, lab)
                 }
                 Ctl::Choices { words: ws, sel } => {
                     let n = cols(it);
@@ -2375,38 +2408,18 @@ fn phone_volume(
     p: &Painter,
     id: Id,
     cells: Rect,
+    st: &CtlStyle,
     frac: f32,
     text: &str,
     unit: &str,
     focused: bool,
     size: f32,
 ) -> Option<CtlOut> {
-    let mut out = None;
-    for (dir, r) in [
-        (-1, Rect::from_min_size(cells.min, vec2(120.0, 120.0))),
-        (
-            1,
-            Rect::from_min_size(pos2(cells.max.x - 120.0, cells.min.y), vec2(120.0, 120.0)),
-        ),
-    ] {
-        let resp = ui.interact(r, id.with(("vstep", dir)), Sense::click());
-        let fill = if resp.is_pointer_button_down_on() || focused {
-            theme::PRESSED
-        } else {
-            theme::CELL
-        };
-        p.rect_filled(r, 0.0, fill);
-        theme::arrow(
-            p,
-            r.center(),
-            20.0,
-            dir > 0,
-            if focused { theme::TEXT_HI } else { theme::TEXT },
-        );
-        if resp.clicked() {
-            out = Some(CtlOut::Step(dir));
-        }
-    }
+    let st = CtlStyle {
+        cell_w: STEP_CELL,
+        ..*st
+    };
+    let mut out = theme::stepper(ui, p, id.with("vstep"), cells, &st, focused, |_, _| {});
     let n = p.layout_no_wrap(text.to_string(), theme::sans(size), theme::TEXT_HI);
     let u = p.layout_no_wrap(unit.to_string(), theme::sans(size * 0.7), theme::HELP);
     let tw = n.size().x
@@ -2580,17 +2593,19 @@ fn wide_head(
     let top = geo.safe.min.y;
     let f = |mock, dp| lay.font(mock, dp);
     let p = p.clone();
-    // 4:3: the panel takes the HUD and the playfield right of the player's lane (game x 300), so the dimmed
-    // playfield stays in view.
+    // 4:3: the panel takes the HUD and the playfield's right edge (game x 360 of the field's 32..416), so the
+    // dimmed playfield stays in view.
     let px = if lay.shape == Shape::Pillar {
         geo.frame.min.x + 421.33 * geo.gs
     } else {
-        geo.frame.min.x + 300.0 * geo.gs
+        // At large UI scales the rows keep at least 470 points.
+        (geo.frame.min.x + 360.0 * geo.gs).min(geo.safe.max.x - 534.0)
     };
     let panel = Rect::from_x_y_ranges(px..=geo.screen.max.x, geo.screen.y_range());
     theme::lacquer(&p, panel, Edge::Left);
-    let x = px + 52.0;
-    let w = geo.safe.max.x - 44.0 - x;
+    let column = lay.shape == Shape::Column;
+    let x = px + if column { 36.0 } else { 52.0 };
+    let w = geo.safe.max.x - if column { 28.0 } else { 44.0 } - x;
     theme::heading(
         &p,
         pos2(x, top + 30.0),
@@ -2737,7 +2752,7 @@ fn settings_ui(
             head: 0.0,
             cap: 0.0,
             tab: f(if ru { 28.0 } else { 30.0 }, 14.0),
-            row_h: 120.0,
+            row_h: STEP_CELL + 12.0,
             row: f(28.0, 14.0),
             help: f(24.0, 12.0),
             hint: f(16.0, 12.0),
@@ -2820,7 +2835,9 @@ fn settings_ui(
     // A narrow rows panel (phone side bar, 4:3 beside the playfield) keeps every value on one line: choices that
     // do not fit become a ◀ value ▶ stepper, and the labels get the wider share.
     let narrow = w < 720.0;
-    let base = if narrow {
+    let base = if split {
+        w * 0.36
+    } else if narrow {
         w * 0.42
     } else {
         pm.label_w.min(w * 0.36)
@@ -2834,13 +2851,13 @@ fn settings_ui(
         indent: 0.0,
         // The slider fills the value column to the panel's right margin.
         track: if split { 0.0 } else { f32::INFINITY },
-        numw: 100.0,
+        numw: if split { 72.0 } else { 100.0 },
         gap: pm.row * 1.2,
-        cell_w: if split { 120.0 } else { 0.0 },
-        cell_h: 48.0,
-        one_line: narrow,
+        cell_w: if split { STEP_CELL } else { 0.0 },
+        cell_h: if split { STEP_CELL } else { 48.0 },
+        one_line: narrow || split,
     };
-    let pad = if split { 24.0 } else { 16.0 };
+    let pad = if split { 12.0 } else { 16.0 };
     let mut tops = Vec::with_capacity(n + 1);
     // One value column per page: values start at it and wrap inside it. A row drops its control under the label
     // (full width) only when one of its words is wider than the column. Rows are 1, 1.5, 2… row pitches tall.
@@ -2854,14 +2871,16 @@ fn settings_ui(
             .size()
             .y;
         let col = w - label_w;
-        // The phone side bar sets every label above its value, the value on one line across the bar.
-        let stack = split || theme::widest_word(&p, &ctl, &st) > col;
+        // A stepper's value that would shrink under 80 % between the phone cells takes the whole row under its label.
+        let cramped = split
+            && matches!(&ctl, Ctl::Choices { words, .. } if words.iter().any(|t| {
+                let wide = p.layout_no_wrap(t.clone(), theme::serif(st.size), theme::TEXT).size().x;
+                wide * 0.8 > col - 2.0 * STEP_CELL - 8.0
+            }))
+            && theme::ctl_height(&p, &ctl, &st, col) <= st.cell_h;
+        let stack = cramped || theme::widest_word(&p, &ctl, &st) > col;
         stacked.push(stack);
-        y += if split {
-            label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y
-                + theme::ctl_height(&p, &ctl, &st, w)
-                + pad
-        } else if stack {
+        y += if stack {
             pitch(
                 label_galley(&p, w, lab, font.clone(), theme::TEXT).size().y
                     + theme::ctl_height(&p, &ctl, &st, w)
@@ -2985,8 +3004,6 @@ fn settings_ui(
         };
         let col = if focus.reset {
             theme::QUESTION
-        } else if focused {
-            theme::TEXT_HI
         } else {
             theme::DANGER
         };
@@ -3022,7 +3039,7 @@ fn settings_ui(
         mark(end + 2.0, true);
     }
     ui.set_clip_rect(ui_clip);
-    let by = end + 14.0;
+    let by = bottom + 14.0;
     theme::rule(&p, egui::Rangef::new(x, x + w), by);
     theme::shadowed(&p, pos2(x, by + 14.0), help_g, theme::HELP_HI);
     if !split {

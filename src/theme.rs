@@ -943,11 +943,7 @@ pub fn value_ctl(
                     .x;
                 let size = st.size * ((r.width() - 8.0) / wide.max(1.0)).clamp(0.6, 1.0);
                 let g = wrap(p, word.clone(), serif(size), TEXT, r.width().max(10.0));
-                let pos = if st.cells {
-                    r.center() - g.size() / 2.0
-                } else {
-                    pos2(r.min.x, r.center().y - g.size().y / 2.0)
-                };
+                let pos = r.center() - g.size() / 2.0;
                 outlined(p, pos, g, if focused { TEXT_HI } else { TEXT }, false);
             });
         }
@@ -1019,9 +1015,9 @@ pub fn value_ctl(
             };
             if st.cells {
                 out = stepper(ui, p, id, rect, st, focused, |p, r| {
-                    let tr = egui::Rangef::new(r.min.x + 22.0, r.max.x - numw - 12.0);
+                    let tr = egui::Rangef::new(r.min.x + 14.0, r.max.x - numw - 12.0);
                     // A track shorter than this reads as a stray line: the stepper then shows the value alone.
-                    if tr.span() >= 120.0 {
+                    if tr.span() >= MIN_CELL_TRACK {
                         track(p, tr, cy, *frac, focused);
                         num(p, r.max.x - 8.0);
                     } else {
@@ -1035,10 +1031,10 @@ pub fn value_ctl(
                     }
                 });
                 let tr = Rect::from_x_y_ranges(
-                    rect.min.x + st.cell_w + 22.0..=rect.max.x - st.cell_w - numw - 12.0,
+                    rect.min.x + st.cell_w + 14.0..=rect.max.x - st.cell_w - numw - 12.0,
                     rect.y_range(),
                 );
-                if tr.width() >= 120.0
+                if tr.width() >= MIN_CELL_TRACK
                     && let Some(f) = drag(ui, id, tr)
                 {
                     out = Some(CtlOut::Frac(f));
@@ -1094,6 +1090,8 @@ pub fn value_ctl(
     out
 }
 
+const MIN_CELL_TRACK: f32 = 60.0;
+
 // Enums with more values than this get a stepper; fewer show all their words (the menus' one rule).
 pub const MAX_WORDS: usize = 5;
 
@@ -1114,7 +1112,7 @@ fn line_h(st: &CtlStyle) -> f32 {
 
 // The shortest gap between two choice words (cells: the room around the word inside its cell).
 fn word_gap(st: &CtlStyle) -> f32 {
-    st.gap.max(st.size * 0.8)
+    st.gap
 }
 
 // Choice words laid out in lines of `room` points: (galley, x, line, item width) and the line count. Words keep
@@ -1220,8 +1218,8 @@ pub fn label_width(p: &Painter, labels: &[&str], font: &FontId, base: f32, max: 
     (widest + 24.0).max(base).min(max)
 }
 
-// ◀ [middle] ▶: phone cells at both ends, or small arrows around the middle on desktop.
-fn stepper(
+// ◀ [middle] ▶: phone cells at both ends (`cell_w` × `cell_h`), or small arrows around the middle on desktop.
+pub fn stepper(
     ui: &Ui,
     p: &Painter,
     id: egui::Id,
@@ -1233,7 +1231,7 @@ fn stepper(
     let cy = rect.center().y;
     let mut out = None;
     let (left, right, mid) = if st.cells {
-        let h = rect.height() - 12.0;
+        let h = st.cell_h;
         let l = Rect::from_min_size(pos2(rect.min.x, cy - h / 2.0), vec2(st.cell_w, h));
         let r = Rect::from_min_size(
             pos2(rect.max.x - st.cell_w, cy - h / 2.0),
@@ -1349,7 +1347,7 @@ pub fn scroll_edges<R>(ui: &Ui, out: &egui::scroll_area::ScrollAreaOutput<R>) {
         p.add(m);
     };
     let mark = |y: f32, down: bool| {
-        let (cx, h) = (r.max.x - 22.0, 6.0);
+        let (cx, h) = (r.max.x - 11.0, 6.0);
         let (tip, base) = if down { (y + h, y) } else { (y - h, y) };
         p.add(egui::Shape::convex_polygon(
             vec![pos2(cx - h, base), pos2(cx + h, base), pos2(cx, tip)],

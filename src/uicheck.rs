@@ -15,10 +15,11 @@ pub enum Kind {
     RawId,
     FewRows,
     NoFocus,
+    TwoFocus,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Clipped,
         Kind::Overlap,
         Kind::MidWord,
@@ -28,6 +29,7 @@ impl Kind {
         Kind::RawId,
         Kind::FewRows,
         Kind::NoFocus,
+        Kind::TwoFocus,
     ];
 
     pub fn name(self) -> &'static str {
@@ -41,6 +43,7 @@ impl Kind {
             Kind::RawId => "raw-identifier",
             Kind::FewRows => "few-rows",
             Kind::NoFocus => "no-focus-at-rest",
+            Kind::TwoFocus => "two-focus-markers",
         }
     }
 }
@@ -370,6 +373,7 @@ pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<I
     let mut out = Vec::new();
     let mut texts = Vec::new();
     let mut marks = Vec::new();
+    let mut ticks = Vec::new();
     for cs in shapes {
         let clip = cs.clip_rect.intersect(screen);
         let mut colour = |c: Color32, r: Rect, what: &str| {
@@ -391,6 +395,15 @@ pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<I
             }
         };
         walk(&cs.shape, clip, &mut texts, &mut colour, &mut marks);
+        // The focus tick: a thin upright lavender bar (`theme::tick`).
+        if let Shape::Rect(r) = &cs.shape
+            && r.fill == crate::theme::ACCENT
+            && r.rect.width() <= 8.0
+            && r.rect.height() >= 2.0 * r.rect.width()
+            && r.rect.intersect(clip).is_positive()
+        {
+            ticks.push(r.rect);
+        }
         if let Shape::Rect(r) = &cs.shape
             && r.fill.a() > 0
             && cut(r.rect, cs.clip_rect, screen, scrolls)
@@ -401,6 +414,13 @@ pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<I
                 rect: r.rect,
             });
         }
+    }
+    if ticks.len() > 1 {
+        out.push(Issue {
+            kind: Kind::TwoFocus,
+            what: format!("{} focus markers: {ticks:?}", ticks.len()),
+            rect: ticks[1],
+        });
     }
     // Outline / shadow / glow copies (the same galley, or the same text within half its height): the last copy
     // (the coloured one) stands for all.
@@ -659,6 +679,19 @@ mod tests {
             );
         });
         assert!(v.is_empty(), "{v:?}");
+        let tick = |ctx: &egui::Context, y: f32| {
+            ctx.layer_painter(egui::LayerId::background()).rect_filled(
+                Rect::from_min_size(pos2(10.0, y), vec2(4.0, 30.0)),
+                0.0,
+                crate::theme::ACCENT,
+            );
+        };
+        assert!(frame(|ctx| tick(ctx, 10.0)).is_empty());
+        let v = frame(|ctx| {
+            tick(ctx, 10.0);
+            tick(ctx, 80.0);
+        });
+        assert_eq!(kinds(&v), [Kind::TwoFocus]);
     }
 
     #[test]

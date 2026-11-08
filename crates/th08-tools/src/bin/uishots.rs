@@ -378,6 +378,93 @@ fn reference(rel: &str) -> Option<image::RgbaImage> {
         .map(|i| i.to_rgba8())
 }
 
+// The title screen shot without what the game draws over title00.png on the right: the logo sprite (kanji column
+// and the diagonal "Imperishable Night"), filled in from around it and blurred.
+fn without_logo(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = img.dimensions();
+    let logo = |x: u32, y: u32| {
+        let band = 330.0 - (x as f32 - 420.0) * 0.5;
+        x >= 505 || (x >= 418 && (y as f32 - band).abs() < 34.0)
+    };
+    let mut out = img.clone();
+    let mut known: Vec<bool> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| !logo(x, y))
+        .collect();
+    let at = |x: u32, y: u32| (y * w + x) as usize;
+    let around = |x: u32, y: u32, r: i64| {
+        let (x, y) = (i64::from(x), i64::from(y));
+        (y - r..=y + r)
+            .flat_map(move |b| (x - r..=x + r).map(move |a| (a, b)))
+            .filter(|&(a, b)| a >= 0 && b >= 0 && a < i64::from(w) && b < i64::from(h))
+            .map(|(a, b)| (a as u32, b as u32))
+    };
+    let average = |src: &image::RgbaImage, cells: Vec<(u32, u32)>| {
+        let n = cells.len().max(1) as u32;
+        let sum = cells.iter().fold([0u32; 3], |s, &(a, b)| {
+            let p = src.get_pixel(a, b).0;
+            [
+                s[0] + u32::from(p[0]),
+                s[1] + u32::from(p[1]),
+                s[2] + u32::from(p[2]),
+            ]
+        });
+        image::Rgba([
+            (sum[0] / n) as u8,
+            (sum[1] / n) as u8,
+            (sum[2] / n) as u8,
+            255,
+        ])
+    };
+    let hole: Vec<(u32, u32)> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .filter(|&(x, y)| logo(x, y))
+        .collect();
+    while known.iter().any(|k| !k) {
+        let edge: Vec<(u32, u32, Vec<(u32, u32)>)> = hole
+            .iter()
+            .filter(|&&(x, y)| !known[at(x, y)])
+            .filter_map(|&(x, y)| {
+                let near: Vec<_> = around(x, y, 1).filter(|&(a, b)| known[at(a, b)]).collect();
+                (!near.is_empty()).then_some((x, y, near))
+            })
+            .collect();
+        for (x, y, near) in edge {
+            let c = average(&out, near);
+            out.put_pixel(x, y, c);
+            known[at(x, y)] = true;
+        }
+    }
+    for _ in 0..3 {
+        let src = out.clone();
+        for &(x, y) in &hole {
+            out.put_pixel(x, y, average(&src, around(x, y, 10).collect()));
+        }
+    }
+    // The fill's edge fades into the picture around it over 14 px.
+    let src = out.clone();
+    for y in 0..h {
+        for x in 0..w {
+            if logo(x, y) {
+                continue;
+            }
+            let near = around(x, y, 14)
+                .filter(|&(a, b)| logo(a, b))
+                .map(|(a, b)| {
+                    (i64::from(a) - i64::from(x)).pow(2) + (i64::from(b) - i64::from(y)).pow(2)
+                })
+                .min();
+            let Some(d) = near else { continue };
+            let t = ((d as f32).sqrt() / 14.0).min(1.0);
+            let soft = average(&src, around(x, y, 8).collect()).0;
+            let old = src.get_pixel(x, y).0;
+            let mix = |i: usize| (f32::from(soft[i]) * (1.0 - t) + f32::from(old[i]) * t) as u8;
+            out.put_pixel(x, y, image::Rgba([mix(0), mix(1), mix(2), 255]));
+        }
+    }
+    out
+}
+
 struct Frame {
     file: String,
     lang: &'static str,
@@ -415,13 +502,14 @@ fn main() -> anyhow::Result<()> {
     let stage = gfx
         .as_ref()
         .and_then(|_| reference("docs/briefs/uiref/05_th08_stage.png"));
-    // Without game data the launcher's title art (title00.png) is stood in for by the title screen reference,
-    // scaled to the game's 640×480.
+    // Without game data the launcher's title art (title00.png) is stood in for by the title screen reference at the
+    // game's 640×480, its logo sprite painted out.
     let title = th08::settings::test_game_dir()
         .is_none()
         .then(|| reference("docs/briefs/uiref/03_th08_title.png"))
         .flatten()
-        .map(|i| image::imageops::resize(&i, 640, 480, image::imageops::FilterType::Triangle));
+        .map(|i| image::imageops::resize(&i, 640, 480, image::imageops::FilterType::Triangle))
+        .map(|i| without_logo(&i));
     if gfx.is_some() && stage.is_none() {
         eprintln!("uishots: no stage reference image, the port menu renders over a gradient");
     }

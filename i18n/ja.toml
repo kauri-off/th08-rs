@@ -798,11 +798,11 @@ help = "--stage/--ending の難易度（e/n/h/l/x、0-4 も可）"
 
 [entry.rank.words]
 "" = "初期設定"
-easy = "イージー"
-normal = "ノーマル"
-hard = "ハード"
-lunatic = "ルナティック"
-extra = "エクストラ"
+easy = "Easy"
+normal = "Normal"
+hard = "Hard"
+lunatic = "Lunatic"
+extra = "Extra"
 
 [entry.power]
 label = "開始時のパワー"

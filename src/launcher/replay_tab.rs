@@ -388,7 +388,12 @@ impl Model {
             .as_ref()
             .map(|inf| p.layout_no_wrap(group_digits(inf.score), theme::sans(theme::BODY), name_c))
             .ok();
-        let sw = score.as_ref().map_or(0.0, |g| g.size().x + 16.0);
+        // A folded row ends in a chevron: tapping opens its actions.
+        let touch = self.touch_ui();
+        let folded = touch && ui.ctx().content_rect().height() < 420.0;
+        let open = !folded || self.replay_open(i);
+        let chev = if open { 0.0 } else { 28.0 };
+        let sw = score.as_ref().map_or(0.0, |g| g.size().x + 16.0) + chev;
         let tg = theme::wrap(
             &p,
             title,
@@ -396,7 +401,7 @@ impl Model {
             name_c,
             (w - sw).max(40.0),
         );
-        let mg = theme::wrap(&p, meta, theme::sans(theme::SMALL), meta_c, w);
+        let mg = theme::wrap(&p, meta, theme::sans(theme::SMALL), meta_c, w - chev);
         let detail = match &e.info {
             Ok(inf) => i18n::ui_fmt(
                 lang,
@@ -410,9 +415,6 @@ impl Model {
             Err(_) => String::new(),
         };
         // A phone-height window on touch opens the actions of the tapped replay only, so several replays fit.
-        let touch = self.touch_ui();
-        let folded = touch && ui.ctx().content_rect().height() < 420.0;
-        let open = !folded || self.replay_open(i);
         let dg = (open && !detail.is_empty()).then(|| {
             let mut job = egui::text::LayoutJob::simple(
                 detail,
@@ -480,11 +482,19 @@ impl Model {
             ui.allocate_exact_size(egui::vec2(ui.max_rect().width(), h), egui::Sense::hover());
         let row = egui::Rect::from_x_y_ranges(x..=x + w, r.y_range());
         let (_, go) = self.row_target(ui, row, t);
+        if !open {
+            theme::chevron(
+                &p,
+                egui::pos2(x + w, row.center().y),
+                theme::TITLE,
+                theme::HELP_HI,
+            );
+        }
         let mut y = row.min.y + 10.0;
         let th = tg.size().y;
         theme::outlined(&p, egui::pos2(x, y), tg, name_c, lit);
         if let Some(g) = score {
-            let gx = x + w - g.size().x;
+            let gx = x + w - chev - g.size().x;
             theme::shadowed(&p, egui::pos2(gx, y + (th - g.size().y) / 2.0), g, name_c);
         }
         y += th + 2.0;

@@ -110,8 +110,8 @@ fn load_art(dir: std::path::PathBuf) -> std::sync::mpsc::Receiver<Option<egui::C
 }
 
 impl Model {
-    // The title art in `rect`: the kanji column of title00.png, darkened, fading into the panel; without game data
-    // the title in large serif glyphs.
+    // The title art in `rect`: title00.png, darkened, fading into the panel. The game's logo is a separate sprite
+    // (title02.png), so the title is drawn here in serif glyphs, beside the shrine maiden.
     #[cfg_attr(
         any(target_arch = "wasm32", target_os = "android"),
         expect(unused_variables, reason = "no game folder to read the art from")
@@ -166,11 +166,23 @@ impl Model {
                 egui::Color32::from_rgba_premultiplied(3, 0, 1, 115),
             );
         }
-        // The title down the column in the menu face, as the title screen's logo.
-        let size = (rect.height() / 6.6).min(rect.width() * 0.42);
-        // Over the art the column stands where the title screen's logo does; alone it is centred.
+        let fade = Rect::from_x_y_ranges(
+            rect.max.x - 80.0_f32.min(rect.width() * 0.35)..=rect.max.x,
+            rect.y_range(),
+        );
+        let mut m = egui::Mesh::default();
+        let clear = egui::Color32::TRANSPARENT;
+        m.colored_vertex(fade.left_top(), clear);
+        m.colored_vertex(fade.right_top(), theme::PANEL);
+        m.colored_vertex(fade.right_bottom(), theme::PANEL);
+        m.colored_vertex(fade.left_bottom(), clear);
+        m.add_triangle(0, 1, 2);
+        m.add_triangle(0, 2, 3);
+        p.add(m);
+        // Over the art the column keeps to the right edge, clear of her face; alone it is centred.
+        let size = (rect.height() / 9.0).min(rect.width() * 0.42);
         let x = if art {
-            rect.max.x - size * 1.45
+            rect.max.x - size * 1.3
         } else {
             rect.center().x - size / 2.0
         };
@@ -189,16 +201,6 @@ impl Model {
                 true,
             );
         }
-        let fade = Rect::from_x_y_ranges(rect.max.x - 80.0..=rect.max.x, rect.y_range());
-        let mut m = egui::Mesh::default();
-        let clear = egui::Color32::TRANSPARENT;
-        m.colored_vertex(fade.left_top(), clear);
-        m.colored_vertex(fade.right_top(), theme::PANEL);
-        m.colored_vertex(fade.right_bottom(), theme::PANEL);
-        m.colored_vertex(fade.left_bottom(), clear);
-        m.add_triangle(0, 1, 2);
-        m.add_triangle(0, 2, 3);
-        p.add(m);
     }
 
     // Arrow keys / Z / Enter / Q / E / Esc while no text field has the keyboard.
@@ -440,13 +442,13 @@ impl Model {
         (self.nav.input.bar() && self.nav.focus == Some(t)) || self.nav.input.lit(t)
     }
 
-    // The title art column (on windows 760 pt and wider) and the lacquer panel: art width, panel, text x and right.
+    // The title art column and the lacquer panel: art width, panel, text x and right. Short or narrow windows keep
+    // a strip of it, the launcher's identity at every size down to 480 pt.
     fn frame(&mut self, ui: &Ui, p: &Painter, full: Rect, screen: Rect) -> (f32, Rect, f32, f32) {
-        // A phone-sized window (under 420 pt tall) keeps a narrow strip of it.
-        let art_w = if full.height() < 420.0 && full.width() >= 600.0 {
-            (full.width() * 0.12).clamp(80.0, 130.0).round()
-        } else if full.width() >= 760.0 {
+        let art_w = if full.width() >= 760.0 && full.height() >= 420.0 {
             (full.width() * 0.344).round()
+        } else if full.width() >= 480.0 {
+            (full.width() * 0.12).clamp(80.0, 130.0).round()
         } else {
             0.0
         };
@@ -456,8 +458,8 @@ impl Model {
         }
         let panel = Rect::from_x_y_ranges(full.min.x + art_w..=screen.max.x, screen.y_range());
         theme::lacquer(p, panel, Edge::Left);
-        let x = panel.min.x + if art_w > 0.0 { 42.0 } else { 24.0 };
-        let right = full.max.x - if art_w > 0.0 { 38.0 } else { 24.0 };
+        let x = panel.min.x + if art_w >= 140.0 { 42.0 } else { 24.0 };
+        let right = full.max.x - if art_w >= 140.0 { 38.0 } else { 24.0 };
         (art_w, panel, x, right)
     }
 
@@ -913,21 +915,18 @@ impl Model {
         }
     }
 
-    // Play, the primary action: white with the lavender tick at rest, the focus band under keys / pad, and on touch
-    // the band always. True when clicked.
+    // Play, the primary action: white and large at rest, the focus marker only while it has the focus; on touch,
+    // where no row has a marker, the plain band. True when clicked.
     fn play_row(&mut self, ui: &Ui, p: &Painter, r: Rect, band: Rect, lang: Lang) -> bool {
         let resp = self.target(ui, p, band, Target::Play);
         let ok = self.can_play();
         let bar = self.nav.input.bar() && self.nav.focus == Some(Target::Play);
-        if ok && !bar {
-            if self.touch_ui() {
-                theme::focus(p, band, 4.0, resp.is_pointer_button_down_on());
-            } else {
-                theme::tick(p, band, 4.0);
-            }
+        let resting_band = ok && self.touch_ui() && !self.nav.input.bar();
+        if resting_band && !resp.is_pointer_button_down_on() {
+            p.rect_filled(band, 0.0, theme::BAND);
         }
         let color = if ok { theme::TEXT_HI } else { theme::DISABLED };
-        let glow = ok && (self.shows(Target::Play) || self.touch_ui());
+        let glow = ok && (bar || self.shows(Target::Play) || resting_band);
         text_in(
             p,
             r,
@@ -1536,8 +1535,6 @@ impl Model {
                 };
                 let color = if self.nav.reset_ask {
                     theme::QUESTION
-                } else if focused {
-                    theme::TEXT_HI
                 } else {
                     theme::DANGER
                 };
