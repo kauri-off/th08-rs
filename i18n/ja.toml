@@ -721,6 +721,11 @@ help = "会話テキスト用の日本語フォント（ネイティブ版）"
 [entry.font.words]
 "" = "初期設定"
 
+[entry.slint_ui]
+label = "Slint の設定画面"
+summary = "移植版メニューの設定を新しい UI で表示します"
+help = "移植版メニューの設定画面を Slint で描画します（開発者向け）"
+
 [entry.pack]
 label = "表示パック"
 summary = "翻訳パックのフォルダまたは zip"

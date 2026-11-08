@@ -6,5 +6,5 @@ pub mod input;
 pub mod settings_page;
 pub mod text;
 
-#[cfg(feature = "ui-check")]
+#[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
 pub mod check;
