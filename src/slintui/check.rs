@@ -1,13 +1,14 @@
 //! Layout check and scripted input for the Slint pages, from element queries and the mock clock.
+use super::card::Card;
 use super::settings_page::Page;
 use super::text::plain;
 use super::{TextProbe, host};
 use crate::i18n::Lang;
 use crate::launcher::Model;
-use crate::platform::portmenu::{self, Nav, Shot};
+use crate::platform::portmenu::{self, CardRig, Do, Nav, Shot};
 use crate::settings::Settings;
 use crate::uicheck::{Issue, Kind};
-use i_slint_backend_testing::{ElementHandle, ElementQuery};
+use i_slint_backend_testing::{ElementHandle, ElementQuery, ElementRoot};
 use slint::ComponentHandle;
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
@@ -72,6 +73,430 @@ struct TextEl {
     r: R,
 }
 
+type Widths = HashMap<(String, u32, bool), f32>;
+
+fn issue(kind: Kind, what: String, r: R) -> Issue {
+    Issue {
+        kind,
+        what,
+        rect: r.egui(),
+    }
+}
+
+// Each item once: a query returns an item per component it inherits through.
+fn elements(root: &impl ElementRoot) -> Vec<ElementHandle> {
+    let mut seen = BTreeSet::new();
+    ElementQuery::from_root(root)
+        .match_descendants()
+        .find_all()
+        .into_iter()
+        .filter(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            let key = (
+                e.accessible_id().unwrap_or_default().to_string(),
+                e.accessible_label().unwrap_or_default().to_string(),
+                [p.x, p.y, s.width, s.height].map(f32::to_bits),
+            );
+            seen.insert(key)
+        })
+        .collect()
+}
+
+fn ids(root: &impl ElementRoot, prefix: &str) -> Vec<(String, R)> {
+    elements(root)
+        .into_iter()
+        .filter_map(|e| {
+            let id = e.accessible_id()?;
+            id.starts_with(prefix).then(|| (id.to_string(), R::of(&e)))
+        })
+        .collect()
+}
+
+fn texts(root: &impl ElementRoot) -> Vec<TextEl> {
+    elements(root)
+        .into_iter()
+        .filter_map(|e| {
+            let id = e.accessible_id()?;
+            let p: Vec<&str> = id.split('|').collect();
+            if p.len() != 6 || p[0] != "t" {
+                return None;
+            }
+            let text = e.accessible_label()?.to_string();
+            if text.is_empty() {
+                return None;
+            }
+            Some(TextEl {
+                text,
+                wrap: p[1] == "w",
+                size: p[2].parse().ok()?,
+                serif: p[3] == "s",
+                natural: p[4].parse().ok()?,
+                height: p[5].parse().ok()?,
+                r: R::of(&e),
+            })
+        })
+        .collect()
+}
+
+fn width_of(probe: &TextProbe, widths: &mut Widths, text: &str, size: f32, serif: bool) -> f32 {
+    *widths
+        .entry((text.to_string(), size.to_bits(), serif))
+        .or_insert_with(|| {
+            probe.set_text(text.into());
+            probe.set_size(size);
+            probe.set_serif(serif);
+            probe.get_natural()
+        })
+}
+
+// What the check needs to know about the frame.
+struct Frame<'a> {
+    scale: f32,
+    density: f32,
+    touch: bool,
+    keys: bool,
+    list: Option<R>,
+    rows: &'a [R],
+}
+
+// Text fit and overlap, stray ids, focus marks and 48 dp targets of any Slint page.
+fn common_issues(
+    root: &(impl ElementRoot + ComponentHandle),
+    probe: &mut TextProbe,
+    widths: &mut Widths,
+    f: &Frame<'_>,
+) -> Vec<Issue> {
+    let mut out = Vec::new();
+    let size = root.window().size();
+    let screen = R {
+        x: 0.0,
+        y: 0.0,
+        w: size.width as f32 / f.scale,
+        h: size.height as f32 / f.scale,
+    };
+    let list = f.list;
+    let all = texts(root);
+    let mut shown: Vec<(usize, R)> = Vec::new();
+    for (i, t) in all.iter().enumerate() {
+        // Row text scrolled out of the list is not drawn; membership comes from the row, not from where it lies.
+        let (cx, cy) = (t.r.x + t.r.w / 2.0, t.r.y + t.r.h / 2.0);
+        let scrolled = f
+            .rows
+            .iter()
+            .any(|r| cx >= r.x && cx <= r.right() && cy >= r.y && cy <= r.bottom());
+        let view = match (scrolled, list) {
+            (true, Some(l)) => t.r.cut(l),
+            _ => t.r,
+        };
+        if view.h < 1.0 || view.w < 1.0 {
+            continue;
+        }
+        shown.push((i, view));
+        let name = plain(&t.text);
+        if !scrolled && !t.r.inside(screen) {
+            out.push(issue(
+                Kind::Clipped,
+                format!("{name:?} leaves the window"),
+                t.r,
+            ));
+        }
+        if t.r.right() > screen.right() + 0.5 {
+            out.push(issue(
+                Kind::Clipped,
+                format!("{name:?} past the right edge"),
+                t.r,
+            ));
+        }
+        if !t.wrap && t.natural > t.r.w + 1.0 {
+            out.push(issue(
+                Kind::Clipped,
+                format!("{name:?} needs {} in {}", t.natural, t.r.w),
+                t.r,
+            ));
+        }
+        if t.wrap && t.height > t.r.h + 1.0 {
+            out.push(issue(
+                Kind::Clipped,
+                format!("{name:?} needs height {} in {}", t.height, t.r.h),
+                t.r,
+            ));
+        }
+        if crate::uicheck::raw_id(&name).is_some() {
+            out.push(issue(Kind::RawId, format!("{name:?}"), t.r));
+        }
+    }
+    for (n, &(i, a)) in shown.iter().enumerate() {
+        for &(j, b) in &shown[n + 1..] {
+            let c = a.cut(b);
+            if c.w > 2.0 && c.h > 2.0 {
+                out.push(issue(
+                    Kind::Overlap,
+                    format!("{:?} / {:?}", plain(&all[i].text), plain(&all[j].text)),
+                    c,
+                ));
+            }
+        }
+    }
+    let focus = ids(root, "focus");
+    if focus.len() > 1 {
+        out.push(issue(
+            Kind::TwoFocus,
+            format!("{} focus marks", focus.len()),
+            screen,
+        ));
+    }
+    if f.keys && focus.is_empty() {
+        out.push(issue(
+            Kind::NoFocus,
+            "no focus mark under keys".into(),
+            screen,
+        ));
+    }
+    if !f.keys && !focus.is_empty() {
+        out.push(issue(
+            Kind::TwoFocus,
+            "focus mark without keys".into(),
+            screen,
+        ));
+    }
+    if f.touch {
+        let dp = f.scale / f.density;
+        for (id, r) in ids(root, "target|") {
+            let n = id.trim_start_matches("target|");
+            if n.starts_with("page-") {
+                continue;
+            }
+            let wide = n.starts_with("step") || n.starts_with("choice") || n.starts_with("tab");
+            if r.h * dp < 47.5 || (wide && r.w * dp < 47.5) {
+                out.push(issue(
+                    Kind::FewRows,
+                    format!("target {n:?} {:.0}x{:.0} dp", r.w * dp, r.h * dp),
+                    r,
+                ));
+            }
+        }
+    }
+    for t in &all {
+        if !t.wrap {
+            continue;
+        }
+        let name = plain(&t.text);
+        for piece in crate::theme::unbreakable(&name) {
+            if width_of(probe, widths, piece, t.size, t.serif) > t.r.w + 1.0 {
+                out.push(issue(
+                    Kind::MidWord,
+                    format!("{piece:?} wider than {} in {name:?}", t.r.w),
+                    t.r,
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn touch_event(scale: f32, phase: TouchPhase, x: f32, y: f32) -> WindowEvent {
+    WindowEvent::Touch(Touch {
+        device_id: DeviceId::dummy(),
+        phase,
+        location: PhysicalPosition::new(f64::from(x * scale), f64::from(y * scale)),
+        force: None,
+        id: 1,
+    })
+}
+
+fn cursor_event(scale: f32, x: f32, y: f32) -> WindowEvent {
+    WindowEvent::CursorMoved {
+        device_id: DeviceId::dummy(),
+        position: PhysicalPosition::new(f64::from(x * scale), f64::from(y * scale)),
+    }
+}
+
+// `frame` with an overlay painted over it.
+fn render(
+    gfx: &Gfx,
+    frame: &image::RgbaImage,
+    paint: impl FnOnce(&OverlayTarget<'_>, &mut wgpu::CommandEncoder),
+) -> image::RgbaImage {
+    let (w, h) = frame.dimensions();
+    let tex = gfx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("slint shot"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: gfx.surface_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut px = frame.clone().into_raw();
+    px.as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .for_each(|p| p.swap(0, 2));
+    gfx.queue.write_texture(
+        tex.as_image_copy(),
+        &px,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w * 4),
+            rows_per_image: Some(h),
+        },
+        tex.size(),
+    );
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let t = OverlayTarget {
+        device: &gfx.device,
+        queue: &gfx.queue,
+        view: &view,
+        format: gfx.surface_format(),
+        size: (w, h),
+        frame: gfx.frame_rect(w, h),
+    };
+    let mut enc = gfx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    paint(&t, &mut enc);
+    gfx.read_texture(enc, &tex)
+}
+
+// A live Slint pause card on a headless device, with the menu's own state, driven by a mock clock.
+pub struct CardHarness<'a> {
+    pub rig: CardRig,
+    gfx: &'a Gfx,
+    probe: TextProbe,
+    widths: Widths,
+    touch: bool,
+}
+
+impl<'a> CardHarness<'a> {
+    pub fn new(
+        gfx: &'a Gfx,
+        s: &Settings,
+        size: (u32, u32),
+        safe: SafeArea,
+        shot: &Shot,
+    ) -> anyhow::Result<Self> {
+        host::advance_mock_time(Duration::from_secs(1));
+        let gpu = host::Gpu {
+            instance: gfx.instance().clone(),
+            device: gfx.device.clone(),
+            queue: gfx.queue.clone(),
+        };
+        let card = Card::new(gpu, 0)?;
+        let rig = CardRig::new(card, s, size, safe, shot);
+        let mut h = Self {
+            rig,
+            gfx,
+            probe: TextProbe::new()?,
+            widths: HashMap::new(),
+            touch: shot.touch,
+        };
+        h.tick(16);
+        h.tick(16);
+        for &n in &shot.navs {
+            h.nav(n);
+        }
+        Ok(h)
+    }
+
+    pub fn tick(&mut self, ms: u64) {
+        host::advance_mock_time(Duration::from_millis(ms));
+        self.rig.card.tick();
+        self.rig.pass(Vec::new());
+    }
+
+    pub fn nav(&mut self, n: Nav) {
+        self.rig.pass(vec![n]);
+        self.tick(16);
+    }
+
+    pub fn targets(&self, prefix: &str) -> Vec<(String, R)> {
+        ids(&self.rig.card.ui, prefix)
+    }
+
+    // The target whose name starts with `prefix`.
+    pub fn target(&self, prefix: &str) -> R {
+        self.targets(&format!("target|{prefix}"))
+            .first()
+            .unwrap_or_else(|| panic!("no target {prefix}"))
+            .1
+    }
+
+    pub fn tap(&mut self, r: R) {
+        let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        for (p, ms) in [(TouchPhase::Started, 40), (TouchPhase::Ended, 16)] {
+            let ev = touch_event(self.rig.ppp(), p, x, y);
+            self.rig.pointer(&ev);
+            self.tick(ms);
+        }
+        self.tick(200);
+    }
+
+    pub fn click(&mut self, r: R) {
+        use winit::event::{ElementState, MouseButton};
+        let ev = cursor_event(self.rig.ppp(), r.x + r.w / 2.0, r.y + r.h / 2.0);
+        self.rig.pointer(&ev);
+        self.tick(16);
+        for state in [ElementState::Pressed, ElementState::Released] {
+            self.rig.pointer(&WindowEvent::MouseInput {
+                device_id: DeviceId::dummy(),
+                state,
+                button: MouseButton::Left,
+            });
+            self.tick(16);
+        }
+        self.tick(200);
+    }
+
+    // Takes what the card asked for since the last call.
+    pub fn take_done(&mut self) -> Vec<Do> {
+        std::mem::take(&mut self.rig.done)
+    }
+
+    pub fn issues(&mut self) -> Vec<Issue> {
+        let keys = self.rig.keys_focus();
+        let mut out = common_issues(
+            &self.rig.card.ui,
+            &mut self.probe,
+            &mut self.widths,
+            &Frame {
+                scale: self.rig.ppp(),
+                density: self.rig.density(),
+                touch: self.touch,
+                keys,
+                list: None,
+                rows: &[],
+            },
+        );
+        if self.rig.is_column() {
+            // 4:3: the card stays on the playfield and ends above the player, clear of the HUD.
+            let (fx, fy, gs) = self.rig.frame();
+            let (right, bottom) = (fx + 416.0 * gs, fy + 360.0 * gs);
+            for t in texts(&self.rig.card.ui) {
+                if t.r.right() > right + 1.0 || t.r.bottom() > bottom + 1.0 {
+                    out.push(issue(
+                        Kind::Clipped,
+                        format!("{:?} reaches the player or the HUD", plain(&t.text)),
+                        t.r,
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    pub fn image(&mut self, frame: &image::RgbaImage) -> image::RgbaImage {
+        let card = &mut self.rig.card;
+        render(self.gfx, frame, |t, enc| card.paint(t, enc))
+    }
+}
+
 // A live Slint settings page on a headless device, driven by a mock clock.
 pub struct Harness<'a> {
     pub page: Page,
@@ -79,7 +504,7 @@ pub struct Harness<'a> {
     gfx: &'a Gfx,
     lang: Lang,
     probe: TextProbe,
-    widths: HashMap<(String, u32, bool), f32>,
+    widths: Widths,
     pub scale: f32,
     density: f32,
     touch: bool,
@@ -138,18 +563,8 @@ impl<'a> Harness<'a> {
         self.page.on_event(ev);
     }
 
-    fn device() -> DeviceId {
-        DeviceId::dummy()
-    }
-
     fn touch_ev(&self, phase: TouchPhase, x: f32, y: f32) -> WindowEvent {
-        WindowEvent::Touch(Touch {
-            device_id: Self::device(),
-            phase,
-            location: PhysicalPosition::new(f64::from(x * self.scale), f64::from(y * self.scale)),
-            force: None,
-            id: 1,
-        })
+        touch_event(self.scale, phase, x, y)
     }
 
     // A finger from (x, y0) to (x, y1) in points, held still before the release, so nothing coasts.
@@ -201,17 +616,14 @@ impl<'a> Harness<'a> {
     }
 
     fn cursor_at(&mut self, x: f32, y: f32) {
-        self.event(&WindowEvent::CursorMoved {
-            device_id: Self::device(),
-            position: PhysicalPosition::new(f64::from(x * self.scale), f64::from(y * self.scale)),
-        });
+        self.event(&cursor_event(self.scale, x, y));
         self.tick(16);
     }
 
     pub fn wheel(&mut self, x: f32, y: f32, lines: f32) {
         self.cursor_at(x, y);
         self.event(&WindowEvent::MouseWheel {
-            device_id: Self::device(),
+            device_id: DeviceId::dummy(),
             delta: MouseScrollDelta::LineDelta(0.0, lines),
             phase: TouchPhase::Moved,
         });
@@ -219,33 +631,8 @@ impl<'a> Harness<'a> {
         self.tick(400);
     }
 
-    // Each item once: a query returns an item per component it inherits through.
-    fn elements(&self) -> Vec<ElementHandle> {
-        let mut seen = BTreeSet::new();
-        ElementQuery::from_root(&self.page.ui)
-            .match_descendants()
-            .find_all()
-            .into_iter()
-            .filter(|e| {
-                let (p, s) = (e.absolute_position(), e.size());
-                let key = (
-                    e.accessible_id().unwrap_or_default().to_string(),
-                    e.accessible_label().unwrap_or_default().to_string(),
-                    [p.x, p.y, s.width, s.height].map(f32::to_bits),
-                );
-                seen.insert(key)
-            })
-            .collect()
-    }
-
     fn ids(&self, prefix: &str) -> Vec<(String, R)> {
-        self.elements()
-            .into_iter()
-            .filter_map(|e| {
-                let id = e.accessible_id()?;
-                id.starts_with(prefix).then(|| (id.to_string(), R::of(&e)))
-            })
-            .collect()
+        ids(&self.page.ui, prefix)
     }
 
     pub fn list_rect(&self) -> R {
@@ -290,178 +677,48 @@ impl<'a> Harness<'a> {
         self.ids(prefix)
     }
 
-    fn texts(&self) -> Vec<TextEl> {
-        self.elements()
-            .into_iter()
-            .filter_map(|e| {
-                let id = e.accessible_id()?;
-                let p: Vec<&str> = id.split('|').collect();
-                if p.len() != 6 || p[0] != "t" {
-                    return None;
-                }
-                let text = e.accessible_label()?.to_string();
-                if text.is_empty() {
-                    return None;
-                }
-                Some(TextEl {
-                    text,
-                    wrap: p[1] == "w",
-                    size: p[2].parse().ok()?,
-                    serif: p[3] == "s",
-                    natural: p[4].parse().ok()?,
-                    height: p[5].parse().ok()?,
-                    r: R::of(&e),
-                })
-            })
-            .collect()
-    }
-
-    fn width_of(&mut self, text: &str, size: f32, serif: bool) -> f32 {
-        let key = (text.to_string(), size.to_bits(), serif);
-        if let Some(w) = self.widths.get(&key) {
-            return *w;
-        }
-        self.probe.set_text(text.into());
-        self.probe.set_size(size);
-        self.probe.set_serif(serif);
-        let w = self.probe.get_natural();
-        self.widths.insert(key, w);
-        w
-    }
-
     // The layout check of the frame as it stands.
     pub fn issues(&mut self) -> Vec<Issue> {
-        let mut out = Vec::new();
         let list = self.list_rect();
-        let place_w = self.page.ui.window().size().width as f32 / self.scale;
-        let place_h = self.page.ui.window().size().height as f32 / self.scale;
-        let screen = R {
-            x: 0.0,
-            y: 0.0,
-            w: place_w,
-            h: place_h,
-        };
-        let mut issue = |kind, what: String, r: R| {
-            out.push(Issue {
-                kind,
-                what,
-                rect: r.egui(),
-            });
-        };
-        let texts = self.texts();
         let rows: Vec<R> = self.ids("target|row|").into_iter().map(|x| x.1).collect();
-        let mut shown: Vec<(usize, R)> = Vec::new();
-        for (i, t) in texts.iter().enumerate() {
-            // Row text scrolled out of the list is not drawn; membership comes from the row, not from where it lies.
-            let (cx, cy) = (t.r.x + t.r.w / 2.0, t.r.y + t.r.h / 2.0);
-            let scrolled = rows
-                .iter()
-                .any(|r| cx >= r.x && cx <= r.right() && cy >= r.y && cy <= r.bottom());
-            let view = if scrolled { t.r.cut(list) } else { t.r };
-            if view.h < 1.0 || view.w < 1.0 {
-                continue;
-            }
-            shown.push((i, view));
-            let name = plain(&t.text);
-            if !scrolled && !t.r.inside(screen) {
-                issue(Kind::Clipped, format!("{name:?} leaves the window"), t.r);
-            }
-            if t.r.right() > screen.right() + 0.5 {
-                issue(Kind::Clipped, format!("{name:?} past the right edge"), t.r);
-            }
-            if !t.wrap && t.natural > t.r.w + 1.0 {
-                issue(
-                    Kind::Clipped,
-                    format!("{name:?} needs {} in {}", t.natural, t.r.w),
-                    t.r,
-                );
-            }
-            if t.wrap && t.height > t.r.h + 1.0 {
-                issue(
-                    Kind::Clipped,
-                    format!("{name:?} needs height {} in {}", t.height, t.r.h),
-                    t.r,
-                );
-            }
-            if crate::uicheck::raw_id(&name).is_some() {
-                issue(Kind::RawId, format!("{name:?}"), t.r);
-            }
-        }
-        for (n, &(i, a)) in shown.iter().enumerate() {
-            for &(j, b) in &shown[n + 1..] {
-                let c = a.cut(b);
-                if c.w > 2.0 && c.h > 2.0 {
-                    issue(
-                        Kind::Overlap,
-                        format!("{:?} / {:?}", plain(&texts[i].text), plain(&texts[j].text)),
-                        c,
-                    );
-                }
-            }
-        }
+        let keys = self.page_bar();
+        let mut out = common_issues(
+            &self.page.ui,
+            &mut self.probe,
+            &mut self.widths,
+            &Frame {
+                scale: self.scale,
+                density: self.density,
+                touch: self.touch,
+                keys,
+                list: Some(list),
+                rows: &rows,
+            },
+        );
         for (n, r) in self.ids("target|row|") {
             if r.w < list.w * 0.9 {
-                issue(
+                out.push(issue(
                     Kind::FewRows,
                     format!("{n}: row {:.0} wide in a list of {:.0}", r.w, list.w),
                     r,
-                );
+                ));
+            }
+            let shown = r.cut(list).h / r.h.max(1.0);
+            let faded = self.ids("cut").iter().any(|(_, c)| c.hits(r));
+            if shown > 0.01 && shown < 0.7 && !faded {
+                out.push(issue(
+                    Kind::Clipped,
+                    format!("{n}: half a row shows ({shown:.2})"),
+                    r,
+                ));
             }
         }
         if list.w < 200.0 || list.h < 100.0 {
-            issue(
+            out.push(issue(
                 Kind::FewRows,
                 format!("list is {:.0}x{:.0}", list.w, list.h),
                 list,
-            );
-        }
-        let focus = self.ids("focus");
-        let keys = self.page_bar();
-        if focus.len() > 1 {
-            issue(
-                Kind::TwoFocus,
-                format!("{} focus marks", focus.len()),
-                screen,
-            );
-        }
-        if keys && focus.is_empty() {
-            issue(Kind::NoFocus, "no focus mark under keys".into(), screen);
-        }
-        if !keys && !focus.is_empty() {
-            issue(Kind::TwoFocus, "focus mark without keys".into(), screen);
-        }
-        if self.touch {
-            let dp = self.scale / self.density;
-            for (id, r) in self.ids("target|") {
-                let n = id.trim_start_matches("target|");
-                if n.starts_with("page-") || !(r.hits(list) && !r.inside(list)) {
-                    continue;
-                }
-                let short =
-                    n.starts_with("step") || n.starts_with("choice") || n.starts_with("tab");
-                if r.h * dp < 47.5 || (short && r.w * dp < 47.5) {
-                    issue(
-                        Kind::FewRows,
-                        format!("target {n:?} {:.0}x{:.0} dp", r.w * dp, r.h * dp),
-                        r,
-                    );
-                }
-            }
-        }
-        for t in &texts {
-            if !t.wrap {
-                continue;
-            }
-            let name = plain(&t.text);
-            for piece in crate::theme::unbreakable(&name) {
-                if self.width_of(piece, t.size, t.serif) > t.r.w + 1.0 {
-                    out.push(Issue {
-                        kind: Kind::MidWord,
-                        what: format!("{piece:?} wider than {} in {name:?}", t.r.w),
-                        rect: t.r.egui(),
-                    });
-                }
-            }
+            ));
         }
         out
     }
@@ -509,53 +766,8 @@ impl<'a> Harness<'a> {
     }
 
     pub fn image(&mut self, frame: &image::RgbaImage) -> image::RgbaImage {
-        let (w, h) = frame.dimensions();
-        let g = self.gfx;
-        let tex = g.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("slint shot"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: g.surface_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let mut px = frame.clone().into_raw();
-        px.as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .for_each(|p| p.swap(0, 2));
-        g.queue.write_texture(
-            tex.as_image_copy(),
-            &px,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            tex.size(),
-        );
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let t = OverlayTarget {
-            device: &g.device,
-            queue: &g.queue,
-            view: &view,
-            format: g.surface_format(),
-            size: (w, h),
-            frame: g.frame_rect(w, h),
-        };
-        let mut enc = g
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.page.paint(&t, &mut enc);
-        g.read_texture(enc, &tex)
+        let page = &mut self.page;
+        render(self.gfx, frame, |t, enc| page.paint(t, enc))
     }
 }
 

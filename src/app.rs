@@ -899,12 +899,8 @@ impl App {
             }
             Action::Resume => self.resume_game(el),
             Action::QuitToTitle | Action::Retry => {
-                use crate::platform::quittitle::{Exit, Quit};
-                let exit = if matches!(a, Action::Retry) {
-                    Exit::Retry
-                } else {
-                    Exit::Title
-                };
+                use crate::platform::quittitle::Quit;
+                let exit = menu_exit(a);
                 if let Shell::PortMenu(r, _) = &mut self.shell {
                     log::info!("port menu: {exit:?}");
                     r.quit = Some(Quit::new(exit));
@@ -1755,6 +1751,16 @@ fn logic_frames(r: &mut Running, n: u32, frozen: bool, touch: bool) -> Option<Fr
     None
 }
 
+// The game's own pause path a port menu action takes.
+fn menu_exit(a: &Action) -> crate::platform::quittitle::Exit {
+    use crate::platform::quittitle::Exit;
+    if matches!(a, Action::Retry) {
+        Exit::Retry
+    } else {
+        Exit::Title
+    }
+}
+
 // Port menu "Quit to title": the next Esc / Q pulse into the touch input, before a logic frame.
 fn quit_step(r: &mut Running) {
     let Some(q) = &mut r.quit else { return };
@@ -2579,6 +2585,80 @@ mod tests {
         assert_eq!((r.ctx.w.game.paused, r.ctx.w.game.stage), (0, 0));
         eprintln!("stage started again after {seen} frames");
         let _ = std::fs::remove_dir_all(&saves);
+    }
+
+    // With `slint_ui` on: the Slint card's own confirm, tapped through, starts the game's pause path.
+    #[cfg(feature = "ui-check")]
+    #[test]
+    fn slint_card_retry_and_quit() {
+        use crate::platform::portmenu::{Do, Shot};
+        use crate::slintui::check::CardHarness;
+        use th08_core::types::SceneId;
+        use th08_render::gfx::{Gfx, SafeArea};
+        let Some(dir) = th08_testkit::need(crate::settings::test_game_dir(), th08_testkit::NO_DATA)
+        else {
+            return;
+        };
+        let Ok(gfx) = pollster::block_on(Gfx::headless()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        for (item, want, tag) in [
+            ("Retry", Do::Retry, "slint_retry"),
+            ("Quit", Do::Quit, "slint_quit"),
+        ] {
+            let (mut r, saves) = stage_one(dir.clone(), tag);
+            r.settings
+                .set_from(crate::settings::Origin::Cli, "slint_ui", "on")
+                .unwrap();
+            assert!(r.settings.slint_ui);
+            let step = |r: &mut Running| {
+                assert!(logic_frames(r, 1, false, false).is_none());
+                r.ctx.draw();
+                r.ctx.present();
+            };
+            for _ in 0..300 {
+                step(&mut r);
+            }
+            assert!(crate::platform::quittitle::available(&r.ctx.w));
+            let shot = Shot {
+                quit: true,
+                touch: true,
+                density: 2.75,
+                ..Shot::default()
+            };
+            let mut h =
+                CardHarness::new(&gfx, &r.settings, (2400, 1080), SafeArea::default(), &shot)
+                    .unwrap();
+            let at = h.rig.item_names().iter().position(|n| n == item).unwrap();
+            let row = h.target(&format!("item|{at}"));
+            h.tap(row);
+            assert!(h.rig.asking());
+            let yes = h.target("answer|act");
+            h.tap(yes);
+            let done = h.take_done();
+            assert_eq!(done, [want]);
+            let action = done[0].action().unwrap();
+            let started = r.ctx.w.game.stages_started;
+            r.quit = Some(crate::platform::quittitle::Quit::new(menu_exit(&action)));
+            let mut n = 0;
+            while r.quit.is_some() || n < 120 {
+                step(&mut r);
+                n += 1;
+                assert!(n < 1000, "{item} did not finish");
+            }
+            let g = &r.ctx.w.game;
+            if want == Do::Retry {
+                assert!(g.stages_started > started, "the stage never started again");
+                assert_eq!(g.scene, SceneId::Game);
+            } else {
+                assert!(
+                    !crate::platform::quittitle::available(&r.ctx.w),
+                    "still in the stage"
+                );
+            }
+            let _ = std::fs::remove_dir_all(&saves);
+        }
     }
 
     fn state(r: &Running) -> (u64, i8, [i64; 22]) {

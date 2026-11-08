@@ -271,7 +271,7 @@ enum Ask {
 
 // What a press or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Do {
+pub enum Do {
     Nothing,
     Resume,
     Quit,
@@ -280,6 +280,20 @@ enum Do {
     Speed((u32, u32)),
     Hitboxes(Hitboxes),
     EditLayout,
+}
+
+impl Do {
+    // What the app does for this request; Hitboxes and the layout editor stay in the menu.
+    pub fn action(self) -> Option<Action> {
+        match self {
+            Self::Resume => Some(Action::Resume),
+            Self::Quit => Some(Action::QuitToTitle),
+            Self::Retry => Some(Action::Retry),
+            Self::Screenshot => Some(Action::Screenshot),
+            Self::Speed(r) => Some(Action::Speed(r)),
+            Self::Nothing | Self::Hitboxes(_) | Self::EditLayout => None,
+        }
+    }
 }
 
 const VOLUME: &str = "volume_master";
@@ -613,6 +627,8 @@ pub struct PortMenu {
     // Developer setting `slint_ui`: the settings page on Slint; the page exists only while it is open.
     use_slint: bool,
     slint: Option<Box<crate::slintui::settings_page::Page>>,
+    // The pause card on Slint; kept while its settings page is open.
+    card: Option<Box<crate::slintui::card::Card>>,
 }
 
 impl PortMenu {
@@ -661,6 +677,7 @@ impl PortMenu {
             axes: [0; 2],
             use_slint: s.slint_ui,
             slint: None,
+            card: None,
         }
     }
 
@@ -742,6 +759,14 @@ impl PortMenu {
         if let Some(p) = &mut self.slint {
             return p.on_event(ev);
         }
+        if let Some(c) = &mut self.card {
+            let Some(kind) = c.on_event(ev) else {
+                return false;
+            };
+            let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
+            self.focus.input.pointer(touch);
+            return true;
+        }
         self.state.on_window_event(window, ev).repaint
     }
 
@@ -759,11 +784,15 @@ impl PortMenu {
             touch_ui,
             gfx.blit_options.integer,
         );
-        if self.use_slint && self.focus.page == Page::Settings && self.edit.is_none() {
-            self.redraw_slint(window, gfx, lay);
-            return None;
+        if self.use_slint && self.edit.is_none() {
+            if self.focus.page == Page::Settings {
+                self.redraw_slint(window, gfx, lay);
+                return None;
+            }
+            return self.redraw_card(window, gfx, lay);
         }
         self.slint = None;
+        self.card = None;
         let ppp = if self.edit.is_some() {
             lay.edit_ppp
         } else {
@@ -812,24 +841,7 @@ impl PortMenu {
             self.changed = true;
             window.request_redraw();
         }
-        let mut act = None;
-        for d in todo {
-            match d {
-                Do::Nothing => continue,
-                Do::Resume => act = Some(Action::Resume),
-                Do::Quit => act = Some(Action::QuitToTitle),
-                Do::Retry => act = Some(Action::Retry),
-                Do::Screenshot => act = Some(Action::Screenshot),
-                Do::Speed(r) => act = Some(Action::Speed(r)),
-                Do::Hitboxes(to) => super::hitbox::set_mode(gfx, to),
-                Do::EditLayout => {
-                    if let Some(t) = &self.touch {
-                        self.edit = Some(TouchEdit::new(t.clone()));
-                    }
-                }
-            }
-            window.request_redraw();
-        }
+        let act = self.run_dos(todo, window, gfx);
         match done {
             Some(EditOut::Save(l)) => {
                 if let Some(t) = &mut self.touch {
@@ -869,10 +881,91 @@ impl PortMenu {
         }
         let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, &t, enc));
         gfx.safe = s;
-        if !shown || (self.use_slint && self.focus.page == Page::Settings) {
+        if !shown {
             window.request_redraw();
         }
         act
+    }
+
+    // Carries out what the card asked for; the action for the app, if any.
+    fn run_dos(&mut self, todo: Vec<Do>, window: &Window, gfx: &mut Gfx) -> Option<Action> {
+        let mut act = None;
+        for d in todo {
+            if d == Do::Nothing {
+                continue;
+            }
+            act = d.action().or(act);
+            match d {
+                Do::Hitboxes(to) => super::hitbox::set_mode(gfx, to),
+                Do::EditLayout => {
+                    if let Some(t) = &self.touch {
+                        self.edit = Some(TouchEdit::new(t.clone()));
+                    }
+                }
+                _ => {}
+            }
+            window.request_redraw();
+        }
+        act
+    }
+
+    // One pass of the Slint pause card; the shared `Focus` decides everything, so keys and confirms match the egui card.
+    fn redraw_card(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
+        use crate::slintui::card::Card;
+        use crate::slintui::settings_page::Place;
+        self.slint = None;
+        let safe = gfx.safe;
+        let size = gfx.surface_size();
+        gfx.recover_if_lost();
+        if self
+            .card
+            .as_ref()
+            .is_none_or(|c| c.generation() != gfx.generation())
+        {
+            let gpu = crate::slintui::host::Gpu {
+                instance: gfx.instance().clone(),
+                device: gfx.device.clone(),
+                queue: gfx.queue.clone(),
+            };
+            match Card::new(gpu, gfx.generation()) {
+                Ok(c) => self.card = Some(Box::new(c)),
+                Err(e) => {
+                    log::error!("slintui: {e}; falling back to the egui card");
+                    self.use_slint = false;
+                    window.request_redraw();
+                    return None;
+                }
+            }
+        }
+        let hitboxes = super::hitbox::mode(gfx);
+        let m = MenuState {
+            pad: self.controller.as_deref(),
+            touch: self.touch.is_some(),
+            cheats: &self.cheats,
+            hitboxes,
+            status: self.status.as_deref(),
+            speed: self.speed,
+            no_saves: self.no_saves,
+            quit: self.quit_ok,
+            stage: self.stage.as_ref(),
+        };
+        let card = self.card.as_mut()?;
+        let before = live_values(&self.model);
+        let navs = std::mem::take(&mut self.navs);
+        let place = Place { lay, safe, size };
+        let todo = card_pass(card, &m, &mut self.model, &mut self.focus, place, navs);
+        if live_values(&self.model) != before {
+            self.changed = true;
+            window.request_redraw();
+        }
+        self.repaint_at = card.tick().map(|d| web_time::Instant::now() + d);
+        gfx.safe = lay.picture;
+        let shown = gfx.present_last(|t, enc| card.paint(&t, enc));
+        gfx.safe = safe;
+        if !shown {
+            window.request_redraw();
+        }
+        self.run_dos(todo, window, gfx)
     }
 
     // One pass of the Slint settings page; texture work only when the page changed.
@@ -935,6 +1028,194 @@ impl PortMenu {
             window.request_redraw();
         }
     }
+}
+
+// One item as the Slint card shows it.
+fn card_item(
+    it: Item,
+    m: &MenuState<'_>,
+    model: &launcher::Model,
+    words: &Words,
+) -> crate::slintui::card::CardItem {
+    use crate::slintui::card::CardItem;
+    let label = theme::latin_ellipsis(words.item(it)).into_owned();
+    let caption = words.latin(it).unwrap_or_default().to_string();
+    let base = CardItem {
+        kind: if it.danger() {
+            3
+        } else if matches!(it, Item::Settings | Item::TouchLayout) {
+            2
+        } else {
+            4
+        },
+        label,
+        caption,
+        sel: -1,
+        ..CardItem::default()
+    };
+    match item_ctl(it, m, model, words.lang) {
+        Ctl::Choices { words: w, sel } => CardItem {
+            kind: 0,
+            words: w,
+            sel: sel.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1),
+            ..base
+        },
+        Ctl::Slider { frac, text, unit } => CardItem {
+            kind: 1,
+            frac,
+            number: text,
+            unit,
+            ..base
+        },
+        _ => base,
+    }
+}
+
+// What the Slint card shows this pass.
+fn card_view(
+    m: &MenuState<'_>,
+    model: &launcher::Model,
+    focus: &Focus,
+    lay: &Layout,
+) -> crate::slintui::card::CardView {
+    let words = Words { lang: model.lang() };
+    let items = card_items(m, focus.split);
+    let item = |it: Item| card_item(it, m, model, &words);
+    let run = |it: &&Item| it.danger();
+    let plain = |it: &&Item| !it.danger() && !matches!(it, Item::Resume);
+    let split_quick = |it: &&Item| !it.danger() && !matches!(it, Item::Resume | Item::Settings);
+    let (mids, quick) = if focus.split {
+        (
+            Vec::new(),
+            items.iter().filter(split_quick).map(|&i| item(i)).collect(),
+        )
+    } else {
+        (
+            items.iter().filter(plain).map(|&i| item(i)).collect(),
+            Vec::new(),
+        )
+    };
+    let (question, note, act) = match focus.ask {
+        Some(Ask::Retry) => ("retry_ask", "retry_note", "retry_do"),
+        Some(Ask::Quit) => ("quit_ask", "quit_note", "quit_do"),
+        None => ("", "", ""),
+    };
+    let ui = |id: &str| if id.is_empty() { "" } else { words.ui(id) };
+    let which = if focus.ask.is_some() {
+        Hints::Confirm
+    } else {
+        Hints::Card
+    };
+    let focused = if focus.input.bar() && focus.ask.is_none() {
+        items
+            .iter()
+            .position(|&x| x == focus.item)
+            .and_then(|i| i32::try_from(i).ok())
+            .unwrap_or(-1)
+    } else {
+        -1
+    };
+    let dev = match m.pad {
+        Some(p) => p.to_string(),
+        None if lay.touch => words.ui("device_touch").into(),
+        None => words.ui("device_keyboard").into(),
+    };
+    crate::slintui::card::CardView {
+        resume: item(Item::Resume),
+        settings: item(Item::Settings),
+        mids,
+        dangers: items.iter().filter(run).map(|&i| item(i)).collect(),
+        quick,
+        focused,
+        ask: i32::from(focus.ask.is_some()),
+        yes: focus.yes,
+        heading: words.ui("paused_title").into(),
+        caption: words.heading_caption(m, lay.shape != Shape::Split),
+        quick_caption: words.ui("quick_settings").into(),
+        help: sentence(card_help(focus, &words)),
+        notes: words.notes(m),
+        device: dev,
+        version: version(words.lang),
+        device_line: words.device(m, lay),
+        question: ui(question).into(),
+        note: ui(note).into(),
+        keep: words.ui("keep_playing").into(),
+        act: ui(act).into(),
+        hints: hint_items(&words, m, lay, &which)
+            .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
+            .collect(),
+        ru: words.lang == Lang::Ru,
+        keys: focus.input.bar(),
+        mouse: focus.input.modality == theme::Modality::Pointer,
+    }
+}
+
+// Keys, then the card's taps, then what the card shows: one pass of the Slint card.
+fn card_pass(
+    card: &mut crate::slintui::card::Card,
+    m: &MenuState<'_>,
+    model: &mut launcher::Model,
+    focus: &mut Focus,
+    place: crate::slintui::settings_page::Place,
+    navs: Vec<Nav>,
+) -> Vec<Do> {
+    use crate::slintui::card::Cmd;
+    focus.split = place.lay.shape == Shape::Split;
+    let items = focus.items(m);
+    focus.clamp(&items);
+    let mut out: Vec<Do> = navs.into_iter().map(|n| focus.nav(n, m, model)).collect();
+    for c in card.take_cmds() {
+        let at = |i: usize| items.get(i).copied();
+        match c {
+            Cmd::Answer(y) if focus.ask.is_some() => {
+                focus.yes = y;
+                out.push(focus.confirm());
+            }
+            Cmd::Answer(_) => {}
+            _ if focus.ask.is_some() => {}
+            Cmd::Activate(i) => {
+                if let Some(it) = at(i) {
+                    out.push(focus.activate(it, m));
+                }
+            }
+            Cmd::Step(i, d) => {
+                if let Some(it) = at(i) {
+                    focus.item = it;
+                    out.push(item_input(it, CtlOut::Step(d), m, model));
+                }
+            }
+            Cmd::Pick(i, w) => {
+                if let Some(it) = at(i) {
+                    focus.item = it;
+                    out.push(item_input(it, CtlOut::Pick(w), m, model));
+                }
+            }
+            Cmd::Frac(i, f) => {
+                if let Some(it) = at(i) {
+                    focus.item = it;
+                    out.push(item_input(it, CtlOut::Frac(f), m, model));
+                }
+            }
+        }
+    }
+    match (
+        focus.ask.is_some(),
+        card.hovered_item(),
+        card.hovered_answer(),
+    ) {
+        (true, _, Some(y)) => focus.input.over(Hit::Yes(y)),
+        (false, Some(i), _) => {
+            if let Some(&it) = items.get(i) {
+                focus.input.over(Hit::Item(it));
+            }
+        }
+        _ => {}
+    }
+    focus.input.end();
+    let view = card_view(m, model, focus, &place.lay);
+    card.show(view, place);
+    out
 }
 
 // The Slint settings page's fixed strings.
@@ -1738,6 +2019,35 @@ fn item_row(
     }
 }
 
+// The help line of the card: the focused item under keys, the hovered one under the mouse.
+fn card_help(focus: &Focus, words: &Words) -> &'static str {
+    let yes = if focus.input.bar() {
+        Some(focus.yes)
+    } else {
+        match focus.input.hovered() {
+            Some(Hit::Yes(y)) => Some(y),
+            _ => None,
+        }
+    };
+    let item = if focus.input.bar() {
+        Some(focus.item)
+    } else {
+        match focus.input.hovered() {
+            Some(Hit::Item(it)) => Some(it),
+            _ => None,
+        }
+    };
+    match (focus.ask, yes, item) {
+        (Some(a), Some(true), _) => words.help(match a {
+            Ask::Retry => Item::Retry,
+            Ask::Quit => Item::Quit,
+        }),
+        (Some(_), Some(false), _) => words.ui("help_keep"),
+        (None, _, Some(it)) => words.help(it),
+        _ => "",
+    }
+}
+
 // The height `confirm_block` takes in a column `w` wide.
 fn confirm_height(p: &Painter, w: f32, ask: Ask, cm: &CardMetrics, words: &Words) -> f32 {
     let (q, note) = match ask {
@@ -1954,31 +2264,7 @@ fn list_card(
         hints_y - if short { 34.0 } else { 58.0 }
     };
     let notes_y = dev_y - 26.0 * notes.len() as f32;
-    let yes = if focus.input.bar() {
-        Some(focus.yes)
-    } else {
-        match focus.input.hovered() {
-            Some(Hit::Yes(y)) => Some(y),
-            _ => None,
-        }
-    };
-    let item = if focus.input.bar() {
-        Some(focus.item)
-    } else {
-        match focus.input.hovered() {
-            Some(Hit::Item(it)) => Some(it),
-            _ => None,
-        }
-    };
-    let help_text = match (focus.ask, yes, item) {
-        (Some(a), Some(true), _) => words.help(match a {
-            Ask::Retry => Item::Retry,
-            Ask::Quit => Item::Quit,
-        }),
-        (Some(_), Some(false), _) => words.ui("help_keep"),
-        (None, _, Some(it)) => words.help(it),
-        _ => "",
-    };
+    let help_text = card_help(focus, words);
     let help_g = theme::wrap(
         p,
         help_text.to_string(),
@@ -3803,6 +4089,163 @@ pub fn slint_parts(
         words,
         crate::slintui::settings_page::Place { lay, safe, size },
     )
+}
+
+// The Slint pause card with the menu's own state, for the layout check and the injected-input tests.
+#[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
+pub struct CardRig {
+    pub card: crate::slintui::card::Card,
+    model: launcher::Model,
+    focus: Focus,
+    place: crate::slintui::settings_page::Place,
+    shot: Shot,
+    hitboxes: Hitboxes,
+    // Everything the card asked for so far.
+    pub done: Vec<Do>,
+}
+
+#[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
+impl CardRig {
+    pub fn new(
+        card: crate::slintui::card::Card,
+        s: &Settings,
+        size: (u32, u32),
+        safe: SafeArea,
+        shot: &Shot,
+    ) -> Self {
+        let lay = layout(
+            safe,
+            size,
+            shot.density.max(1.0),
+            shot.touch,
+            s.blit.integer,
+        );
+        let modality = if shot.touch {
+            theme::Modality::Touch
+        } else {
+            theme::Modality::Keys
+        };
+        let mut focus = Focus {
+            input: theme::Input::new(modality),
+            split: lay.shape == Shape::Split,
+            ..Focus::default()
+        };
+        focus.ask = shot.ask.map(|a| match a {
+            ShotAsk::Retry => Ask::Retry,
+            ShotAsk::Quit => Ask::Quit,
+        });
+        Self {
+            card,
+            model: launcher::Model::port_menu(s, shot.touch),
+            focus,
+            place: crate::slintui::settings_page::Place { lay, safe, size },
+            shot: shot.clone(),
+            hitboxes: s.hitboxes,
+            done: Vec::new(),
+        }
+    }
+
+    pub fn ppp(&self) -> f32 {
+        self.place.lay.ppp
+    }
+
+    pub fn density(&self) -> f32 {
+        self.place.lay.density
+    }
+
+    // The frame in points: x, y, game px → points.
+    pub fn frame(&self) -> (f32, f32, f32) {
+        let u = self.place.lay.ppp;
+        let [x, y, w, _] = self.place.lay.frame;
+        (x / u, y / u, w / u / 640.0)
+    }
+
+    pub fn is_column(&self) -> bool {
+        self.place.lay.shape == Shape::Column
+    }
+
+    pub fn keys_focus(&self) -> bool {
+        self.focus.input.bar()
+    }
+
+    pub fn asking(&self) -> bool {
+        self.focus.ask.is_some()
+    }
+
+    // The safe answer holds the focus.
+    pub fn on_safe_answer(&self) -> bool {
+        !self.focus.yes
+    }
+
+    pub fn on_settings_page(&self) -> bool {
+        self.focus.page == Page::Settings
+    }
+
+    // The card's items in focus order.
+    pub fn item_names(&self) -> Vec<String> {
+        let m = MenuState {
+            pad: None,
+            touch: self.shot.touch,
+            cheats: &[],
+            hitboxes: self.hitboxes,
+            status: None,
+            speed: self.shot.speed,
+            no_saves: false,
+            quit: self.shot.quit,
+            stage: None,
+        };
+        self.focus
+            .items(&m)
+            .iter()
+            .map(|i| format!("{i:?}"))
+            .collect()
+    }
+
+    pub fn focused_name(&self) -> String {
+        format!("{:?}", self.focus.item)
+    }
+
+    pub fn volume(&self) -> Option<String> {
+        self.model.value_text(VOLUME)
+    }
+
+    // One pass with `navs`; the mode a Hitboxes request set shows on the next pass.
+    pub fn pass(&mut self, navs: Vec<Nav>) {
+        let m = MenuState {
+            pad: self.shot.pad.as_deref(),
+            touch: self.shot.touch,
+            cheats: &[],
+            hitboxes: self.hitboxes,
+            status: self.shot.status.as_deref(),
+            speed: self.shot.speed,
+            no_saves: self.shot.no_saves,
+            quit: self.shot.quit,
+            stage: self.shot.stage.as_ref(),
+        };
+        let out = card_pass(
+            &mut self.card,
+            &m,
+            &mut self.model,
+            &mut self.focus,
+            self.place,
+            navs,
+        );
+        for d in out {
+            if let Do::Hitboxes(h) = d {
+                self.hitboxes = h;
+            }
+            if d != Do::Nothing {
+                self.done.push(d);
+            }
+        }
+    }
+
+    pub fn pointer(&mut self, ev: &WindowEvent) {
+        if let Some(k) = self.card.on_event(ev) {
+            let touch = k == crate::slintui::input::Pointing::Touch || self.shot.touch;
+            self.focus.input.pointer(touch);
+        }
+    }
 }
 
 // The number of settings tabs the menu shows for `s`.

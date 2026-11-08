@@ -311,7 +311,7 @@ fn slint_pages(fx: &Fixture, phone: bool) -> Vec<Page> {
     menu_pages(fx, phone)
         .into_iter()
         .filter_map(|p| match p {
-            Page::Menu(n, shot) if shot.settings.is_some() => Some(Page::Slint(n, shot)),
+            Page::Menu(n, shot) if n != "pointer_left" => Some(Page::Slint(n, shot)),
             _ => None,
         })
         .collect()
@@ -620,6 +620,33 @@ fn main() -> anyhow::Result<()> {
                             ..shot.clone()
                         };
                         let g = slint_gfx.expect("slint pages only with a GPU");
+                        if shot.settings.is_none() {
+                            let shot = Shot {
+                                stage: Some(th08::platform::portmenu::StageLine {
+                                    stage: "1",
+                                    rank: 1,
+                                    shot: 0,
+                                }),
+                                no_saves: true,
+                                status: Some("Screenshot saved".into()),
+                                ..shot.clone()
+                            };
+                            let mut h = th08::slintui::check::CardHarness::new(
+                                g, &s, sz.px, sz.safe, &shot,
+                            )?;
+                            let issues = h.issues();
+                            if let Some(dir) = &args.out {
+                                h.image(&backdrop(stage.as_ref(), sz, &shot))
+                                    .save(dir.join(&file))?;
+                            }
+                            frames.push(Frame {
+                                file,
+                                lang,
+                                surface: "slint",
+                                issues,
+                            });
+                            continue;
+                        }
                         let issues =
                             th08::slintui::check::check_page(g, &s, sz.px, sz.safe, &shot)?;
                         if let Some(dir) = &args.out {

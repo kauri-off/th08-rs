@@ -1,0 +1,491 @@
+// The pause card: right pillar (16:9), over the playfield (4:3), the phone's side bars (docs/UI_RULES.md).
+import { Tk, Ui, Modality } from "tokens.slint";
+import { Label, Ringed, Arrow, FocusMark, Heading, Target, RowData, Hint, HelpLine, HintLine, ValueControl, SliderStacked } from "components.slint";
+
+// Points from `portmenu::layout`; shape: 0 pillar, 1 column over the playfield, 2 phone side bars.
+export struct CardGeo {
+    shape: int, x: length, w: length, band-l: length, band-r: length, top: length, bottom: length,
+    frame-l: length, frame-r: length, frame-t: length, frame-h: length,
+    pf-x: length, pf-y: length, pf-w: length, pf-h: length, soft-x: length, soft-y: length, soft-w: length, soft-h: length,
+    list-limit: length, foot-limit: length,
+    rx: length, rw: length, rband-l: length, rband-r: length,
+}
+
+// One item: label, optional ja caption, its value control or ›, on the card's band.
+component CardRow inherits Rectangle {
+    in property <RowData> data;
+    in property <int> index;
+    in property <bool> bar;
+    in property <bool> primary;
+    in property <bool> dim;
+    in property <bool> over-game;
+    in property <length> inset;
+    in property <length> content-w;
+    in property <length> row-h;
+    in property <length> least-h;
+    in property <length> size;
+    in property <length> caption-size;
+    out property <bool> hovering: area.has-hover;
+    callback activate();
+    callback step(int);
+    callback pick(int);
+    callback set(float);
+
+    property <bool> lit: area.has-hover && Ui.modality == Modality.mouse && !dim;
+    property <bool> hot: bar || lit || primary;
+    property <bool> has-value: data.kind == 0 || data.kind == 1;
+    property <color> tint: hot ? Tk.text-hi : data.kind == 3 ? Tk.danger : Tk.text;
+    property <length> label-w: has-value ? min(label-m.preferred-width, content-w * 0.42) : content-w - size;
+    property <length> value-w: data.kind == 1 ? min(content-w * 0.58, content-w - label-w - size * 0.6) : content-w - label-w - size;
+    property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > value-w;
+    property <bool> show-caption: data.caption != "" && row-h >= size * 2.8;
+    min-height: max(Ui.touch ? max(least-h, Ui.tap) : least-h, body.preferred-height);
+    preferred-height: max(row-h, self.min-height);
+    max-height: self.preferred-height;
+
+    Rectangle {
+        visible: false;
+        label-m := Text { text: data.label; font-family: Tk.serif; font-size: root.size; }
+        inline-m := HorizontalLayout {
+            spacing: root.size * 1.2;
+            for w in data.words: Text { text: w; font-family: Tk.serif; font-size: root.size * 0.93; }
+        }
+    }
+    FocusMark { bar: root.bar && !root.dim; tick: root.primary; lit: root.lit || root.primary; down: area.pressed && Ui.modality == Modality.touch; over-game: root.over-game && !root.primary; }
+    area := Target {
+        name: "item|" + root.index;
+        accessible-label: data.label;
+        clicked => { root.activate(); }
+    }
+    body := HorizontalLayout {
+        x: inset;
+        width: content-w;
+        padding-top: 2px;
+        padding-bottom: 2px;
+        alignment: space-between;
+        VerticalLayout {
+            alignment: center;
+            width: root.label-w;
+            Ringed { text: data.label; font-size: root.size; color: root.tint; horizontal-alignment: left; wrap: word-wrap; }
+            if root.show-caption: HorizontalLayout {
+                padding-left: root.size * 1.2;
+                Ringed { text: data.caption; font-size: root.caption-size; color: Tk.accent; horizontal-alignment: left; }
+            }
+        }
+        if root.has-value: ValueControl {
+            width: root.value-w;
+            data: root.data; hot: root.hot; as-stepper: root.as-stepper; size: root.size * 0.93; right: true; arrows: Ui.touch;
+            step(d) => { root.step(d); } pick(i) => { root.pick(i); } set(f) => { root.set(f); }
+        }
+        if data.kind == 2: Label { text: "›"; font-size: root.size * 0.85; color: Tk.help; width: root.size; horizontal-alignment: right; }
+    }
+    if root.dim: TouchArea { }
+}
+
+// The question in place of the run actions: question, note, "Keep playing" (focused first) and the action.
+component ConfirmBlock inherits VerticalLayout {
+    in property <string> question;
+    in property <string> note;
+    in property <string> keep;
+    in property <string> act;
+    in property <bool> yes;
+    in property <bool> over-game;
+    in property <length> inset;
+    in property <length> content-w;
+    in property <length> row-h;
+    in property <length> size;
+    in property <length> note-size;
+    out property <int> hovered: yes-t.has-hover ? 1 : keep-t.has-hover ? 0 : -1;
+    callback answer(bool);
+
+    VerticalLayout {
+        padding-left: root.inset;
+        padding-right: root.width - root.inset - root.content-w;
+        padding-bottom: root.note-size * 0.9;
+        spacing: root.size * 0.3;
+        Ringed { text: root.question; font-size: root.size * 1.14; color: Tk.question; horizontal-alignment: left; wrap: word-wrap; }
+        Label { text: root.note; serif: false; font-size: root.note-size; color: Tk.help-hi; horizontal-alignment: left; wrap: word-wrap; }
+    }
+    keep-r := Rectangle {
+        min-height: max(root.row-h, Ui.tap);
+        FocusMark {
+            bar: Ui.bar && !root.yes;
+            lit: (keep-t.has-hover && Ui.modality == Modality.mouse) || (Ui.touch && !Ui.bar);
+            down: keep-t.pressed && Ui.modality == Modality.touch;
+            over-game: root.over-game;
+        }
+        keep-t := Target { name: "answer|keep"; accessible-label: root.keep; clicked => { root.answer(false); } }
+        Ringed { x: root.inset; width: root.content-w; text: root.keep; font-size: root.size * 1.07; color: Tk.text-hi; horizontal-alignment: left; wrap: word-wrap; }
+    }
+    yes-r := Rectangle {
+        min-height: max(root.row-h, Ui.tap);
+        property <bool> hot: (Ui.bar && root.yes) || (yes-t.has-hover && Ui.modality == Modality.mouse);
+        FocusMark {
+            bar: Ui.bar && root.yes;
+            lit: yes-t.has-hover && Ui.modality == Modality.mouse;
+            down: yes-t.pressed && Ui.modality == Modality.touch;
+            over-game: root.over-game;
+        }
+        yes-t := Target { name: "answer|act"; accessible-label: root.act; clicked => { root.answer(true); } }
+        Ringed { x: root.inset; width: root.content-w; text: root.act; font-size: root.size * 1.07; color: parent.hot ? Tk.text-hi : Tk.danger; horizontal-alignment: left; wrap: word-wrap; }
+    }
+}
+
+// A phone quick setting: its label above the control, or one tappable line.
+component QuickRow inherits Rectangle {
+    in property <RowData> data;
+    in property <int> index;
+    in property <bool> bar;
+    in property <bool> dim;
+    in property <bool> last;
+    in property <length> inset;
+    in property <length> content-w;
+    in property <length> label-size;
+    out property <bool> hovering: area.has-hover;
+    callback activate();
+    callback step(int);
+    callback pick(int);
+    callback set(float);
+
+    property <bool> lit: area.has-hover && Ui.modality == Modality.mouse && !dim;
+    property <bool> hot: bar || lit;
+    property <bool> control: data.kind == 0 || data.kind == 1;
+    property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > content-w;
+    min-height: max(120px, col.preferred-height);
+
+    Rectangle {
+        visible: false;
+        inline-m := HorizontalLayout {
+            for w in data.words: Rectangle {
+                min-width: 150px;
+                preferred-width: wm.preferred-width + 32px;
+                wm := Text { text: w; font-family: Tk.serif; font-size: root.label-size * 0.9; }
+            }
+        }
+    }
+    FocusMark { bar: root.bar; lit: root.lit; down: area.pressed && Ui.modality == Modality.touch; }
+    area := Target {
+        name: "item|" + root.index;
+        accessible-label: data.label;
+        clicked => { root.activate(); }
+    }
+    col := VerticalLayout {
+        x: root.inset;
+        width: root.content-w;
+        alignment: center;
+        padding-bottom: root.control ? 16px : 0;
+        HorizontalLayout {
+            min-height: root.control ? root.label-size * 1.75 : 120px;
+            Ringed { text: data.label; font-size: root.label-size; color: root.hot ? Tk.text-hi : Tk.text; horizontal-alignment: left; wrap: word-wrap; }
+            if data.kind == 2: Label { text: "›"; font-size: root.label-size; color: Tk.help; width: root.label-size; horizontal-alignment: right; }
+        }
+        if data.kind == 1: SliderStacked {
+            data: root.data; hot: root.hot;
+            step(d) => { root.step(d); } set(f) => { root.set(f); }
+        }
+        if data.kind == 0: ValueControl {
+            min-height: Ui.tap;
+            data: root.data; hot: root.hot; as-stepper: root.as-stepper; size: root.label-size * 0.9;
+            step(d) => { root.step(d); } pick(i) => { root.pick(i); }
+        }
+    }
+    if !root.last: Rectangle { x: root.inset; y: root.height - 8px; width: root.content-w; height: 1px; background: Tk.rule; }
+    if root.dim: TouchArea { }
+}
+
+// Help (pillar), notes, device and key hints under the items.
+component CardFoot inherits VerticalLayout {
+    in property <bool> pillar;
+    in property <bool> short;
+    in property <bool> show-device;
+    in property <string> help;
+    in property <[string]> notes;
+    in property <string> device;
+    in property <string> version;
+    in property <string> device-line;
+    in property <[Hint]> hints-first;
+    in property <[Hint]> hints-rest;
+    in property <length> help-size;
+    in property <length> status-size;
+    in property <length> hint-size;
+    // The height without the column's device line, which goes first when the block would reach the player.
+    out property <length> base: notes-col.preferred-height + hint.preferred-height + 24px;
+    spacing: short ? 6px : 8px;
+    Rectangle { height: 1px; background: Tk.rule; }
+    if pillar: HelpLine { text: root.help; font-size: root.help-size; }
+    notes-col := VerticalLayout {
+        spacing: root.short ? 4px : 8px;
+        for n in root.notes: Label { text: n; serif: false; font-size: root.status-size; color: Tk.help-hi; horizontal-alignment: left; wrap: word-wrap; }
+    }
+    if pillar: HorizontalLayout {
+        Label { text: root.device; serif: false; font-size: root.status-size; color: Tk.help; horizontal-alignment: left; horizontal-stretch: 1; }
+        Label { text: root.version; serif: false; font-size: root.status-size; color: Tk.help; horizontal-alignment: right; horizontal-stretch: 0; }
+    }
+    if !pillar && show-device: Label { text: root.device-line; serif: false; font-size: root.status-size; color: Tk.help; horizontal-alignment: left; wrap: word-wrap; }
+    hint := HintLine { first: root.hints-first; rest: root.hints-rest; device: ""; size: root.hint-size; }
+}
+
+export component PauseCard inherits Window {
+    background: transparent;
+    in property <CardGeo> geo;
+    // Resume, the other items, the danger items; on the phone `quick` is the right bar.
+    in property <RowData> resume;
+    in property <[RowData]> mids;
+    in property <[RowData]> dangers;
+    in property <RowData> settings;
+    in property <[RowData]> quick;
+    in property <int> focused: -1;
+    in property <int> ask;
+    in property <bool> yes;
+    in property <string> heading;
+    in property <string> caption;
+    in property <string> quick-caption;
+    in property <string> help;
+    in property <[string]> notes;
+    in property <string> device;
+    in property <string> version;
+    in property <string> device-line;
+    in property <string> question;
+    in property <string> note;
+    in property <string> keep;
+    in property <string> act;
+    in property <[Hint]> hints-first;
+    in property <[Hint]> hints-rest;
+    // Item index hovered, -1 none; the answer hovered, -1 none, 0 keep, 1 act.
+    out property <int> hovered: hovered-v;
+    out property <int> hovered-answer: confirm-hover;
+    property <int> hovered-v: -1;
+    property <int> confirm-hover: -1;
+    callback activate(int);
+    callback step(int, int);
+    callback pick(int, int);
+    callback set-frac(int, float);
+    callback answer(bool);
+
+    property <[string]> none;
+    property <[Hint]> no-hints;
+    property <bool> pillar: geo.shape == 0;
+    property <bool> column: geo.shape == 1;
+    property <bool> split: geo.shape == 2;
+    property <bool> asking: ask != 0;
+    // A short pillar sets the card smaller and moves the heading up.
+    property <bool> short: pillar && geo.bottom - geo.top < 640px;
+    property <float> k: short ? clamp((geo.bottom - geo.top) / 640px, 0.72, 1) : 1;
+    property <length> head-size: k * (pillar ? Ui.font(42, 18) : column ? Ui.font(34, 18) : Ui.font(48, 20));
+    property <length> cap-size: k * (pillar ? Ui.font(17, 11) : column ? Ui.font(15, 11) : Ui.font(21, 11));
+    property <length> resume-h: k * (pillar ? 88px : column ? 54px : 140px);
+    property <length> resume-size: k * (pillar ? Ui.font(34, 16) : column ? Ui.font(28, 16) : Ui.font(44, 16));
+    property <length> row-h: k * (pillar ? 72px : column ? 42px : 120px);
+    property <length> row-size: k * (pillar ? Ui.font(28, 14) : column ? Ui.font(22, 14) : Ui.font(32, 12));
+    property <length> status-size: k * (pillar ? Ui.font(16, 11) : column ? Ui.font(14, 11) : Ui.font(19, 8));
+    property <length> hint-size: k * (pillar ? Ui.font(15, 11) : column ? Ui.font(14, 11) : Ui.font(16, 11));
+    property <length> help-size: k * (pillar ? Ui.font(18, 12) : Ui.font(14, 12));
+    property <length> least-h: short ? row-size * 1.35 : column ? row-h : 48px * k;
+    property <float> gaps: short ? 0.5 : 1;
+    property <length> inset: geo.x - geo.band-l;
+    property <length> band-w: geo.band-r - geo.band-l;
+    property <length> quick-inset: geo.rx - geo.rband-l;
+    property <int> quick-first: dangers.length + 2;
+    property <length> head-top: geo.top + (short ? 20px : pillar ? 44px : 32px);
+    property <length> rows-top: geo.top + (short ? 20px + head-size * 2.4 : pillar ? 160px : 116px);
+    property <length> rows-bottom: pillar ? pillar-foot.y - 12px : geo.list-limit;
+    // Dimmed items above a question that does not fit go first.
+    property <length> mids-need: mids.length * row-h + resume-h + 60px * gaps;
+    property <length> foot-base: notes-m.preferred-height + hint-size * 3.4 + 24px;
+    property <bool> hide-mids: asking && !split && mids-need + confirm-measure.preferred-height + (column ? foot-base : 0) > (column ? geo.foot-limit : rows-bottom) - rows-top;
+    // A short pillar gives the help and device lines' room to the rows.
+    property <length> rows-least: resume-h + 60px * gaps + (asking ? confirm-measure.preferred-height : (mids.length + dangers.length) * least-h);
+    property <bool> foot-no-hints: pillar && rows-top + rows-least + foot-base + 36px > geo.bottom;
+    property <bool> foot-tight: pillar && rows-top + rows-least + foot-base + help-m.preferred-height + status-size * 1.6 + 36px > geo.bottom;
+
+    function hover(i: int, on: bool) {
+        if (on) { hovered-v = i; } else if (hovered-v == i) { hovered-v = -1; }
+    }
+
+    Rectangle { background: Tk.wash; visible: !root.column; }
+    if column: Rectangle { x: geo.pf-x; y: geo.pf-y; width: geo.pf-w; height: geo.pf-h; background: #060103b8; }
+    if column: Rectangle {
+        x: geo.soft-x; y: geo.soft-y; width: geo.soft-w; height: geo.soft-h;
+        background: @radial-gradient(circle, #0000005a 45%, #00000000 100%);
+    }
+
+    // Pillar: one panel on the right; phone: both bars.
+    if !column: Rectangle {
+        x: geo.frame-r;
+        width: parent.width - self.x;
+        background: Tk.panel;
+        Rectangle { x: 0; width: 1px; background: Tk.edge; }
+        Rectangle { x: 3px; width: 1px; background: Tk.edge-in; }
+    }
+    if split: Rectangle {
+        x: 0;
+        width: geo.frame-l;
+        background: Tk.panel;
+        Rectangle { x: parent.width - 1px; width: 1px; background: Tk.edge; }
+        Rectangle { x: parent.width - 4px; width: 1px; background: Tk.edge-in; }
+    }
+
+    head := Heading {
+        x: geo.x;
+        y: root.head-top;
+        width: geo.w;
+        alignment: start;
+        word: root.heading; caption: root.caption; size: root.head-size; caption-size: root.cap-size; caption-indent: 2px;
+        opacity: root.asking ? 0.3 : 1;
+    }
+
+    Rectangle {
+        visible: false;
+        confirm-measure := VerticalLayout {
+            width: geo.w;
+            spacing: root.row-size * 0.3;
+            Text { text: root.question; font-family: Tk.serif; font-size: root.row-size * 1.14; wrap: word-wrap; }
+            Text { text: root.note; font-family: Tk.sans; font-size: root.help-size; wrap: word-wrap; }
+            Rectangle { height: root.help-size * 0.9 + 2 * max(root.row-h, Ui.tap); }
+        }
+        notes-m := VerticalLayout {
+            width: geo.w;
+            spacing: 8px;
+            for n in root.notes: Text { text: n; font-family: Tk.sans; font-size: root.status-size; wrap: word-wrap; }
+        }
+        help-m := Text { text: root.help; font-family: Tk.sans; font-size: root.help-size; width: geo.w; wrap: word-wrap; }
+        dev-m := Text { text: root.device-line; font-family: Tk.sans; font-size: root.status-size; width: geo.w; wrap: word-wrap; }
+    }
+
+    // Pillar and column: heading, Resume, rule, shortcuts, rule, the run actions or the question.
+    if !split: VerticalLayout {
+        x: geo.band-l;
+        width: root.band-w;
+        y: root.rows-top;
+        height: root.pillar ? root.rows-bottom - root.rows-top : self.preferred-height;
+        alignment: start;
+        CardRow {
+            data: root.resume; index: 0; bar: root.focused == 0; primary: Ui.touch && !Ui.bar && !root.asking; dim: root.asking;
+            over-game: root.column; inset: root.inset; content-w: geo.w; row-h: root.resume-h; least-h: root.resume-h; size: root.resume-size; caption-size: root.cap-size * 0.85;
+            opacity: root.asking ? 0.3 : 1;
+            changed hovering => { root.hover(0, self.hovering); }
+            activate => { root.activate(0); }
+        }
+        Rectangle { height: root.gaps * (root.pillar ? 14px : 10px); }
+        Rectangle { height: 1px; Rectangle { x: root.inset; width: geo.w; background: Tk.rule; opacity: root.asking ? 0.3 : 1; } }
+        Rectangle { height: root.gaps * (root.pillar ? 10px : 6px); }
+        if !root.hide-mids: VerticalLayout {
+            opacity: root.asking ? 0.3 : 1;
+            for r[i] in root.mids: CardRow {
+                data: r; index: i + 1; bar: root.focused == i + 1; dim: root.asking; over-game: root.column;
+                inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
+                changed hovering => { root.hover(i + 1, self.hovering); }
+                activate => { root.activate(i + 1); }
+                step(d) => { root.step(i + 1, d); }
+                pick(c) => { root.pick(i + 1, c); }
+                set(f) => { root.set-frac(i + 1, f); }
+            }
+        }
+        if root.dangers.length > 0 && !root.hide-mids: Rectangle { height: root.gaps * (root.pillar ? 22px : 14px); }
+        if root.dangers.length > 0 && !root.hide-mids: Rectangle { height: 1px; Rectangle { x: root.inset; width: geo.w; background: Tk.rule; } }
+        if root.dangers.length > 0: Rectangle { height: root.gaps * (root.pillar ? 10px : 6px); }
+        if !root.asking: VerticalLayout {
+            for r[i] in root.dangers: CardRow {
+                data: r; index: root.mids.length + 1 + i; bar: root.focused == root.mids.length + 1 + i; over-game: root.column;
+                inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
+                changed hovering => { root.hover(root.mids.length + 1 + i, self.hovering); }
+                activate => { root.activate(root.mids.length + 1 + i); }
+            }
+        }
+        if root.asking: ConfirmBlock {
+            question: root.question; note: root.note; keep: root.keep; act: root.act; yes: root.yes; over-game: root.column;
+            inset: root.inset; content-w: geo.w; row-h: root.row-h; size: root.row-size; note-size: root.help-size;
+            changed hovered => { root.confirm-hover = self.hovered; }
+            answer(y) => { root.answer(y); }
+        }
+        if root.column: CardFoot {
+            property <length> rows-h: root.resume-h + 52px + root.mids.length * max(root.row-h, Ui.tap) + (root.asking ? confirm-measure.preferred-height : root.dangers.length * max(root.row-h, Ui.tap));
+            padding-left: root.inset;
+            padding-right: root.band-w - root.inset - geo.w;
+            padding-top: 8px;
+            show-device: root.rows-top + self.rows-h + self.base + dev-m.preferred-height + 8px <= geo.foot-limit;
+            notes: root.notes; device-line: root.device-line;
+            hints-first: root.hints-first; hints-rest: root.hints-rest; help-size: root.help-size; status-size: root.status-size; hint-size: root.hint-size;
+        }
+    }
+
+    pillar-foot := CardFoot {
+        x: geo.x;
+        width: geo.w;
+        visible: root.pillar;
+        y: geo.bottom - (root.short ? 12px : 24px) - self.preferred-height;
+        height: self.preferred-height;
+        pillar: true; short: root.short; help: root.foot-tight ? "" : root.help; notes: root.pillar ? root.notes : root.none;
+        device: root.pillar && !root.foot-tight ? root.device : ""; version: root.pillar && !root.foot-tight ? root.version : "";
+        hints-first: root.pillar && !root.foot-no-hints ? root.hints-first : root.no-hints; hints-rest: root.pillar && !root.foot-no-hints ? root.hints-rest : root.no-hints; help-size: root.help-size; status-size: root.status-size; hint-size: root.hint-size;
+    }
+
+    // Phone, left bar: status under the heading, the run items low in thumb reach.
+    if split: VerticalLayout {
+        x: geo.x;
+        width: geo.w;
+        y: root.head-top + head.preferred-height + 24px;
+        alignment: start;
+        spacing: 4px;
+        for n in root.notes: Label { text: n; serif: false; font-size: root.status-size; color: Tk.help-hi; horizontal-alignment: left; wrap: word-wrap; }
+        Label { text: root.device-line; serif: false; font-size: root.status-size; color: Tk.help; horizontal-alignment: left; wrap: word-wrap; }
+    }
+    if split: VerticalLayout {
+        x: geo.band-l;
+        width: root.band-w;
+        y: geo.bottom - 40px - self.preferred-height;
+        height: self.preferred-height;
+        if !root.asking: CardRow {
+            data: root.resume; index: 0; bar: root.focused == 0; primary: Ui.touch && !Ui.bar;
+            inset: root.inset; content-w: geo.w; row-h: root.resume-h; least-h: root.resume-h; size: root.resume-size; caption-size: root.cap-size * 0.85;
+            changed hovering => { root.hover(0, self.hovering); }
+            activate => { root.activate(0); }
+        }
+        if !root.asking: CardRow {
+            data: root.settings; index: 1; bar: root.focused == 1;
+            inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.row-h; size: root.row-size; caption-size: root.cap-size * 0.85;
+            changed hovering => { root.hover(1, self.hovering); }
+            activate => { root.activate(1); }
+        }
+        if !root.asking && root.dangers.length > 0: Rectangle { height: 24px; Rectangle { x: root.inset; y: 12px; width: geo.w; height: 1px; background: Tk.rule; } }
+        if !root.asking: VerticalLayout {
+            for r[i] in root.dangers: CardRow {
+                data: r; index: 2 + i; bar: root.focused == 2 + i;
+                inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.row-h; size: root.row-size * 0.94; caption-size: root.cap-size * 0.85;
+                changed hovering => { root.hover(2 + i, self.hovering); }
+                activate => { root.activate(2 + i); }
+            }
+        }
+        if root.asking: ConfirmBlock {
+            question: root.question; note: root.note; keep: root.keep; act: root.act; yes: root.yes;
+            inset: root.inset; content-w: geo.w; row-h: root.row-h; size: root.row-size; note-size: Ui.font(24, 9.5);
+            changed hovered => { root.confirm-hover = self.hovered; }
+            answer(y) => { root.answer(y); }
+        }
+    }
+
+    // Phone, right bar: the quick settings, bottom-anchored.
+    if split: VerticalLayout {
+        x: geo.rband-l;
+        width: geo.rband-r - geo.rband-l;
+        y: geo.bottom - 40px - self.preferred-height;
+        height: self.preferred-height;
+        opacity: root.asking ? 0.3 : 1;
+        HorizontalLayout {
+            padding-left: root.quick-inset;
+            padding-bottom: 12px;
+            Ringed { text: root.quick-caption; font-size: root.cap-size * 0.95; color: Tk.accent; horizontal-alignment: left; }
+        }
+        Rectangle { height: 1px; Rectangle { x: root.quick-inset; width: geo.rw; background: Tk.rule; } }
+        Rectangle { height: 11px; }
+        for r[i] in root.quick: QuickRow {
+            data: r; index: root.quick-first + i; bar: root.focused == root.quick-first + i && !root.asking; dim: root.asking; inset: root.quick-inset; content-w: geo.rw; label-size: root.row-size;
+            last: i == root.quick.length - 1;
+            changed hovering => { root.hover(root.quick-first + i, self.hovering); }
+            activate => { root.activate(root.quick-first + i); }
+            step(d) => { root.step(root.quick-first + i, d); }
+            pick(c) => { root.pick(root.quick-first + i, c); }
+            set(f) => { root.set-frac(root.quick-first + i, f); }
+        }
+    }
+}

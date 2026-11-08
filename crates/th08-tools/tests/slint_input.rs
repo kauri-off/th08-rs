@@ -1,9 +1,10 @@
 //! Injected input per modality on the Slint settings page: every row reachable, a drag changes nothing, a tap activates.
 #![cfg(not(target_arch = "wasm32"))]
 
+use th08::platform::portmenu::Do;
 use th08::platform::portmenu::{Nav, Shot};
 use th08::settings::{Origin, PlatformDirs, Settings};
-use th08::slintui::check::{Harness, R, Reach};
+use th08::slintui::check::{CardHarness, Harness, R, Reach};
 use th08_render::gfx::{Gfx, SafeArea};
 
 const PHONE: (u32, u32) = (2400, 1080);
@@ -81,6 +82,7 @@ fn every_modality() {
     drag_changes_nothing(&gfx, &s);
     tap_activates(&gfx, &s);
     keys_and_reset(&gfx, &s);
+    card_every_input(&gfx, &s);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -187,4 +189,160 @@ fn keys_and_reset(gfx: &Gfx, s: &Settings) {
     h.nav(Nav::NextTab);
     assert_eq!(h.page.tab(), 1);
     assert!(h.page.ui.get_scroll().abs() < 0.5);
+}
+
+// Phone side bars, 16:9 pillar, 4:3 column.
+fn card_shapes() -> [(&'static str, (u32, u32), SafeArea, bool, f32); 3] {
+    [
+        ("phone", PHONE, phone_safe(), true, 2.75),
+        ("pillar", (1920, 1080), SafeArea::default(), false, 1.0),
+        ("column", (1280, 960), SafeArea::default(), false, 1.0),
+    ]
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Press {
+    Touch,
+    Mouse,
+    Keys,
+}
+
+fn press(h: &mut CardHarness<'_>, how: Press, r: R) {
+    match how {
+        Press::Touch => h.tap(r),
+        Press::Mouse => h.click(r),
+        Press::Keys => h.nav(Nav::Activate),
+    }
+}
+
+// Every item does its job by touch, pointer and keys; confirms default to the safe answer and only the action runs it.
+fn card_every_input(gfx: &Gfx, s: &Settings) {
+    for (shape, size, safe, phone, density) in card_shapes() {
+        let shot = Shot {
+            quit: true,
+            touch: phone,
+            density,
+            speed: Some((1, 1)),
+            ..Shot::default()
+        };
+        let names = CardHarness::new(gfx, s, size, safe, &shot)
+            .expect("card")
+            .rig
+            .item_names();
+        for how in [Press::Touch, Press::Mouse, Press::Keys] {
+            for (i, name) in names.iter().enumerate() {
+                let mut h = CardHarness::new(gfx, s, size, safe, &shot).expect("card");
+                if how == Press::Keys {
+                    h.nav(Nav::Up);
+                    for _ in 0..i {
+                        h.nav(Nav::Down);
+                    }
+                    assert_eq!(h.rig.focused_name(), *name, "{shape}: keys reach {name}");
+                }
+                let r = label_of(h.target(&format!("item|{i}")));
+                press(&mut h, how, r);
+                let done = h.take_done();
+                let ctx = format!("{shape} {name}: {done:?}");
+                match name.as_str() {
+                    "Resume" => assert_eq!(done, [Do::Resume], "{ctx}"),
+                    "Screenshot" => assert_eq!(done, [Do::Screenshot], "{ctx}"),
+                    "Settings" => assert!(h.rig.on_settings_page(), "{ctx}"),
+                    "TouchLayout" => assert_eq!(done, [Do::EditLayout], "{ctx}"),
+                    "Hitboxes" => assert!(matches!(done[..], [Do::Hitboxes(_)]), "{ctx}"),
+                    "Volume" | "Speed" => assert!(done.is_empty(), "{ctx}"),
+                    "Retry" | "Quit" => confirm(&mut h, how, name, &ctx),
+                    other => panic!("{other}"),
+                }
+            }
+        }
+        no_run_items(gfx, s, size, safe, &shot, shape);
+        let mut h = CardHarness::new(gfx, s, size, safe, &shot).expect("card");
+        let volume = names.iter().position(|n| n == "Volume").expect("volume");
+        let before = h.rig.volume();
+        h.nav(Nav::Up);
+        for _ in 0..volume {
+            h.nav(Nav::Down);
+        }
+        h.nav(Nav::Left);
+        assert_ne!(h.rig.volume(), before, "{shape}: left changes the volume");
+        if phone {
+            let v = h.rig.volume();
+            let step = h.target("step");
+            h.tap(step);
+            assert_ne!(h.rig.volume(), v, "{shape}: the cell steps the volume");
+        }
+    }
+}
+
+// The label end of an item's band, clear of its value control.
+fn label_of(r: R) -> R {
+    R {
+        x: r.x,
+        y: r.y + 2.0,
+        w: r.w * 0.25,
+        h: 6.0,
+    }
+}
+
+fn confirm(h: &mut CardHarness<'_>, how: Press, name: &str, ctx: &str) {
+    assert!(h.rig.asking(), "{ctx}: asks first");
+    assert!(
+        h.rig.on_safe_answer(),
+        "{ctx}: the safe answer is the default"
+    );
+    let want = if name == "Retry" { Do::Retry } else { Do::Quit };
+    if how == Press::Keys {
+        h.nav(Nav::Activate);
+        assert!(
+            !h.rig.asking() && h.take_done().is_empty(),
+            "{ctx}: Z on the default keeps playing"
+        );
+        h.nav(Nav::Activate);
+        assert!(h.rig.asking(), "{ctx}: asks again");
+        h.nav(Nav::Back);
+        assert!(
+            !h.rig.asking() && h.take_done().is_empty(),
+            "{ctx}: back cancels"
+        );
+        h.nav(Nav::Activate);
+        h.nav(Nav::Down);
+        h.nav(Nav::Activate);
+        assert_eq!(h.take_done(), [want], "{ctx}: the action runs");
+        return;
+    }
+    let keep = h.target("answer|keep");
+    press(h, how, keep);
+    assert!(
+        !h.rig.asking() && h.take_done().is_empty(),
+        "{ctx}: keep changes nothing"
+    );
+    let names = h.rig.item_names();
+    let at = names.iter().position(|n| n == name).expect("item");
+    let r = label_of(h.target(&format!("item|{at}")));
+    press(h, how, r);
+    let yes = h.target("answer|act");
+    press(h, how, yes);
+    assert_eq!(h.take_done(), [want], "{ctx}: the action runs");
+}
+
+// Replays and demos: no Retry or Quit on the card.
+fn no_run_items(
+    gfx: &Gfx,
+    s: &Settings,
+    size: (u32, u32),
+    safe: SafeArea,
+    shot: &Shot,
+    shape: &str,
+) {
+    let shot = Shot {
+        quit: false,
+        ..shot.clone()
+    };
+    let h = CardHarness::new(gfx, s, size, safe, &shot).expect("card");
+    let names = h.rig.item_names();
+    assert!(
+        !names.iter().any(|n| n == "Retry" || n == "Quit"),
+        "{shape}: {names:?}"
+    );
+    assert_eq!(h.targets("target|item|").len(), names.len(), "{shape}");
 }
