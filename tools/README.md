@@ -28,7 +28,7 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `android/cargo_android.sh` | all | `libth08.so` per ABI with the NDK (used by the Gradle build) |
 | `android/run_debug.sh` | all | debug APK on an emulator: build, install, run, screenshot |
 | `android/build_apk.sh` | all | convenience wrapper; `cargo xtask dist --target android-apk` is the supported way |
-| `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots); stall watchdog (`wait` exit 76, `kill ID`), emulator snapshot around emu jobs, scratch quota warning; `q selftest` |
+| `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots); stall watchdog (`wait` exit 76, `kill ID`), two emulator slots (`QEMU_PORT`, own AVD per slot), emulator snapshot around emu jobs, scratch quota warning; `q selftest` |
 | `arch_job NAME` | maintainer | `arch_check run devdata/arch_ref` as a `q` job |
 | `batch_job NAME` | maintainer | the replay batch (sets `ref500`, `ref_b2`) as a `q` job; `due` / `train [--now]`: the batch train for batch-due commits (bisects on FAIL) |
 | `check NAME` | maintainer | runs the `check_level` check of a worktree's committed HEAD as a `q` job; on PASS writes a stamp in `devdata/checks/` |

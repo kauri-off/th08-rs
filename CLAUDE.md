@@ -48,7 +48,7 @@ same checks directly, without the queue: [CONTRIBUTING.md](CONTRIBUTING.md#check
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
   foreground until it ends (exit 75 = not done yet; 76 = stalled: no output and ~no CPU for 10 min, not killed —
   look at the printed threads, `tools/q kill ID` stops it). From a worktree, use the main checkout's `tools/q` so all
-  jobs share one queue. Never take `target/.agents.lock` by hand. emu jobs get the emulator restored to a snapshot
+  jobs share one queue. Never take `target/.agents.lock` by hand. emu jobs (two at once: boot with `-port $QEMU_PORT`, the job env selects the AVD) get the emulator restored to a snapshot
   afterwards (rotation, wm size / density too); `q ls` warns when a job's scratch dir passes 3 GB.
 - `tools/check_level` says which check a change needs: `light` (build, clippy, unit tests; no arch_check),
   `full` (arch_check: a game crate, th08-render / -tools, `specs/data/` or the settings changed) or `batch` (plus the

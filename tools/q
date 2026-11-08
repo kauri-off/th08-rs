@@ -6,12 +6,12 @@
        tools/q wait ID [--max SECONDS] [--tail N] | ls | top [--once] | stats [--since 24h] [--id ID] | cancel ID | kill ID
        tools/q selftest | legacy [-w SECS] -- CMD…  (exclusive QLOCK, wait/run logged as kind=legacy)
 Job queue for heavy runs: each job is a systemd user unit that waits for capacity (weighted semaphore, 4 units:
-check 2, test 1, emu 1 + the emulator token, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
+check 2, test 1, emu 1 + one of 2 emulator slots, full 4, batch 2 (replay batches), long 2 (dirty-room wine / full-set
 runs); prio high first, strict FIFO behind the head), holds QLOCK SHARED while it runs, logs to QDIR/log.jsonl. wait exits with the job's code, or 75 = not done yet.
 Stall watchdog: a running job whose process tree used < QSTALL_CPU % of one core and whose out.log did not grow for
 QSTALL s (or --stall) shows as `stalled` in ls / top with its blocked threads; wait on it exits 76. It is not killed:
 `kill ID` stops it (cancel, TERM to the whole tree, KILL after QKILL_GRACE s) and waits until it is gone.
-emu jobs: the emulator is saved to snapshot q_pre before the job and restored after it (also when cancelled), plus
+emu jobs: QEMU_SLOT, QEMU_PORT and, above slot 0, ANDROID_AVD_HOME select the slot's own AVD; the slot's emulator is saved to snapshot q_pre before the job and restored after it (also when cancelled), plus
 user_rotation / wm size / wm density; job env QEMU_HYGIENE=0 skips that, QADB names adb. ls warns when a job's
 scratch dir (/tmp/claude-UID/<mangled cwd>) passes QSCRATCH_GB.
 Env: QDIR (default <repo>/target/queue), QLOCK (default QDIR/compat.lock), QPOLL (s), QSTALL (600), QSTALL_CPU (2),
@@ -26,6 +26,7 @@ ARCH_TIMES = f"{MAIN}/devdata/arch_ref/times.txt"
 POLL = float(os.environ.get("QPOLL", "2"))
 CAP = 4
 WEIGHT = {"check": 2, "test": 1, "emu": 1, "full": 4, "batch": 2, "long": 2}
+EMU_SLOTS = 2
 WAIT_MAX = 540  # one Bash tool call never reaches the 600 s limit
 EXIT_PENDING = 75  # EX_TEMPFAIL: job not finished, call `q wait` again
 EXIT_CANCELLED = 125
@@ -245,10 +246,25 @@ def kill_tree(cg, root, sig):
 
 # ---- emulator hygiene, scratch quota ---------------------------------------------------------------------------
 
+def serial_slot(serial):
+    """The emulator slot of a running emulator: its process's ANDROID_AVD_HOME, slot 0 when it has none."""
+    port = serial.rsplit("-", 1)[-1]
+    for p in os.listdir("/proc"):
+        if not p.isdigit(): continue
+        try:
+            with open(f"/proc/{p}/cmdline", "rb") as f: argv = f.read().decode(errors="replace").split("\0")
+            if "qemu-system" not in argv[0] or not any(a == "-port" and b == port for a, b in zip(argv, argv[1:])): continue
+            with open(f"/proc/{p}/environ", "rb") as f: envs = f.read().decode(errors="replace").split("\0")
+        except OSError: continue
+        m = next((re.search(r"avd-slot(\d+)$", v) for v in envs if v.startswith("ANDROID_AVD_HOME=")), None)
+        return int(m.group(1)) if m else 0
+    return 0
+
+
 class Emu:
-    """Snapshot q_pre of every running emulator before an emu job, restored with rotation / wm size / density after."""
-    def __init__(self, env, log_path):
-        self.env, self.log, self.saved = env, log_path, {}
+    """Snapshot q_pre of the job slot's running emulators before an emu job, restored with rotation / wm size / density after."""
+    def __init__(self, env, log_path, slot=0):
+        self.env, self.log, self.saved, self.slot = env, log_path, {}, slot
         sdk = env.get("ANDROID_HOME") or env.get("ANDROID_SDK_ROOT") or ""
         self.adb = env.get("QADB") or shutil.which("adb", path=env.get("PATH")) or (
             f"{sdk}/platform-tools/adb" if sdk and os.path.exists(f"{sdk}/platform-tools/adb") else None)
@@ -265,7 +281,8 @@ class Emu:
 
     def serials(self):
         rc, out = self.run("devices")
-        return [l.split()[0] for l in out.splitlines() if l.startswith("emulator-") and l.split()[1:2] == ["device"]]
+        return [l.split()[0] for l in out.splitlines() if l.startswith("emulator-") and l.split()[1:2] == ["device"]
+                and serial_slot(l.split()[0]) == self.slot]
 
     def save(self):
         if not self.on: return "emu hygiene off" if self.adb else "no adb"
@@ -347,8 +364,8 @@ def simulate(s, hist):
     res = {}
     for i, e in order(s):
         while True:
-            w = sum(r[1] for r in run); emu = any(r[2] for r in run)
-            if w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu): break
+            w = sum(r[1] for r in run); emu = sum(r[2] for r in run)
+            if w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu >= EMU_SLOTS): break
             if not run: break
             run.sort(); t = max(t, run.pop(0)[0])
         res[i] = t
@@ -363,7 +380,7 @@ def summary(s=None):
     q = order(s)
     r = sum(1 for e in s["jobs"].values() if e["state"] == "running")
     oldest = max((now() - e["submit"] for _, e in q), default=0)
-    return f"q: {r} running (capacity {w}/{CAP}, emu {emu}/1), {len(q)} queued, oldest waiting {oldest:.0f} s"
+    return f"q: {r} running (capacity {w}/{CAP}, emu {emu}/{EMU_SLOTS}), {len(q)} queued, oldest waiting {oldest:.0f} s"
 
 
 # ---- commands --------------------------------------------------------------------------------------------------
@@ -461,7 +478,10 @@ def cmd_run(a):
                 e["cancel"] = "worktree removed"; break
             q = order(s)
             w, emu = used(s)
-            if q and q[0][0] == i and w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu):
+            if q and q[0][0] == i and w + e["weight"] <= CAP and not (e["kind"] == "emu" and emu >= EMU_SLOTS):
+                if e["kind"] == "emu":
+                    taken = {x.get("emu_slot", 0) for x in s["jobs"].values() if x["state"] == "running" and x["kind"] == "emu"}
+                    e["emu_slot"] = min(set(range(EMU_SLOTS)) - taken)
                 e["state"] = "running"; e["start"] = now(); break
         time.sleep(POLL)
     e = e or {}
@@ -484,7 +504,11 @@ def cmd_run(a):
         st.update(start=None); st.setdefault("reason", "cancelled")
         finish(i, job, st, "cancelled", EXIT_CANCELLED, out_path); return
     st.update(start=now(), lock="shared"); wjson(f"{d}/status.json", st)
-    emu = Emu(env, f"{d}/emu.log") if job["kind"] == "emu" else None
+    slot = e.get("emu_slot", 0)
+    if job["kind"] == "emu":
+        env.update(QEMU_SLOT=str(slot), QEMU_PORT=str(5600 + 20 * slot))
+        if slot: env["ANDROID_AVD_HOME"] = os.path.expanduser(f"~/.android/avd-slot{slot}")
+    emu = Emu(env, f"{d}/emu.log", slot) if job["kind"] == "emu" else None
     if emu:
         st["emu"] = emu.save(); wjson(f"{d}/status.json", st)
     with os.fdopen(os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as out:
@@ -834,10 +858,12 @@ def cmd_selftest(a):
         done(f, A, B, T, H)
         s = {k: st(v)["start"] for k, v in dict(A=A, B=B, T=T, H=H).items()}
         ok(s["H"] <= s["A"] <= s["B"] <= s["T"], f"priority high first, then FIFO, no overtaking of waiting full B")
-        # emulator token: two emu jobs never overlap though capacity allows both
-        e1 = sub("emu", "sleep", "1"); e2 = sub("emu", "sleep", "1"); t1 = sub("test", "sleep", "0.3")
-        done(e1, e2, t1)
-        ok(st(e2)["start"] >= st(e1)["end"] - 0.01, "emulator token: emu jobs serialised")
+        # emulator slots: two emu jobs overlap on their own AVDs, a third waits for a slot
+        sf = f"{tmp}/slot2"
+        e1 = sub("emu", "sleep", "1"); e2 = sub("emu", "sh", "-c", f'echo "$QEMU_SLOT $QEMU_PORT $ANDROID_AVD_HOME" > {sf}; sleep 2'); e3 = sub("emu", "sleep", "0.2")
+        done(e1, e2, e3)
+        ok(st(e2)["start"] < st(e1)["end"] and st(e3)["start"] >= st(e1)["end"] - 0.01, "emulator slots: two overlap, the third waits")
+        ok(open(sf).read().split()[:2] == ["1", "5620"] and open(sf).read().strip().endswith("avd-slot1"), "emulator slots: the second job gets slot 1's port and AVD")
         # wait exit codes
         w0 = sub("test", "true"); w1 = sub("test", "sh", "-c", "echo boom; exit 3"); w2 = sub("test", "sleep", "30")
         r0 = q("wait", w0, "--max", "20"); r1 = q("wait", w1, "--max", "20"); r2 = q("wait", w2, "--max", "1")
