@@ -120,7 +120,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowWidthSizeClass
@@ -340,7 +340,7 @@ fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                 if (!rail) {
                     val playLabel = str(R.string.play)
                     ExtendedFloatingActionButton(onClick = play, containerColor = fabColor,
-                        modifier = Modifier.clearAndSetSemantics { contentDescription = playLabel },
+                        modifier = Modifier.semantics { contentDescription = playLabel },
                         icon = { Icon(Icons.Default.PlayArrow, null) }, text = { Text(str(R.string.play), maxLines = 1) })
                 }
             },

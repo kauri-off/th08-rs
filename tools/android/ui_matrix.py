@@ -457,7 +457,8 @@ def exercise_row(ui, st, e, lang, n):
             ui.tap(back)
         return
     before = ui.cfg()
-    ui.tap(n)
+    ui.emu.sh(f"input tap {n.cx} {n.cy}")
+    ui.wait(1.2)
     if kind == "bool":
         if ui.cfg() == before:
             ui.problem("switch did not change the value", label)
@@ -465,9 +466,14 @@ def exercise_row(ui, st, e, lang, n):
         if ui.cfg() != before:
             ui.problem("switch did not change back", label)
         return
+    if ui.cfg() != before:
+        ui.problem("opening a control changed its value", label)
     ui.shot(f"ctl_{e['key']}")
+    if ui.dump().find(st["nav_settings"], clickable=True) is not None:
+        ui.problem("control opened nothing", label)
+        return
     ui.back()
-    if ui.dump().find(st["cancel"], clickable=True):
+    if ui.dump().find(st["nav_settings"], clickable=True) is None:
         ui.back()
 
 
