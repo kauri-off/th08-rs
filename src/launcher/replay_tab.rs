@@ -377,9 +377,9 @@ impl Model {
                 let name = if inf.name.is_empty() { "-" } else { &inf.name };
                 (name.to_string(), m, theme::HELP_HI)
             }
-            Err(err) => (
+            Err(_) => (
                 e.file.clone(),
-                i18n::ui_fmt(lang, "rp_damaged", &[("err", err)]),
+                i18n::ui(lang, "rp_damaged").to_string(),
                 theme::DANGER,
             ),
         };
@@ -389,13 +389,14 @@ impl Model {
             .map(|inf| p.layout_no_wrap(group_digits(inf.score), theme::sans(theme::BODY), name_c))
             .ok();
         let sw = score.as_ref().map_or(0.0, |g| g.size().x + 16.0);
-        let tg = p.layout(
+        let tg = theme::wrap(
+            &p,
             title,
             theme::serif(theme::TITLE),
             name_c,
             (w - sw).max(40.0),
         );
-        let mg = p.layout(meta, theme::sans(theme::SMALL), meta_c, w);
+        let mg = theme::wrap(&p, meta, theme::sans(theme::SMALL), meta_c, w);
         let detail = match &e.info {
             Ok(inf) => i18n::ui_fmt(
                 lang,
@@ -408,7 +409,11 @@ impl Model {
             ),
             Err(_) => String::new(),
         };
-        let dg = (!detail.is_empty()).then(|| {
+        // A phone-height window on touch opens the actions of the tapped replay only, so several replays fit.
+        let touch = self.touch_ui();
+        let folded = touch && ui.ctx().content_rect().height() < 420.0;
+        let open = !folded || self.replay_open(i);
+        let dg = (open && !detail.is_empty()).then(|| {
             let mut job = egui::text::LayoutJob::simple(
                 detail,
                 theme::sans(theme::SMALL - 1.0),
@@ -420,7 +425,7 @@ impl Model {
             p.fonts_mut(|f| f.layout_job(job))
         });
         let mut acts = Vec::new();
-        if e.info.is_ok() {
+        if open && e.info.is_ok() {
             acts.push((RowAct::Watch, "rp_watch", can_play));
             acts.push((
                 RowAct::Video,
@@ -429,7 +434,9 @@ impl Model {
             ));
             acts.push((RowAct::Export, "rp_export", true));
         }
-        acts.push((RowAct::Delete, "rp_delete", true));
+        if open {
+            acts.push((RowAct::Delete, "rp_delete", true));
+        }
         let words: Vec<_> = acts
             .iter()
             .map(|(_, k, _)| {
@@ -443,7 +450,6 @@ impl Model {
             })
             .collect();
         // Action words in lines of `w`, at least a word's height apart; on touch, 48 dp cells.
-        let touch = self.touch_ui();
         let gap = theme::BODY * if touch { 2.4 } else { 1.4 };
         let mut pos = Vec::new();
         let (mut ax, mut line) = (0.0, 0usize);
@@ -455,7 +461,13 @@ impl Model {
             pos.push((ax, line));
             ax += g.size().x + gap;
         }
-        let lh = if touch { 56.0 } else { theme::BODY * 1.9 };
+        let lh = if !open {
+            0.0
+        } else if touch {
+            48.0
+        } else {
+            theme::BODY * 1.9
+        };
         let h = 10.0
             + tg.size().y
             + 2.0
@@ -504,14 +516,8 @@ impl Model {
                     egui::Sense::hover()
                 },
             );
-            if touch {
-                let cell = wr.expand2(egui::vec2(14.0, -4.0));
-                let fill = if resp.is_pointer_button_down_on() {
-                    theme::PRESSED
-                } else {
-                    theme::CELL
-                };
-                p.rect_filled(cell, 0.0, fill);
+            if touch && resp.is_pointer_button_down_on() {
+                p.rect_filled(wr.expand2(egui::vec2(14.0, 0.0)), 0.0, theme::PRESSED);
             }
             let c = match (*on, *a) {
                 (false, _) => theme::DISABLED,
@@ -531,7 +537,7 @@ impl Model {
                 out = Some(*a);
             }
         }
-        if out.is_none() && go && can_play && e.info.is_ok() {
+        if out.is_none() && go && !folded && can_play && e.info.is_ok() {
             out = Some(RowAct::Watch);
         }
         out

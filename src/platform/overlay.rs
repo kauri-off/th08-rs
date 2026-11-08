@@ -476,7 +476,8 @@ fn transport_shapes(
     }
     if let Some(text) = &v.now_playing {
         let size = (h as f32 / 30.0).clamp(12.0, 26.0);
-        let g = p.layout(
+        let g = crate::theme::wrap(
+            p,
             text.clone(),
             FontId::proportional(size),
             white(1.0),
@@ -514,7 +515,8 @@ fn transport_shapes(
     }
     if let Some(text) = &v.toast {
         let size = (h as f32 / 26.0).clamp(12.0, 28.0);
-        let g = p.layout(
+        let g = crate::theme::wrap(
+            p,
             text.clone(),
             FontId::proportional(size),
             white(1.0),

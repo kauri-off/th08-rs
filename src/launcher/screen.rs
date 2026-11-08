@@ -15,7 +15,7 @@ const ROW: f32 = 19.5;
 const ROW_H: f32 = 47.0;
 const LABEL_W: f32 = 262.0;
 const SMALL: f32 = 14.0;
-const HINT: f32 = 13.0;
+const HINT: f32 = 14.0;
 
 // The focusable targets of the screen, by identity so the focus survives a re-layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +54,7 @@ pub(super) enum Status<'a> {
 
 // Keyboard focus, the targets of the last pass in order, the reset question, the title art.
 #[derive(Default)]
+#[expect(clippy::struct_excessive_bools, reason = "independent screen flags")]
 pub(super) struct Nav {
     focus: Option<Target>,
     input: theme::Input<Target>,
@@ -66,6 +67,12 @@ pub(super) struct Nav {
     order: Vec<Target>,
     moved: bool,
     reset_ask: bool,
+    // A short window: the game folder is the Settings tab's first row.
+    folder_in_content: bool,
+    // The value column's x offset, one for the whole page.
+    label_w: f32,
+    // The game folder shares its line with Play.
+    beside_play: bool,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     art: Art,
 }
@@ -140,11 +147,14 @@ impl Model {
         let art = matches!(self.nav.art, Art::Ready(_));
         #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         if let Art::Ready(t) = &self.nav.art {
-            // A column of the backdrop around the shrine maiden (x ≈ 365, y 0..440 of 640×480), at the rect's height.
+            // The backdrop around the shrine maiden, right of the title menu's column (x ≥ 250 of 640) and above the
+            // version line (y < 410 of 480); a wider rect zooms in rather than reach the menu text.
             let [iw, ih] = t.size().map(|v| v as f32);
-            let crop_h = ih * 440.0 / 480.0;
-            let crop_w = (rect.width() / rect.height() * crop_h).min(iw);
-            let cx = (iw * 365.0 / 640.0).clamp(crop_w / 2.0, iw - crop_w / 2.0);
+            let (left, room) = (iw * 250.0 / 640.0, iw * 390.0 / 640.0);
+            let aspect = rect.width() / rect.height();
+            let crop_h = (ih * 410.0 / 480.0).min(room / aspect);
+            let crop_w = aspect * crop_h;
+            let cx = (iw * 365.0 / 640.0).clamp(left + crop_w / 2.0, iw - crop_w / 2.0);
             let uv = Rect::from_min_max(
                 pos2((cx - crop_w / 2.0) / iw, 0.0),
                 pos2((cx + crop_w / 2.0) / iw, crop_h / ih),
@@ -340,14 +350,11 @@ impl Model {
     fn help_of(&self, t: Target, lang: Lang) -> String {
         let text = match t {
             Target::Play if !self.folder_ok() => i18n::ui(lang, "select_folder_first"),
-            Target::Play => i18n::ui(lang, "help_play"),
-            Target::Folder if !self.game_dir().is_empty() => {
-                return tilde(self.game_dir().trim_end_matches(['/', '\\']));
-            }
+            Target::Play => self.play_help(lang),
             Target::Folder => crate::settings::find("game_dir").map_or("", |e| i18n::help(lang, e)),
             Target::Row(k) => i18n::help(lang, self.row(k).e),
             Target::Developer => i18n::ui(lang, "developer_hint"),
-            Target::Reset => i18n::ui(lang, "reset"),
+            Target::Reset => i18n::ui(lang, "help_reset"),
             Target::Back => i18n::ui(lang, "help_error_back"),
             Target::Exit => i18n::ui(lang, "help_error_quit"),
             #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -364,6 +371,17 @@ impl Model {
         let mut c = text.chars();
         c.next()
             .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+    }
+
+    // Play's help line: on the Replays and Stats tabs it says what the page is, Play being in every tab's head.
+    fn play_help(&self, lang: Lang) -> &'static str {
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        match self.tab {
+            super::Tab::Replays => return i18n::ui(lang, "help_tab_replays"),
+            super::Tab::Stats => return i18n::ui(lang, "help_tab_stats"),
+            super::Tab::Settings => {}
+        }
+        i18n::ui(lang, "help_play")
     }
 
     // The row's mark: the focus bar under key / pad input, a hover band under the pointer, pressed on touch.
@@ -395,6 +413,17 @@ impl Model {
     // Touch input: no key hints or key letters, a touch device line.
     pub(super) fn touch_ui(&self) -> bool {
         self.touch || self.nav.input.modality == theme::Modality::Touch
+    }
+
+    // Replay `i` shows its actions on a folded list: it was tapped last.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    pub(super) fn replay_open(&self, i: usize) -> bool {
+        self.nav.focus == Some(Target::Replay(i))
+    }
+
+    // A row carries the focus bar.
+    pub(super) fn focus_shown(&self) -> bool {
+        self.nav.input.bar() && self.nav.focus.is_some()
     }
 
     // `t` is drawn bright: it has the focus bar or the pointer.
@@ -431,141 +460,149 @@ impl Model {
         let full = ui.max_rect();
         let screen = ui.ctx().viewport_rect();
         let p = ui.painter().with_clip_rect(screen);
-        let (art_w, panel, x, right) = self.frame(ui, &p, full, screen);
+        let (_, panel, x, right) = self.frame(ui, &p, full, screen);
         let w = right - x;
         let band_x = panel.min.x + 6.0..=screen.max.x;
+        // At rest Play holds the focus bar, so a pad or keyboard user has a starting point.
         if self.nav.focus.is_none() {
             self.nav.focus = Some(Target::Play);
+            self.nav.input.modality = theme::Modality::Keys;
         }
         self.nav.order.clear();
         let ver = i18n::ui_fmt(lang, "version", &[("version", &super::version_line())]);
         let caption = i18n::ui_fmt(lang, "launcher_caption", &[("version", &ver)]);
-        // Short windows (under 600 pt) pack the head closer so the rows keep most of the height; under 500 pt with
-        // the title art beside it the heading (the art's title) is left out.
-        let compact = full.height() < 600.0;
-        // A phone-sized window: the heading on one line, Play beside the game folder.
-        let phone = full.height() < 420.0;
-        let bare = full.height() < 500.0 && art_w > 0.0 && !phone;
-        let (head_y, play_y, play_h) = if phone {
-            (8.0, 58.0, 56.0)
-        } else if bare {
-            (0.0, 8.0, PLAY_H - 12.0)
-        } else if compact {
-            (12.0, 78.0, PLAY_H - 10.0)
-        } else {
-            (26.0, 112.0, PLAY_H)
-        };
-        // Phone: the title on one line with the tabs beside it (the caption instead where there are no tabs);
-        // without room for both the tabs keep the line and the art strip carries the title.
-        let tabs_in_head = phone && cfg!(not(any(target_arch = "wasm32", target_os = "android")));
-        if phone {
+        // Windows under 800 pt tall set the title on the tab line and Play beside the game folder; under 420 pt
+        // Play joins that line too and the game folder becomes the Settings tab's first row.
+        let compact = full.height() < 800.0;
+        let short = full.height() < 420.0;
+        let tabs_ok = cfg!(not(any(target_arch = "wasm32", target_os = "android")));
+        let play_word = p
+            .layout_no_wrap(
+                i18n::ui(lang, "play").to_string(),
+                theme::serif(PLAY),
+                theme::TEXT,
+            )
+            .size()
+            .x;
+        let play_w = (play_word + 48.0).max(w * 0.2);
+        let mut y;
+        if compact {
+            let line_h = if short { 54.0 } else { 44.0 };
+            let ty = full.min.y + 8.0;
+            let head_right = if short { right - play_w - 16.0 } else { right };
             let g = p.layout_no_wrap(
                 i18n::ui(lang, "launcher_title").to_string(),
                 theme::serif(HEAD * 0.72),
                 theme::TEXT_HI,
             );
             let (gw, gh) = (g.size().x, g.size().y);
-            let ty = full.min.y + head_y;
-            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-            {
-                let tw = self.tabs_width(&p, lang);
-                let tx = if gw + 36.0 + tw <= w {
-                    theme::outlined(&p, pos2(x, ty), g.clone(), theme::TEXT_HI, false);
-                    x + gw + 36.0
-                } else {
-                    x
-                };
-                self.tab_bar(ui, &p, pos2(tx, ty + 2.0), lang);
-            }
-            if !tabs_in_head {
-                theme::outlined(&p, pos2(x, ty), g, theme::TEXT_HI, false);
-                let c = p.layout(
+            let gy = ty + (line_h - gh) / 2.0 - 4.0;
+            if tabs_ok {
+                #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+                {
+                    let tw = self.tabs_width(&p, lang);
+                    // Without room for both the tabs keep the line; the art strip carries the title.
+                    let tx = if gw + 36.0 + tw <= head_right - x {
+                        theme::outlined(&p, pos2(x, gy), g, theme::TEXT_HI, false);
+                        x + gw + 36.0
+                    } else {
+                        x
+                    };
+                    self.tab_bar(
+                        ui,
+                        &p,
+                        pos2(tx, ty + (line_h - ROW * 1.3) / 2.0 - 4.0),
+                        lang,
+                    );
+                }
+            } else {
+                theme::outlined(&p, pos2(x, gy), g, theme::TEXT_HI, false);
+                let c = theme::wrap(
+                    &p,
                     caption.clone(),
                     theme::serif(CAP),
                     theme::ACCENT,
-                    (w - gw - 16.0).max(40.0),
+                    (head_right - x - gw - 16.0).max(40.0),
                 );
                 let ch = c.size().y;
-                theme::caption_text(&p, pos2(x + gw + 16.0, ty + gh - ch - 4.0), c);
+                if x + gw + 16.0 + c.size().x <= head_right {
+                    theme::caption_text(&p, pos2(x + gw + 16.0, gy + gh - ch - 4.0), c);
+                }
             }
-            theme::rule(&p, egui::Rangef::new(x, right), ty + 44.0);
-        } else if !bare {
+            if short {
+                let r = Rect::from_min_size(pos2(right - play_w, ty), vec2(play_w, line_h));
+                let band = Rect::from_x_y_ranges(r.min.x - 14.0..=screen.max.x, r.y_range());
+                if self.play_row(ui, &p, r.translate(vec2(18.0, 0.0)), band, lang) {
+                    act = Some(Action::Play);
+                }
+            }
+            y = ty + line_h + 6.0;
+            theme::rule(&p, egui::Rangef::new(x, right), y);
+            if !short {
+                // Play, the game folder beside it.
+                let r = Rect::from_min_size(pos2(x, y + 6.0), vec2(play_w, 56.0));
+                let band = Rect::from_x_y_ranges(panel.min.x + 6.0..=r.max.x, r.y_range());
+                if self.play_row(ui, &p, r, band, lang) {
+                    act = Some(Action::Play);
+                }
+                let fr = Rect::from_x_y_ranges(r.max.x + 24.0..=x + w, r.y_range());
+                let folder_band =
+                    Rect::from_x_y_ranges(fr.min.x - 12.0..=screen.max.x, fr.y_range());
+                let resp = self.target(ui, &p, folder_band, Target::Folder);
+                self.folder_row(ui, &p, fr, lang, resp.clicked());
+                y = r.max.y + 6.0;
+                theme::rule(&p, egui::Rangef::new(x, right), y);
+            }
+            y += 6.0;
+        } else {
             theme::heading(
                 &p,
-                pos2(x, full.min.y + head_y),
+                pos2(x, full.min.y + 26.0),
                 i18n::ui(lang, "launcher_title"),
                 &caption,
                 HEAD,
                 CAP,
             );
-        }
-        let mut y = full.min.y + play_y;
-        // Play.
-        let play_w = if phone {
-            let pw = p
-                .layout_no_wrap(
-                    i18n::ui(lang, "play").to_string(),
-                    theme::serif(PLAY),
-                    theme::TEXT,
-                )
-                .size()
-                .x;
-            (pw + 40.0).max(w * 0.22)
-        } else {
-            w
-        };
-        let r = Rect::from_min_size(pos2(x, y), vec2(play_w, play_h));
-        let play_band = if phone {
-            Rect::from_x_y_ranges(panel.min.x + 6.0..=r.max.x, r.y_range())
-        } else {
-            Rect::from_x_y_ranges(band_x.clone(), r.y_range())
-        };
-        let resp = self.target(ui, &p, play_band, Target::Play);
-        let ok = self.can_play();
-        let focused = self.shows(Target::Play);
-        let color = match (ok, focused) {
-            (false, _) => theme::DISABLED,
-            (true, true) => theme::TEXT_HI,
-            (true, false) => theme::TEXT,
-        };
-        text_in(
-            &p,
-            r,
-            i18n::ui(lang, "play"),
-            theme::serif(PLAY),
-            color,
-            focused && ok,
-        );
-        if resp.clicked() && ok {
-            act = Some(Action::Play);
-        }
-        // Game folder: under Play, or beside it on a phone.
-        let fr = if phone {
-            Rect::from_x_y_ranges(r.max.x + 24.0..=x + w, r.y_range())
-        } else {
-            y += play_h + if compact { 2.0 } else { 6.0 };
-            Rect::from_min_size(pos2(x, y), vec2(w, if compact { 52.0 } else { 58.0 }))
-        };
-        let folder_band = if phone {
-            Rect::from_x_y_ranges(fr.min.x - 12.0..=screen.max.x, fr.y_range())
-        } else {
-            Rect::from_x_y_ranges(band_x.clone(), fr.y_range())
-        };
-        let resp = self.target(ui, &p, folder_band, Target::Folder);
-        if phone {
-            y = fr.min.y;
-        }
-        self.folder_row(ui, &p, fr, lang, resp.clicked());
-        y += fr.height() + 6.0;
-        theme::rule(&p, egui::Rangef::new(x, right), y);
-        // Tabs.
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-        if !tabs_in_head {
-            self.tab_bar(ui, &p, pos2(x, y + if compact { 10.0 } else { 16.0 }), lang);
-            y += if compact { 46.0 } else { 58.0 };
+            y = full.min.y + 112.0;
+            let r = Rect::from_min_size(pos2(x, y), vec2(w, PLAY_H));
+            let band = Rect::from_x_y_ranges(band_x.clone(), r.y_range());
+            if self.play_row(ui, &p, r, band, lang) {
+                act = Some(Action::Play);
+            }
+            y += PLAY_H + 6.0;
+            let fr = Rect::from_min_size(pos2(x, y), vec2(w, 58.0));
+            let resp = self.target(
+                ui,
+                &p,
+                Rect::from_x_y_ranges(band_x.clone(), fr.y_range()),
+                Target::Folder,
+            );
+            self.folder_row(ui, &p, fr, lang, resp.clicked());
+            y += fr.height() + 6.0;
             theme::rule(&p, egui::Rangef::new(x, right), y);
+            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            {
+                self.tab_bar(ui, &p, pos2(x, y + 16.0), lang);
+                y += 58.0;
+                theme::rule(&p, egui::Rangef::new(x, right), y);
+            }
+            y += 10.0;
         }
-        y += if compact { 8.0 } else { 10.0 };
+        self.nav.folder_in_content = short;
+        self.nav.beside_play = compact && !short;
+        let labels: Vec<&str> = self
+            .rows
+            .iter()
+            .filter(|r| r.e.audience != Audience::Dev || self.dev)
+            .map(|r| i18n::label(lang, r.e))
+            .collect();
+        self.nav.label_w = theme::label_width(
+            &p,
+            &labels,
+            &theme::serif(ROW),
+            LABEL_W.min(w * 0.42),
+            w * 0.5,
+        );
         // Bottom: help line (as tall as its text), hints, device.
         let shown = if self.nav.input.bar() || self.touch_ui() {
             self.nav.focus
@@ -573,7 +610,7 @@ impl Model {
             self.nav.input.hovered()
         };
         let help = shown.map(|t| self.help_of(t, lang)).unwrap_or_default();
-        let help_g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
+        let help_g = theme::wrap(&p, help, theme::sans(SMALL), theme::HELP_HI, w);
         let help_h = help_g.size().y.max(SMALL * 1.3);
         // Touch has no key hints: the help line takes the bottom.
         let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
@@ -610,7 +647,7 @@ impl Model {
         if touch {
             hints.clear();
         }
-        let hw = theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
+        let hw = theme::key_hints_fit(&p, pos2(x, hint_y), &hints, HINT, w);
         let dev = p.layout_no_wrap(
             i18n::ui(
                 lang,
@@ -637,7 +674,7 @@ impl Model {
     }
 
     // Starting / loading / start failure in the launcher's frame: title art, heading, the status, and on a failure
-    // a short cause, the message as helper text and Choose folder / Back / Quit as rows.
+    // the cause in words, the message under a Details caption and Choose folder / Back / Quit as rows.
     #[expect(clippy::too_many_lines, reason = "one painted screen, top to bottom")]
     pub(super) fn status_screen(&mut self, ui: &mut Ui, status: &Status<'_>) -> Option<Action> {
         let lang = self.lang();
@@ -655,7 +692,8 @@ impl Model {
         let p = ui.painter().with_clip_rect(screen);
         let (_, panel, x, right) = self.frame(ui, &p, full, screen);
         let w = right - x;
-        let compact = full.height() < 600.0;
+        let compact = full.height() < 800.0;
+        let short = full.height() < 420.0;
         let ver = i18n::ui_fmt(lang, "version", &[("version", &super::version_line())]);
         let caption = i18n::ui_fmt(lang, "launcher_caption", &[("version", &ver)]);
         let head = if error {
@@ -663,42 +701,22 @@ impl Model {
         } else {
             i18n::ui(lang, "launcher_title")
         };
+        let top = full.min.y + if compact { 12.0 } else { 26.0 };
         let hh = theme::heading(
             &p,
-            pos2(x, full.min.y + if compact { 12.0 } else { 26.0 }),
+            pos2(x, top),
             head,
             if error { "" } else { &caption },
-            if full.height() < 420.0 {
-                HEAD * 0.8
-            } else {
-                HEAD
-            },
+            if short { HEAD * 0.8 } else { HEAD },
             CAP,
         );
-        let mut y =
-            full.min.y + if compact { 12.0 } else { 26.0 } + hh + if compact { 16.0 } else { 28.0 };
+        let y = top + hh + if compact { 14.0 } else { 28.0 };
         // Body text at most about 70 characters wide.
         let measure = w.min(SMALL * 38.0);
         let Status::Error(msg) = status else {
             self.progress_body(ui, &p, status, x, w, measure, full);
             return None;
         };
-        // A phone-sized window sets the cause smaller so the message keeps room above the rows.
-        let cause_size = if full.height() < 420.0 {
-            SMALL + 2.0
-        } else {
-            ROW
-        };
-        let cause = p.layout(
-            i18n::ui(lang, "start_failed_body").to_string(),
-            theme::serif(cause_size),
-            theme::TEXT,
-            measure,
-        );
-        let ch = cause.size().y;
-        theme::outlined(&p, pos2(x, y), cause, theme::TEXT, false);
-        y += ch + 14.0;
-        let band_x = panel.min.x + 6.0..=screen.max.x;
         let native = matches!(self.folder, Folder::Native)
             && cfg!(not(any(target_arch = "wasm32", target_os = "android")));
         let mut rows: Vec<(Target, &str)> = Vec::new();
@@ -709,16 +727,19 @@ impl Model {
         if cfg!(not(target_arch = "wasm32")) {
             rows.push((Target::Exit, i18n::ui(lang, "quit")));
         }
+        // At rest the first action holds the focus bar.
         if !self
             .nav
             .focus
             .is_some_and(|f| rows.iter().any(|r| r.0 == f))
         {
             self.nav.focus = Some(rows[0].0);
+            self.nav.input.modality = theme::Modality::Keys;
         }
-        // Bottom up: hints, help line, the rows, a rule; the message scrolls in what is left.
+        // Bottom up: hints, the help line; the cause, the details and the rows scroll above them.
+        let touch = self.touch_ui();
         let hint_y = full.max.y - if compact { 28.0 } else { 34.0 };
-        let shown = if self.nav.input.bar() || self.touch_ui() {
+        let shown = if self.nav.input.bar() || touch {
             self.nav.focus
         } else {
             self.nav.input.hovered()
@@ -728,47 +749,85 @@ impl Model {
             Some(t) => self.help_of(t, lang),
             None => String::new(),
         };
-        let help_g = p.layout(help, theme::sans(SMALL), theme::HELP_HI, w);
+        let help_g = theme::wrap(&p, help, theme::sans(SMALL), theme::HELP_HI, w);
         let help_h = help_g.size().y.max(SMALL * 1.3);
-        let help_y = hint_y - help_h - if compact { 10.0 } else { 20.0 };
-        // The rows follow the message; a long message scrolls above rows pinned over the help line.
-        let msg_h = p
-            .layout(
-                (*msg).to_string(),
-                theme::sans(SMALL),
-                theme::HELP,
-                measure - 16.0,
-            )
-            .size()
-            .y;
-        let rows_top = (help_y - 14.0 - rows.len() as f32 * ROW_H - 8.0)
-            .min(y + msg_h + if compact { 16.0 } else { 28.0 });
-        theme::rule(&p, egui::Rangef::new(x, right), rows_top);
+        let help_y = if touch {
+            full.max.y - help_h - 10.0
+        } else {
+            hint_y - help_h - if compact { 10.0 } else { 20.0 }
+        };
+        let bottom = help_y - if compact { 8.0 } else { 14.0 };
+        theme::rule(&p, egui::Rangef::new(x, right), bottom);
         self.nav.order.clear();
-        let mut ry = rows_top + 8.0;
-        for (t, text) in &rows {
-            let r = Rect::from_min_size(pos2(x, ry), vec2(w, ROW_H));
-            let resp = self.target(
-                ui,
-                &p,
-                Rect::from_x_y_ranges(band_x.clone(), r.y_range()),
-                *t,
-            );
-            let lit = self.shows(*t);
-            let color = if lit { theme::TEXT_HI } else { theme::TEXT };
-            text_in(&p, r, text, theme::serif(ROW + 1.0), color, lit);
-            if resp.clicked() {
-                act = match t {
-                    Target::Folder => {
-                        self.change_folder();
-                        (self.game_dir() != dir).then_some(Action::Back)
+        let body = Rect::from_x_y_ranges(panel.min.x + 4.0..=screen.max.x, y..=bottom - 2.0);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(body)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        child.set_clip_rect(body);
+        let cause = super::error_cause(lang, msg);
+        let detail = super::error_detail(msg);
+        let row_h = if short { ROW_H - 3.0 } else { ROW_H };
+        let out = egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| {
+                let p = ui.painter().clone();
+                let cg = theme::wrap(
+                    &p,
+                    cause.to_string(),
+                    theme::serif(if short { SMALL + 2.0 } else { ROW }),
+                    theme::TEXT,
+                    measure,
+                );
+                let (r, _) = ui.allocate_exact_size(
+                    vec2(ui.max_rect().width(), cg.size().y + 10.0),
+                    Sense::hover(),
+                );
+                theme::outlined(&p, pos2(x, r.min.y), cg, theme::TEXT, false);
+                let dc = p.layout_no_wrap(
+                    i18n::ui(lang, "err_details").to_string(),
+                    theme::sans(SMALL - 1.0),
+                    theme::NOTE,
+                );
+                let dg = theme::wrap(&p, detail.clone(), theme::sans(SMALL), theme::HELP, measure);
+                let (r, _) = ui.allocate_exact_size(
+                    vec2(
+                        ui.max_rect().width(),
+                        dc.size().y + 2.0 + dg.size().y + if short { 8.0 } else { 14.0 },
+                    ),
+                    Sense::hover(),
+                );
+                let dh = dc.size().y;
+                theme::shadowed(&p, pos2(x, r.min.y), dc, theme::NOTE);
+                theme::shadowed(&p, pos2(x, r.min.y + dh + 2.0), dg, theme::HELP);
+                let (r, _) =
+                    ui.allocate_exact_size(vec2(ui.max_rect().width(), 6.0), Sense::hover());
+                theme::rule(&p, egui::Rangef::new(x, right), r.min.y);
+                for (t, text) in &rows {
+                    let (r, _) =
+                        ui.allocate_exact_size(vec2(ui.max_rect().width(), row_h), Sense::hover());
+                    let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+                    let band = Rect::from_x_y_ranges(panel.min.x + 6.0..=screen.max.x, r.y_range());
+                    let resp = self.target(ui, &p, band, *t);
+                    let lit = self.shows(*t);
+                    let color = if lit { theme::TEXT_HI } else { theme::TEXT };
+                    text_in(&p, row, text, theme::serif(ROW + 1.0), color, lit);
+                    if resp.clicked() {
+                        act = match t {
+                            Target::Folder => {
+                                self.change_folder();
+                                (self.game_dir() != dir).then_some(Action::Back)
+                            }
+                            Target::Back => Some(Action::Back),
+                            _ => Some(Action::Quit),
+                        };
                     }
-                    Target::Back => Some(Action::Back),
-                    _ => Some(Action::Quit),
-                };
-            }
-            ry += ROW_H;
-        }
+                }
+                ui.add_space(8.0);
+            });
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body, out.content_size.y);
+        theme::scroll_edges(ui, &out);
         theme::shadowed(&p, pos2(x, help_y), help_g, theme::HELP_HI);
         let mut hints = vec![
             ("↑↓", i18n::ui(lang, "hint_move")),
@@ -777,34 +836,9 @@ impl Model {
         if cfg!(not(target_arch = "wasm32")) {
             hints.push(("Esc", i18n::ui(lang, "hint_quit")));
         }
-        if !self.touch_ui() {
-            theme::key_hints(&p, pos2(x, hint_y), &hints, HINT);
+        if !touch {
+            theme::key_hints_fit(&p, pos2(x, hint_y), &hints, HINT, w);
         }
-        // The message box holds whole lines only; the rest scrolls.
-        let line = p
-            .layout_no_wrap("Ag".into(), theme::sans(SMALL), theme::HELP)
-            .size()
-            .y;
-        let lines = ((rows_top - 12.0 - y) / line).floor().max(1.0);
-        let body = Rect::from_x_y_ranges(x..=x + measure, y..=y + lines * line);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-        child.set_clip_rect(body);
-        let out = egui::ScrollArea::vertical()
-            .min_scrolled_height(body.height())
-            .max_height(body.height())
-            .auto_shrink([false, false])
-            .show(&mut child, |ui| {
-                let g = ui.painter().layout(
-                    (*msg).to_string(),
-                    theme::sans(SMALL),
-                    theme::HELP,
-                    ui.available_width().min(measure - 16.0),
-                );
-                let (rr, _) = ui.allocate_exact_size(g.size(), Sense::hover());
-                theme::shadowed(ui.painter(), rr.min, g, theme::HELP);
-            });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, body);
-        theme::scroll_edges(ui, &out);
         self.nav.moved = false;
         if self.nav.input.end() {
             ui.ctx().request_repaint();
@@ -834,7 +868,8 @@ impl Model {
             Status::Error(_) => unreachable!(),
         };
         let mid = full.min.y + full.height() * 0.42;
-        let g = p.layout(
+        let g = theme::wrap(
+            p,
             theme::latin_ellipsis(line).into_owned(),
             theme::serif(PLAY),
             theme::TEXT,
@@ -864,9 +899,35 @@ impl Model {
             hy += SMALL * 2.2;
         }
         if let Status::Waiting(Some(note)) = status {
-            let g = p.layout(note.clone(), theme::sans(SMALL), theme::WARN, measure);
+            let g = theme::wrap(p, note.clone(), theme::sans(SMALL), theme::WARN, measure);
             theme::shadowed(p, pos2(x, hy), g, theme::WARN);
         }
+    }
+
+    // Play, the primary action: white with the lavender tick at rest, the focus band under keys / pad, and on touch
+    // the band always. True when clicked.
+    fn play_row(&mut self, ui: &Ui, p: &Painter, r: Rect, band: Rect, lang: Lang) -> bool {
+        let resp = self.target(ui, p, band, Target::Play);
+        let ok = self.can_play();
+        let bar = self.nav.input.bar() && self.nav.focus == Some(Target::Play);
+        if ok && !bar {
+            if self.touch_ui() {
+                theme::focus(p, band, 4.0, resp.is_pointer_button_down_on());
+            } else {
+                theme::tick(p, band, 4.0);
+            }
+        }
+        let color = if ok { theme::TEXT_HI } else { theme::DISABLED };
+        let glow = ok && (self.shows(Target::Play) || self.touch_ui());
+        text_in(
+            p,
+            r,
+            i18n::ui(lang, "play"),
+            theme::serif(PLAY),
+            color,
+            glow,
+        );
+        resp.clicked() && ok
     }
 
     // "Game folder", the path and its state, "Change…".
@@ -874,8 +935,10 @@ impl Model {
         let focused = self.shows(Target::Folder);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
         // A narrow row (beside Play on a phone) leaves out the label: the path and its state say what it is.
-        let label_w = if r.width() < 600.0 {
+        let label_w = if r.width() < 480.0 {
             0.0
+        } else if r.width() >= self.nav.label_w * 2.0 && !self.nav.beside_play {
+            self.nav.label_w
         } else {
             LABEL_W.min(r.width() * 0.3)
         };
@@ -968,7 +1031,7 @@ impl Model {
         let keys = if self.touch_ui() {
             0.0
         } else {
-            2.0 * HINT + 24.0
+            theme::keycap_w(p, "Q", HINT) + theme::keycap_w(p, "E", HINT) + 4.0
         };
         words - 28.0 + keys
     }
@@ -981,16 +1044,16 @@ impl Model {
             (super::Tab::Stats, "tab_stats"),
         ];
         let size = ROW;
-        let key = |p: &Painter, x: f32, k: &str| -> f32 {
-            let g = p.layout_no_wrap(k.to_string(), theme::sans(HINT), theme::KEYCAP);
-            let w = g.size().x;
-            theme::shadowed(p, pos2(x, at.y + ROW * 0.5), g, theme::KEYCAP);
-            w
-        };
+        let cy = at.y
+            + p.layout_no_wrap("Ag".into(), theme::serif(size), theme::TEXT)
+                .size()
+                .y
+                / 2.0;
+        let key = |p: &Painter, x: f32, k: &str| -> f32 { theme::keycap_at(p, x, cy, k, HINT) };
         let keys = !self.touch_ui();
         let mut x = at.x;
         if keys {
-            x += key(p, x, "Q") + 18.0;
+            x += key(p, x, "Q") + 16.0;
         }
         for (t, id) in all {
             let sel = self.tab == t;
@@ -1016,7 +1079,7 @@ impl Model {
             x += gw + 28.0;
         }
         if keys {
-            key(p, x - 6.0, "E");
+            key(p, x - 12.0, "E");
         }
     }
 
@@ -1043,6 +1106,15 @@ impl Model {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(4.0);
+                if self.nav.folder_in_content {
+                    let full = ui.max_rect();
+                    let (r, _) = ui.allocate_exact_size(vec2(full.width(), 58.0), Sense::hover());
+                    let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+                    let band = Rect::from_x_y_ranges(full.min.x + 2.0..=full.max.x, r.y_range());
+                    let p = ui.painter().clone();
+                    let resp = self.target(ui, &p, band, Target::Folder);
+                    self.folder_row(ui, &p, row, lang, resp.clicked());
+                }
                 padded(ui, left, w, |ui| {
                     #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
                     if let Some(a) = self.update_ui(ui, lang) {
@@ -1082,7 +1154,7 @@ impl Model {
                 self.more_rows(ui, x, w, lang);
                 ui.add_space(12.0);
             });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, ui.max_rect());
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, ui.max_rect(), out.content_size.y);
         theme::scroll_edges(ui, &out);
         act
     }
@@ -1158,7 +1230,7 @@ impl Model {
         };
         let focused = self.shows(t);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
-        let label_w = LABEL_W.min(w * 0.42);
+        let label_w = self.nav.label_w;
         let lr = Rect::from_min_size(row.min, vec2(label_w - 12.0, ROW_H));
         text_in(
             &p,
@@ -1239,7 +1311,7 @@ impl Model {
         let resp = self.target(ui, &p, band, t);
         let focused = self.shows(t);
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
-        let label_w = LABEL_W.min(w * 0.42);
+        let label_w = self.nav.label_w;
         text_in(
             &p,
             Rect::from_min_size(row.min, vec2(label_w - 12.0, ROW_H)),
@@ -1327,7 +1399,7 @@ impl Model {
         self.poll_saves(ui, lang);
         caption(ui, x, w, i18n::ui(lang, "saves_title"));
         let full = ui.max_rect();
-        let label_w = LABEL_W.min(w * 0.42);
+        let label_w = self.nav.label_w;
         for t in [Target::SavesExport, Target::SavesImport, Target::SavesCfg] {
             let (r, _) = ui.allocate_exact_size(vec2(full.width(), ROW_H), Sense::hover());
             let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
@@ -1401,7 +1473,7 @@ impl Model {
     fn more_rows(&mut self, ui: &mut Ui, x: f32, w: f32, lang: Lang) {
         caption(ui, x, w, i18n::ui(lang, "more_title"));
         let full = ui.max_rect();
-        let label_w = LABEL_W.min(w * 0.42);
+        let label_w = self.nav.label_w;
         for t in [Target::Developer, Target::Reset] {
             let (r, _) = ui.allocate_exact_size(vec2(full.width(), ROW_H), Sense::hover());
             let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
@@ -1536,6 +1608,46 @@ impl Model {
         go
     }
 
+    // A heading line with Refresh at its right end, the row being Refresh's target; true when chosen.
+    pub(super) fn summary_row(
+        &mut self,
+        ui: &mut Ui,
+        x: f32,
+        w: f32,
+        text: &str,
+        lang: Lang,
+    ) -> bool {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.max_rect().width(), ROW_H), Sense::hover());
+        let row = Rect::from_x_y_ranges(x..=x + w, r.y_range());
+        let t = Target::Action("rp_refresh");
+        let (_, go) = self.row_target(ui, row, t);
+        let lit = self.shows(t);
+        let p = ui.painter();
+        let word = p.layout_no_wrap(
+            i18n::ui(lang, "rp_refresh").to_string(),
+            theme::serif(ROW),
+            theme::TEXT,
+        );
+        let ww = word.size().x;
+        let color = if lit { theme::TEXT_HI } else { theme::TEXT };
+        theme::outlined(
+            p,
+            pos2(row.max.x - ww, row.center().y - word.size().y / 2.0),
+            word,
+            color,
+            lit,
+        );
+        text_in(
+            p,
+            Rect::from_x_y_ranges(row.min.x..=row.max.x - ww - 20.0, row.y_range()),
+            text,
+            theme::serif(theme::BODY + 2.0),
+            theme::TEXT_HI,
+            false,
+        );
+        go
+    }
+
     // A labelled word choice (sort order, filters): the picked index when it changes.
     #[expect(clippy::too_many_arguments, reason = "one painted row")]
     pub(super) fn choice_row(
@@ -1621,7 +1733,7 @@ impl Model {
                 ui.add_space(12.0);
                 r
             });
-        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, space);
+        crate::uicheck::note_scroll(ui.ctx(), out.inner_rect, space, out.content_size.y);
         theme::scroll_edges(ui, &out);
         out.inner
     }
@@ -1633,9 +1745,13 @@ pub(super) fn note(ui: &mut Ui, x: f32, w: f32, text: &str, size: f32, color: eg
     if text.is_empty() {
         return;
     }
-    let g = ui
-        .painter()
-        .layout(text.to_string(), theme::sans(size), color, w.max(10.0));
+    let g = theme::wrap(
+        ui.painter(),
+        text.to_string(),
+        theme::sans(size),
+        color,
+        w.max(10.0),
+    );
     let (r, _) = ui.allocate_exact_size(
         vec2(ui.max_rect().width(), g.size().y + 8.0),
         Sense::hover(),
@@ -1661,7 +1777,8 @@ pub(super) fn text_in(
     color: egui::Color32,
     glow: bool,
 ) {
-    let g = p.layout(
+    let g = theme::wrap(
+        p,
         theme::latin_ellipsis(text).into_owned(),
         font,
         color,

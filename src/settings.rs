@@ -612,7 +612,7 @@ pub const ENTRIES: &[Entry] = &[
         platforms: Platforms::ALL,
         persist: true,
         live: true,
-        help: "language of this screen and the port menu: auto (system language), ja, en or ru",
+        help: "language of this screen and the port menu; System follows the device",
         set: |s, v| {
             s.language = match v.trim() {
                 "auto" => None,
@@ -1038,7 +1038,7 @@ pub const ENTRIES: &[Entry] = &[
         platforms: Platforms::ALL,
         persist: true,
         live: true,
-        help: "colour filter on the window picture: off, protan, deutan, tritan (colour-vision correction) or high_contrast",
+        help: "recolours the window picture for colour-vision deficiencies, or raises its contrast",
         set: |s, v| {
             use th08_render::gfx::ColorFilter;
             s.blit.color = match v.trim() {
@@ -1404,7 +1404,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 25, max: 400 },
         default: "100",
         group: Group::Touch,
-        label: "Drag sensitivity %",
+        label: "Drag sensitivity",
         summary: "How far the player moves per finger move",
         unit: "%",
         words: &[],
@@ -1469,7 +1469,7 @@ pub const ENTRIES: &[Entry] = &[
         kind: Kind::Int { min: 10, max: 100 },
         default: "50",
         group: Group::Touch,
-        label: "Overlay opacity %",
+        label: "Overlay opacity",
         summary: "How visible the on-screen buttons are",
         unit: "%",
         words: &[],

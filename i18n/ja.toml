@@ -25,7 +25,14 @@ starting = "ゲームを起動しています…"
 waiting_hint = "押し続けると設定画面"
 loading = "th08.dat を読み込んでいます…"
 start_failed = "ゲームを起動できませんでした"
-start_failed_body = "詳細は下にあります。多くの場合、ゲームフォルダの指定が違います。th08.dat のあるフォルダを選んでください。"
+start_failed_body = "多くの場合、ゲームフォルダの指定が違います。th08.dat のあるフォルダを選んでください。"
+err_missing = "ゲームのファイルが見つかりません。th08.dat と thbgm.dat のあるフォルダを選んでください。"
+err_damaged = "th08.dat を読み込めません。ファイルが壊れているか、東方永夜抄のものではありません。"
+err_denied = "このフォルダを読み込む権限がありません。権限を確認するか、別のフォルダを選んでください。"
+err_details = "詳細"
+help_reset = "この画面の設定をすべて初期状態に戻します。"
+help_tab_replays = "保存したリプレイを再生、書き出し、削除できます。"
+help_tab_stats = "セーブフォルダに記録されたプレイ時間、プレイ回数、クリア、スペルカードです。"
 choose_folder = "ゲームフォルダを選ぶ…"
 help_choose_folder = "th08.dat か th08.pak のあるフォルダを選んで、もう一度起動します。"
 help_error_back = "ランチャーの設定に戻ります。"
@@ -194,7 +201,7 @@ rp_none = "{dir} にリプレイはありません"
 rp_drop = "ドロップしてリプレイを読み込む"
 rp_detail = "{file} · {date} · 処理落ち {slow}%"
 rp_practice = "練習"
-rp_damaged = "破損: {err}"
+rp_damaged = "破損しているか、永夜抄のリプレイではありません"
 rp_watch = "再生"
 rp_export = "書き出す…"
 rp_delete = "削除"
@@ -295,7 +302,7 @@ ja = "日本語（オリジナル）"
 [entry.language]
 label = "言語"
 summary = "設定画面の言語"
-help = "この画面と移植版メニューの言語: 「システムの言語」、日本語、English、Русский"
+help = "この画面と移植版メニューの言語です。「システムの言語」は端末の設定に従います"
 
 [entry.language.words]
 auto = "システムの言語"
@@ -419,7 +426,7 @@ unit = " フレーム"
 [entry.color_filter]
 label = "カラーフィルタ"
 summary = "色覚やコントラストに合わせて色を調整"
-help = "ウィンドウ画面のカラーフィルタ: 「オフ」、「1 型色覚」「2 型色覚」「3 型色覚」（色覚補正）、「ハイコントラスト」"
+help = "色覚特性に合わせて画面の色を補正するか、コントラストを高めます"
 
 [entry.color_filter.words]
 off = "オフ"
@@ -662,7 +669,7 @@ right = "右"
 left = "左"
 
 [entry.touch_sens]
-label = "ドラッグ感度 %"
+label = "ドラッグ感度"
 summary = "指の動きに対する自機の移動量"
 help = "ドラッグ感度（パーセント）。100 = ゲーム画面上で自機が指と 1:1 で動く"
 
@@ -681,7 +688,7 @@ summary = "ボタンを押さなくてもショットを撃つ"
 help = "開始時にオートショットを有効にする（プレイ中のみ。AUTO ボタンで切り替え）"
 
 [entry.touch_opacity]
-label = "オーバーレイの不透明度 %"
+label = "オーバーレイの不透明度"
 summary = "画面上ボタンの見えやすさ"
 help = "オーバーレイの不透明度（パーセント）"
 
@@ -791,11 +798,11 @@ help = "--stage/--ending の難易度（e/n/h/l/x、0-4 も可）"
 
 [entry.rank.words]
 "" = "初期設定"
-easy = "Easy"
-normal = "Normal"
-hard = "Hard"
-lunatic = "Lunatic"
-extra = "Extra"
+easy = "イージー"
+normal = "ノーマル"
+hard = "ハード"
+lunatic = "ルナティック"
+extra = "エクストラ"
 
 [entry.power]
 label = "開始時のパワー"

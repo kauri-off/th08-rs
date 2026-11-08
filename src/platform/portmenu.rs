@@ -867,20 +867,19 @@ struct MenuState<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct StageLine {
     pub stage: &'static str,
-    pub difficulty: &'static str,
+    pub rank: u8,
     pub shot: u8,
 }
 
 pub fn stage_line(w: &th08_core::world::World) -> Option<StageLine> {
     const STAGES: [&str; 9] = ["1", "2", "3", "4A", "4B", "5", "6A", "6B", "Extra"];
-    const DIFF: [&str; 5] = ["Easy", "Normal", "Hard", "Lunatic", "Extra"];
     let g = &w.game;
     if g.scene != th08_core::types::SceneId::Game {
         return None;
     }
     Some(StageLine {
         stage: STAGES.get(g.stage)?,
-        difficulty: DIFF.get(usize::try_from(g.difficulty).ok()?)?,
+        rank: u8::try_from(g.difficulty).ok().filter(|&d| d < 5)?,
         shot: g.shot,
     })
 }
@@ -1007,7 +1006,10 @@ impl Words {
                 i18n::ui_fmt(
                     self.lang,
                     "stage_line",
-                    &[("stage", l.stage), ("difficulty", l.difficulty)],
+                    &[
+                        ("stage", l.stage),
+                        ("difficulty", rank_word(self.lang, l.rank)),
+                    ],
                 )
             };
             if let Some(t) = team.then(|| team_name(self.lang, l.shot)).flatten() {
@@ -1047,6 +1049,14 @@ fn sentence(s: &str) -> String {
 }
 
 // The team of a shot type, from the `player` setting's words (its ids follow the shot type order).
+// The difficulty's word in `lang` (the `rank` setting's words).
+fn rank_word(lang: Lang, d: u8) -> &'static str {
+    ["easy", "normal", "hard", "lunatic", "extra"]
+        .get(usize::from(d))
+        .and_then(|v| crate::settings::find("rank").and_then(|e| i18n::word(lang, e, v)))
+        .unwrap_or("?")
+}
+
 fn team_name(lang: Lang, shot: u8) -> Option<&'static str> {
     let e = crate::settings::find("player")?;
     let crate::settings::Kind::Enum(ids) = e.kind else {
@@ -1126,13 +1136,7 @@ fn hints_at(
             .x;
         match k {
             "Ⓐ" | "Ⓑ" => 1.4 * size + size * 0.45 + ww,
-            _ => {
-                p.layout_no_wrap(k.to_string(), theme::sans(size), theme::KEYCAP)
-                    .size()
-                    .x
-                    + size * 0.45
-                    + ww
-            }
+            _ => theme::key_hint_w(p, k, word, size),
         }
     };
     let (mut x, mut y) = (pos.x, pos.y);
@@ -1222,7 +1226,7 @@ fn label_galley(
             font.size *= (w / widest).max(0.7);
         }
     }
-    p.layout(text.into_owned(), font, color, w.max(10.0))
+    theme::wrap(p, text.into_owned(), font, color, w.max(10.0))
 }
 
 fn sans_text(
@@ -1233,7 +1237,13 @@ fn sans_text(
     color: egui::Color32,
     wrap: f32,
 ) -> f32 {
-    let g = p.layout(text.to_string(), theme::sans(size), color, wrap.max(10.0));
+    let g = theme::wrap(
+        p,
+        text.to_string(),
+        theme::sans(size),
+        color,
+        wrap.max(10.0),
+    );
     let h = g.size().y;
     theme::shadowed(p, pos, g, color);
     h
@@ -1298,6 +1308,8 @@ struct CardMetrics {
 
 fn card_metrics(lay: &Layout) -> CardMetrics {
     let f = |mock, dp| lay.font(mock, dp);
+    // Helper text never under 14 window pixels.
+    let s = |mock, dp| lay.font(mock, dp).max(14.0 / lay.ppp);
     match lay.shape {
         Shape::Pillar => CardMetrics {
             head: f(42.0, 18.0),
@@ -1306,9 +1318,9 @@ fn card_metrics(lay: &Layout) -> CardMetrics {
             resume: f(34.0, 16.0),
             row_h: 72.0,
             row: f(28.0, 14.0),
-            status: f(16.0, 11.0),
-            hint: f(15.0, 11.0),
-            help: f(18.0, 12.0),
+            status: s(16.0, 11.0),
+            hint: s(15.0, 11.0),
+            help: s(18.0, 12.0),
             track: 134.0,
             numw: 72.0,
         },
@@ -1319,9 +1331,9 @@ fn card_metrics(lay: &Layout) -> CardMetrics {
             resume: f(28.0, 16.0),
             row_h: 42.0,
             row: f(22.0, 14.0),
-            status: f(14.0, 11.0),
-            hint: f(14.0, 11.0),
-            help: f(14.0, 12.0),
+            status: s(14.0, 11.0),
+            hint: s(14.0, 11.0),
+            help: s(14.0, 12.0),
             track: 128.0,
             numw: 58.0,
         },
@@ -1491,8 +1503,17 @@ fn item_row(
     }
     let bar = live && focus.input.bar() && focus.item == it;
     let lit = live && focus.input.lit(Hit::Item(it));
-    let focused = bar || lit;
-    if lay.shape == Shape::Column && (bar || lit) {
+    // On touch there is no focus to carry: Resume keeps the band as the screen's primary action.
+    let primary = it == Item::Resume && lay.touch && live && !bar;
+    let focused = bar || lit || primary;
+    if primary {
+        theme::focus(
+            p,
+            band,
+            if lay.shape == Shape::Split { 5.0 } else { 4.0 },
+            resp.is_pointer_button_down_on(),
+        );
+    } else if lay.shape == Shape::Column && (bar || lit) {
         theme::focus_over_game(p, band, if bar { 4.0 } else { 0.0 });
     } else {
         theme::mark(
@@ -1695,7 +1716,7 @@ fn list_card(
         let x = pf.center().x - 14.0 * geo.gs / 2.0 - w / 2.0;
         let soft = Rect::from_min_max(
             pos2(x - 64.0, pf.min.y + 40.0),
-            pos2(x + w + 56.0, geo.game(0.0, 352.0, 0.0, 0.0).min.y),
+            pos2(x + w + 56.0, geo.game(0.0, 372.0, 0.0, 0.0).min.y),
         );
         theme::soft_rect(p, soft, 60.0, egui::Color32::from_black_alpha(90));
         (x, w, (x - 24.0, x + w + 16.0), geo.frame.min.y + 80.0)
@@ -1754,7 +1775,13 @@ fn list_card(
         (hint_lines(p, &hint_items(words, m, lay, &which), cm.hint, w) - 1.0) * cm.hint * 1.7;
     let hints_y = geo.safe.max.y - if short { 40.0 } else { 60.0 } - extra;
     let notes = words.notes(m);
-    let dev_y = hints_y - if short { 34.0 } else { 58.0 };
+    // A very short pillar, or a short one whose hints wrap, gives the device / version line's room to the rows.
+    let no_dev = short && (geo.safe.height() < 420.0 || extra > 0.0);
+    let dev_y = if no_dev {
+        hints_y - 4.0
+    } else {
+        hints_y - if short { 34.0 } else { 58.0 }
+    };
     let notes_y = dev_y - 26.0 * notes.len() as f32;
     let yes = if focus.input.bar() {
         Some(focus.yes)
@@ -1781,7 +1808,8 @@ fn list_card(
         (None, _, Some(it)) => words.help(it),
         _ => "",
     };
-    let help_g = p.layout(
+    let help_g = theme::wrap(
+        p,
         help_text.to_string(),
         theme::sans(cm.help),
         theme::HELP_HI,
@@ -1809,7 +1837,13 @@ fn list_card(
         }
     };
     let mut rh = cm.row_h;
-    let min_rh = if short { cm.row * 1.35 } else { 48.0 };
+    let min_rh = if no_dev {
+        cm.row * 1.18
+    } else if short {
+        cm.row * 1.35
+    } else {
+        48.0
+    };
     // The question's two answers keep a full row each (their words never meet), at least 48 dp on touch.
     let ask_row = {
         let h = cm.row_h.max(cm.row * 1.07 * 1.6);
@@ -1926,6 +1960,7 @@ fn list_card(
                 ..*cm
             };
             confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
+            y += ask_h;
         } else {
             for &it in items.iter().filter(|i| i.danger()) {
                 let r = row(y, tall(it, rh));
@@ -1968,19 +2003,21 @@ fn list_card(
             None if lay.touch => words.ui("device_touch").into(),
             None => words.ui("device_keyboard").into(),
         };
-        sans_text(p, pos2(x, dev_y), &dev, cm.status, theme::HELP, w);
-        let v = p.layout_no_wrap(version(words.lang), theme::sans(cm.status), theme::HELP);
-        let dw = p
-            .layout_no_wrap(dev.clone(), theme::sans(cm.status), theme::HELP)
-            .size()
-            .x;
-        // The version beside the device, or on the line above when they would meet.
-        let vy = if dw + 24.0 + v.size().x > w {
-            dev_y - cm.status * 1.5
-        } else {
-            dev_y
-        };
-        theme::shadowed(p, pos2(x + w - v.size().x, vy), v, theme::HELP);
+        if !no_dev {
+            sans_text(p, pos2(x, dev_y), &dev, cm.status, theme::HELP, w);
+            let v = p.layout_no_wrap(version(words.lang), theme::sans(cm.status), theme::HELP);
+            let dw = p
+                .layout_no_wrap(dev.clone(), theme::sans(cm.status), theme::HELP)
+                .size()
+                .x;
+            // The version beside the device, or on the line above when they would meet.
+            let vy = if dw + 24.0 + v.size().x > w {
+                dev_y - cm.status * 1.5
+            } else {
+                dev_y
+            };
+            theme::shadowed(p, pos2(x + w - v.size().x, vy), v, theme::HELP);
+        }
         let which = if focus.ask.is_some() {
             Hints::Confirm
         } else {
@@ -1994,42 +2031,40 @@ fn list_card(
             w,
         );
     } else {
-        // 4:3: the notes, device and key hints sit at the foot of the HUD column (over the logo), never on the
-        // playfield's lower third where the player is.
-        let hud = geo.game(432.0, 16.0, 192.0, 448.0);
-        let (hx, hw) = (hud.min.x + 12.0, hud.width() - 24.0);
+        // 4:3: the notes, device and key hints follow the list in its column, leaving the HUD art alone and ending
+        // above the player; the device line is the first to go when they would not.
+        let limit = geo.game(0.0, 360.0, 0.0, 0.0).min.y;
         let which = if focus.ask.is_some() {
             Hints::Confirm
         } else {
             Hints::Card
         };
         let hints = hint_items(words, m, lay, &which);
-        let hl = if hints.is_empty() {
+        let hint_h = if hints.is_empty() {
             0.0
         } else {
-            hint_lines(p, &hints, cm.hint, hw)
+            hint_lines(p, &hints, cm.hint, w) * cm.hint * 1.7
         };
         let dev = words.device(m, lay);
         let text_h = |t: &str, size: f32| {
-            p.layout(t.to_string(), theme::sans(size), theme::HELP, hw)
+            theme::wrap(p, t.to_string(), theme::sans(size), theme::HELP, w)
                 .size()
                 .y
         };
         let notes_h: f32 = notes.iter().map(|n| text_h(n, cm.status) + 6.0).sum();
-        let block = notes_h + text_h(&dev, cm.status) + 14.0 + hl * cm.hint * 1.7;
-        let mut fy = hud.max.y - 16.0 - block;
-        theme::soft_rect(
-            p,
-            Rect::from_min_max(pos2(hud.min.x, fy - 16.0), pos2(hud.max.x, hud.max.y)),
-            20.0,
-            egui::Color32::from_black_alpha(215),
-        );
+        let dev_h = text_h(&dev, cm.status) + 8.0;
+        let mut fy = y + 8.0;
+        theme::rule(p, span, fy);
+        fy += 8.0;
+        let show_dev = fy + notes_h + dev_h + hint_h <= limit;
         for n in &notes {
-            fy += sans_text(p, pos2(hx, fy), n, cm.status, theme::HELP_HI, hw) + 6.0;
+            fy += sans_text(p, pos2(x, fy), n, cm.status, theme::HELP_HI, w) + 6.0;
         }
-        fy += sans_text(p, pos2(hx, fy), &dev, cm.status, theme::HELP, hw) + 14.0;
+        if show_dev {
+            fy += sans_text(p, pos2(x, fy), &dev, cm.status, theme::HELP, w) + 8.0;
+        }
         if !hints.is_empty() {
-            draw_hints(p, pos2(hx, fy), &hints, cm.hint, hw);
+            draw_hints(p, pos2(x, fy), &hints, cm.hint, w);
         }
     }
 }
@@ -2480,7 +2515,8 @@ fn rail_head(
             );
         }
         let col = if sel { theme::TEXT_HI } else { theme::HELP };
-        let g = p.layout(
+        let g = theme::wrap(
+            &p,
             i18n::group_title(words.lang, g).to_string(),
             theme::serif(pm.tab),
             col,
@@ -2567,13 +2603,14 @@ fn wide_head(
     let bt = format!("‹ {}", words.ui("paused_title"));
     let g = p.layout_no_wrap(bt, theme::sans(f(17.0, 11.0)), theme::HELP);
     let keyed = m.pad.is_some() || !lay.touch;
-    let k = p.layout_no_wrap(
-        if m.pad.is_some() { "B" } else { "X" }.into(),
-        theme::sans(f(17.0, 11.0)),
-        theme::KEYCAP,
-    );
+    let key = if m.pad.is_some() { "B" } else { "X" };
+    let ks = f(17.0, 11.0);
     let gw = g.size().x;
-    let kw = if keyed { k.size().x + 10.0 } else { 0.0 };
+    let kw = if keyed {
+        theme::keycap_w(&p, key, ks) + 10.0
+    } else {
+        0.0
+    };
     let bx = x + w - gw;
     let by = top + 48.0;
     let br = Rect::from_min_size(pos2(bx - kw, by - 8.0), vec2(gw + kw, g.size().y + 16.0));
@@ -2581,7 +2618,7 @@ fn wide_head(
         .interact(br, Id::unique("settings back"), Sense::click())
         .clicked();
     if keyed {
-        theme::shadowed(&p, pos2(bx - kw, by), k, theme::KEYCAP);
+        theme::keycap_at(&p, bx - kw, by + g.size().y / 2.0, key, ks);
     }
     theme::shadowed(&p, pos2(bx, by), g, theme::HELP);
     // Tabs with Q / E at the ends (keyboard), LB / RB (pad), shrunk to fit.
@@ -2613,7 +2650,8 @@ fn wide_head(
             + if ends.0.is_empty() {
                 0.0
             } else {
-                2.0 * s * 1.3
+                theme::keycap_w(&p, ends.0, (s * 0.8).max(11.0))
+                    + theme::keycap_w(&p, ends.1, (s * 0.8).max(11.0))
             }
     };
     while size > 13.0 && width(size) > w {
@@ -2622,10 +2660,12 @@ fn wide_head(
     let mut tx = x;
     let hint_size = (size * 0.8).max(11.0);
     if !ends.0.is_empty() {
-        let g = p.layout_no_wrap(ends.0.to_string(), theme::sans(hint_size), theme::KEYCAP);
-        let gw = g.size().x;
-        theme::shadowed(&p, pos2(tx, ty + size * 0.48), g, theme::KEYCAP);
-        tx += gw + gap(size) * 0.7;
+        let cy = ty
+            + p.layout_no_wrap(labels[0].to_string(), theme::serif(size), theme::TEXT)
+                .size()
+                .y
+                / 2.0;
+        tx += theme::keycap_at(&p, tx, cy, ends.0, hint_size) + gap(size) * 0.7;
     }
     let mut clicked = None;
     for (i, l) in labels.iter().enumerate() {
@@ -2654,13 +2694,12 @@ fn wide_head(
         tx += gw + gap(size);
     }
     if !ends.1.is_empty() {
-        let g = p.layout_no_wrap(ends.1.to_string(), theme::sans(hint_size), theme::KEYCAP);
-        theme::shadowed(
-            &p,
-            pos2(tx - gap(size) * 0.3, ty + size * 0.48),
-            g,
-            theme::KEYCAP,
-        );
+        let cy = ty
+            + p.layout_no_wrap(labels[0].to_string(), theme::serif(size), theme::TEXT)
+                .size()
+                .y
+                / 2.0;
+        theme::keycap_at(&p, tx - gap(size) * 0.3, cy, ends.1, hint_size);
     }
     let tab_clicked = clicked;
     theme::rule(&p, egui::Rangef::new(x, x + w), ty + 50.0);
@@ -2761,7 +2800,7 @@ fn settings_ui(
         r if r <= keys.len() => model.row_text(keys[r - 1], words.lang).1,
         _ => words.ui("help_reset_page"),
     };
-    let help_g = p.layout(sentence(help), theme::sans(pm.help), theme::HELP_HI, w);
+    let help_g = theme::wrap(&p, sentence(help), theme::sans(pm.help), theme::HELP_HI, w);
     let help_h = help_g.size().y.max(pm.help * 3.0);
     let bottom = if split {
         geo.safe.max.y - 24.0 - help_h - 30.0

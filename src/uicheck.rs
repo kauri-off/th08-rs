@@ -12,16 +12,22 @@ pub enum Kind {
     Glued,
     StockVisuals,
     OldColour,
+    RawId,
+    FewRows,
+    NoFocus,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Clipped,
         Kind::Overlap,
         Kind::MidWord,
         Kind::Glued,
         Kind::StockVisuals,
         Kind::OldColour,
+        Kind::RawId,
+        Kind::FewRows,
+        Kind::NoFocus,
     ];
 
     pub fn name(self) -> &'static str {
@@ -32,6 +38,9 @@ impl Kind {
             Kind::Glued => "glued-words",
             Kind::StockVisuals => "stock-visuals",
             Kind::OldColour => "old-colour",
+            Kind::RawId => "raw-identifier",
+            Kind::FewRows => "few-rows",
+            Kind::NoFocus => "no-focus-at-rest",
         }
     }
 }
@@ -133,16 +142,23 @@ fn old_of(c: Color32) -> Option<&'static str> {
 pub struct Scroll {
     pub viewport: Rect,
     pub space: Rect,
+    // The content is taller than the viewport.
+    pub more: bool,
 }
 
-pub fn note_scroll(ctx: &egui::Context, viewport: Rect, space: Rect) {
+pub fn note_scroll(ctx: &egui::Context, viewport: Rect, space: Rect, content_h: f32) {
+    let more = content_h > viewport.height() + 0.5;
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| {
         let v = d.get_temp_mut_or_default::<(u64, Vec<Scroll>)>(egui::Id::unique("uicheck scroll"));
         if v.0 != pass {
             *v = (pass, Vec::new());
         }
-        v.1.push(Scroll { viewport, space });
+        v.1.push(Scroll {
+            viewport,
+            space,
+            more,
+        });
     });
 }
 
@@ -176,7 +192,7 @@ fn breaks_anywhere(c: char) -> bool {
 }
 
 fn mid_word(g: &egui::Galley) -> Option<(char, char)> {
-    g.rows.windows(2).find_map(|w| {
+    let latin = g.rows.windows(2).find_map(|w| {
         let a = w[0].row.glyphs.last()?.chr;
         let b = w[1].row.glyphs.first()?.chr;
         (!w[0].ends_with_newline
@@ -185,6 +201,55 @@ fn mid_word(g: &egui::Galley) -> Option<(char, char)> {
             && !breaks_anywhere(a)
             && !breaks_anywhere(b))
         .then_some((a, b))
+    });
+    latin.or_else(|| ja_mid_phrase(g))
+}
+
+// A wrapped row of Japanese that ends inside a phrase (`theme::pieces`) or against kinsoku.
+fn ja_mid_phrase(g: &egui::Galley) -> Option<(char, char)> {
+    let text = &g.job.text;
+    if !text.chars().any(crate::theme::is_ja) {
+        return None;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut cuts = std::collections::HashSet::new();
+    let mut at = 0;
+    for piece in crate::theme::pieces(text) {
+        at += piece.chars().count();
+        cuts.insert(at);
+    }
+    let mut idx = 0;
+    for w in g.rows.windows(2) {
+        idx += w[0].row.glyphs.len() + usize::from(w[0].ends_with_newline);
+        if w[0].ends_with_newline {
+            continue;
+        }
+        let (Some(a), Some(b)) = (w[0].row.glyphs.last(), w[1].row.glyphs.first()) else {
+            continue;
+        };
+        let (a, b) = (a.chr, b.chr);
+        if chars.get(idx) != Some(&b) || a.is_whitespace() || b.is_whitespace() {
+            continue;
+        }
+        if (crate::theme::is_ja(a) || crate::theme::is_ja(b)) && !cuts.contains(&idx) {
+            return Some((a, b));
+        }
+    }
+    None
+}
+
+// A code identifier in visible text: snake_case or a --flag; file names and paths are real text.
+fn raw_id(text: &str) -> Option<&str> {
+    text.split_whitespace().find_map(|w| {
+        let t = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        let snake = t.contains('_')
+            && t.split('_').all(|p| {
+                !p.is_empty()
+                    && p.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            });
+        let flag = t.starts_with("--") && t.len() > 3;
+        (!w.contains(['/', '\\']) && (snake || flag)).then_some(t)
     })
 }
 
@@ -297,6 +362,10 @@ fn cut(r: Rect, clip: Rect, screen: Rect, scrolls: &[Scroll]) -> bool {
 }
 
 // All issues of one frame. `screen` is the window in points; `scrolls` the scroll viewports of the pass.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the frame, one rule per block"
+)]
 pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<Issue> {
     let mut out = Vec::new();
     let mut texts = Vec::new();
@@ -357,6 +426,13 @@ pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<I
             continue;
         }
         shown.push((*t, vis));
+        if let Some(id) = raw_id(&t.text) {
+            out.push(Issue {
+                kind: Kind::RawId,
+                what: format!("{id} in “{}”", short(&t.text)),
+                rect: t.ink,
+            });
+        }
         if let Some((a, b)) = t.split {
             out.push(Issue {
                 kind: Kind::MidWord,
@@ -389,6 +465,27 @@ pub fn check(shapes: &[ClippedShape], screen: Rect, scrolls: &[Scroll]) -> Vec<I
                 kind: Kind::Clipped,
                 what: format!("“{}” cut by {:?}", short(&t.text), t.clip),
                 rect: t.ink,
+            });
+        }
+    }
+    // A scrolling list must show at least two whole lines of its content.
+    for s in scrolls.iter().filter(|s| s.more) {
+        let mut ys: Vec<f32> = shown
+            .iter()
+            .filter(|(t, _)| s.viewport.expand(TOL).contains_rect(t.ink))
+            .flat_map(|(t, _)| {
+                let n = t.text.lines().count().max(1);
+                let h = t.ink.height() / n as f32;
+                (0..n).map(move |i| t.ink.min.y + h * (i as f32 + 0.5))
+            })
+            .collect();
+        ys.sort_by(f32::total_cmp);
+        ys.dedup_by(|a, b| (*a - *b).abs() < 8.0);
+        if ys.len() < 2 {
+            out.push(Issue {
+                kind: Kind::FewRows,
+                what: format!("{} whole line(s) in {:?}", ys.len(), s.viewport),
+                rect: s.viewport,
             });
         }
     }
@@ -565,6 +662,26 @@ mod tests {
     }
 
     #[test]
+    fn raw_identifiers() {
+        assert_eq!(raw_id("off or high_contrast."), Some("high_contrast"));
+        assert_eq!(raw_id("see --stage first"), Some("--stage"));
+        assert_eq!(raw_id("th8_long_name.rpy is damaged"), None);
+        assert_eq!(raw_id("/tmp/some_dir and text"), None);
+    }
+
+    #[test]
+    fn japanese_breaks_between_phrases() {
+        let p = crate::theme::pieces("設定はそのままです");
+        assert!(p.iter().all(|c| !c.ends_with("そ")), "{p:?}");
+        let p = crate::theme::pieces("「はい」を選ぶ。次へ");
+        assert!(
+            p.iter().all(|c| !c.ends_with('「') && !c.starts_with('」')),
+            "{p:?}"
+        );
+        assert_eq!(crate::theme::pieces("plain words"), ["plain ", "words"]);
+    }
+
+    #[test]
     fn scrolled_text_is_not_clipped() {
         let font = egui::FontId::proportional(16.0);
         let ctx = egui::Context::default();
@@ -588,12 +705,14 @@ mod tests {
         let s = Scroll {
             viewport: view,
             space: view,
+            more: false,
         };
         assert!(check(&out, screen, &[s]).is_empty());
         // The same viewport given twice the height it uses: the cut row had room.
         let short = Scroll {
             viewport: view,
             space: view.with_max_y(40.0),
+            more: false,
         };
         assert_eq!(kinds(&check(&out, screen, &[short])), [Kind::Clipped]);
     }

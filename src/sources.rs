@@ -52,18 +52,22 @@ impl DataSource for DirSource {
         range: Option<(u64, usize)>,
     ) -> BoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
+            use anyhow::Context as _;
             use std::io::{Read, Seek, SeekFrom};
             let path = find_file(&self.0, name);
-            Ok(match range {
-                None => std::fs::read(path)?,
-                Some((off, len)) => {
-                    let mut f = std::fs::File::open(path)?;
-                    f.seek(SeekFrom::Start(off))?;
-                    let mut buf = vec![0; len];
-                    f.read_exact(&mut buf)?;
-                    buf
-                }
-            })
+            let read = || -> std::io::Result<Vec<u8>> {
+                Ok(match range {
+                    None => std::fs::read(&path)?,
+                    Some((off, len)) => {
+                        let mut f = std::fs::File::open(&path)?;
+                        f.seek(SeekFrom::Start(off))?;
+                        let mut buf = vec![0; len];
+                        f.read_exact(&mut buf)?;
+                        buf
+                    }
+                })
+            };
+            read().with_context(|| path.display().to_string())
         })
     }
 }

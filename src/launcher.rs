@@ -161,6 +161,36 @@ fn prefill_bundled(s: &mut Settings, bundled: impl FnOnce() -> Option<PathBuf>) 
     }
 }
 
+// A start failure's cause in words: a known kind of failure, else the general advice.
+fn error_cause(lang: Lang, msg: &str) -> &'static str {
+    let m = msg.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| m.contains(w));
+    let key = if has(&["os error 2)", "no such file", "cannot find", "not found"]) {
+        "err_missing"
+    } else if has(&[
+        "os error 13",
+        "os error 5)",
+        "permission denied",
+        "access is denied",
+    ]) {
+        "err_denied"
+    } else if has(&["pbgz", "archive", "truncated", "missing or short"]) {
+        "err_damaged"
+    } else {
+        "start_failed_body"
+    };
+    i18n::ui(lang, key)
+}
+
+// The failure message as the Details block shows it: the home folder as ~.
+fn error_detail(msg: &str) -> String {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    if let Some(h) = std::env::var("HOME").ok().filter(|h| h.len() > 1) {
+        return msg.replace(&h, "~");
+    }
+    msg.to_string()
+}
+
 // "Cheats on: …; no saves" for the active Cheats rows (keys), None when there are none.
 pub fn cheats_note(lang: Lang, keys: &[&str]) -> Option<String> {
     if keys.is_empty() {
@@ -2120,11 +2150,22 @@ pub fn check_frame(
         last = Some(crate::uicheck::shapes(out));
     }
     let screen = ctx.viewport_rect();
-    crate::uicheck::check(
+    let mut issues = crate::uicheck::check(
         &last.unwrap_or_default(),
         screen,
         &crate::uicheck::scrolls(&ctx),
-    )
+    );
+    if matches!(o.probe, Probe::None)
+        && matches!(model.view, View::Settings | View::Error(_))
+        && !model.focus_shown()
+    {
+        issues.push(crate::uicheck::Issue {
+            kind: crate::uicheck::Kind::NoFocus,
+            what: "nothing carries the focus bar".into(),
+            rect: screen,
+        });
+    }
+    issues
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

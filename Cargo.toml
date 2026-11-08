@@ -47,6 +47,8 @@ th08-core = { path = "crates/th08-core" }
 th08-formats = { path = "crates/th08-formats" }
 th08-render = { path = "crates/th08-render" }
 anyhow = "1.0.104"
+# Japanese phrase boundaries for line breaking in the port UI (theme.rs).
+budoux-phf-rs = { version = "0.1.10", default-features = false, features = ["std", "ja"] }
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.37", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

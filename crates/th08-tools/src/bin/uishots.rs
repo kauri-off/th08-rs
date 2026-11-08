@@ -108,7 +108,7 @@ impl Fixture {
     fn new() -> anyhow::Result<Self> {
         let root = std::env::temp_dir().join(format!("th08-uishots-{}", std::process::id()));
         let save = root.join("config");
-        let game = root.join("Games/TH08 - Imperishable Night/TH08 - Imperishable Night");
+        let game = root.join("Games/Touhou Project/TH08 - Imperishable Night");
         std::fs::create_dir_all(save.join("replay"))?;
         std::fs::create_dir_all(&game)?;
         // The real data (title art) when TH08_DIR has it, linked read-only; else an empty archive.
@@ -319,8 +319,8 @@ fn launcher_model(
         "stats" => m.set_tab(Tab::Stats),
         "error" => {
             m.view = View::Error(
-                "no game files in /home/someone/Games/TH08 - Imperishable Night/TH08 - Imperishable Night: \
-                 th08.dat and thbgm.dat are missing (looked for TH08.DAT, th08.dat, th08.pak)"
+                "/home/someone/Games/Touhou Project/TH08 - Imperishable Night/th08.dat: \
+                 No such file or directory (os error 2)"
                     .into(),
             );
         }

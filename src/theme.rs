@@ -382,40 +382,15 @@ pub fn shadowed(p: &Painter, pos: Pos2, g: Arc<Galley>, color: Color32) {
 // keeps it, so a last line never holds a lone word.
 pub fn balanced(p: &Painter, text: &str, font: FontId, color: Color32, w: f32) -> Arc<Galley> {
     let w = w.max(10.0);
-    let full = p.layout(text.to_string(), font.clone(), color, w);
+    let full = wrap(p, text.to_string(), font.clone(), color, w);
     let n = full.rows.len();
     if n < 2 {
         return full;
     }
-    // Two lines of Japanese break after the particle nearest the middle (タイトルに / 戻りますか？) rather than
-    // inside a word.
-    if n == 2 && !text.contains(' ') {
-        let chars: Vec<char> = text.chars().collect();
-        let mid = chars.len() as f32 / 2.0;
-        let best = (2..chars.len().saturating_sub(2))
-            .filter(|&i| {
-                matches!(
-                    chars[i - 1],
-                    'は' | 'に' | 'を' | 'が' | 'で' | 'と' | 'の' | '、' | '。'
-                )
-            })
-            .min_by(|&a, &b| (a as f32 - mid).abs().total_cmp(&(b as f32 - mid).abs()));
-        if let Some(i) = best.filter(|&i| (i as f32 - mid).abs() <= chars.len() as f32 * 0.3) {
-            let split: String = chars[..i]
-                .iter()
-                .chain(['\n'].iter())
-                .chain(&chars[i..])
-                .collect();
-            let g = p.layout(split, font.clone(), color, w);
-            if g.rows.len() == 2 {
-                return g;
-            }
-        }
-    }
     let (mut lo, mut hi) = (w * 0.4, w);
     for _ in 0..12 {
         let mid = (lo + hi) / 2.0;
-        if p.layout(text.to_string(), font.clone(), color, mid)
+        if wrap(p, text.to_string(), font.clone(), color, mid)
             .rows
             .len()
             > n
@@ -425,11 +400,108 @@ pub fn balanced(p: &Painter, text: &str, font: FontId, color: Color32, w: f32) -
             hi = mid;
         }
     }
-    p.layout(text.to_string(), font, color, hi.ceil())
+    wrap(p, text.to_string(), font, color, hi.ceil())
+}
+
+// Kana, CJK ideographs and full-width forms: the characters Japanese line breaking applies to.
+pub fn is_ja(c: char) -> bool {
+    matches!(u32::from(c), 0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef)
+}
+
+// Characters a line never starts with, and never ends with (kinsoku shori).
+fn no_start(c: char) -> bool {
+    "、。，．・：；？！ー）」』】〕〉》｝’”…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々%％)]},.!?:;".contains(c)
+}
+
+fn no_end(c: char) -> bool {
+    "（「『【〔〈《｛‘“([{".contains(c)
+}
+
+// The pieces a line never breaks inside, in order, each with its trailing spaces: Japanese phrases (BudouX, then
+// kinsoku), and every other word whole.
+pub fn pieces(text: &str) -> Vec<&str> {
+    thread_local! {
+        static JA: budoux_phf_rs::Parser = budoux_phf_rs::Parser::japanese_parser();
+    }
+    let mut cuts = vec![0usize];
+    let mut i = 0;
+    for (at, c) in text.char_indices() {
+        if at < i {
+            continue;
+        }
+        if c.is_whitespace() {
+            let end = text[at..]
+                .find(|c: char| !c.is_whitespace())
+                .map_or(text.len(), |e| at + e);
+            if end < text.len() {
+                cuts.push(end);
+            }
+            i = end;
+            continue;
+        }
+        let end = text[at..]
+            .find(char::is_whitespace)
+            .map_or(text.len(), |e| at + e);
+        let word = &text[at..end];
+        if word.chars().any(is_ja) {
+            let mut off = at;
+            JA.with(|j| {
+                j.parse_with(word, |chunk| {
+                    if off > at {
+                        cuts.push(off);
+                    }
+                    off += chunk.len();
+                });
+            });
+        }
+        i = end;
+    }
+    cuts.push(text.len());
+    cuts.dedup();
+    // Kinsoku: no cut before a closing mark or small kana, none after an opening bracket.
+    cuts.retain(|&c| {
+        c == 0
+            || c == text.len()
+            || !(text[c..].chars().next().is_some_and(no_start)
+                || text[..c].chars().next_back().is_some_and(no_end))
+    });
+    cuts.windows(2).map(|w| &text[w[0]..w[1]]).collect()
+}
+
+// Text wrapped at `w` as `Painter::layout` does, except that text with Japanese in it breaks only between
+// `pieces` (a piece wider than `w` still wraps inside).
+pub fn wrap(p: &Painter, text: String, font: FontId, color: Color32, w: f32) -> Arc<Galley> {
+    if !text.chars().any(is_ja) {
+        return p.layout(text, font, color, w);
+    }
+    let width = |s: &str| {
+        p.layout_no_wrap(s.to_string(), font.clone(), color)
+            .size()
+            .x
+    };
+    let mut out = String::with_capacity(text.len() + 8);
+    for (n, para) in text.split('\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        let mut line = String::new();
+        for piece in pieces(para) {
+            let next = format!("{line}{piece}");
+            if line.is_empty() || width(next.trim_end()) <= w {
+                line = next;
+            } else {
+                out.push_str(line.trim_end());
+                out.push('\n');
+                line = piece.to_string();
+            }
+        }
+        out.push_str(&line);
+    }
+    p.layout(out, font, color, w)
 }
 
 pub fn layout(p: &Painter, text: &str, font: FontId, wrap: f32) -> Arc<Galley> {
-    p.layout(text.to_string(), font, TEXT, wrap)
+    self::wrap(p, text.to_string(), font, TEXT, wrap)
 }
 
 // The heading token: the serif word, its lavender caption below at the same left edge. Returns the block height.
@@ -637,7 +709,8 @@ pub fn focus_over_game(p: &Painter, band: Rect, tick_w: f32) {
     tick(p, band, tick_w);
 }
 
-fn tick(p: &Painter, band: Rect, w: f32) {
+// The lavender focus tick at the band's left edge, 60 % of its height.
+pub fn tick(p: &Painter, band: Rect, w: f32) {
     let h = band.height() * 0.6;
     let r = Rect::from_min_size(pos2(band.min.x, band.center().y - h / 2.0), vec2(w, h));
     p.rect_filled(r, 0.0, ACCENT);
@@ -709,16 +782,50 @@ pub fn chevron(p: &Painter, right: Pos2, size: f32, color: Color32) {
     shadowed(p, pos, g, color);
 }
 
-// One key hint: the glyph(s) in light text, then the word in helper grey. Returns the width used.
+// A keycap: the key's glyph(s) in a 1 px hairline box, centred on a line of `size` text at `pos`. Returns its width.
+pub fn keycap(p: &Painter, pos: Pos2, keys: &str, size: f32) -> f32 {
+    let line = p.layout_no_wrap("Ag".into(), sans(size), HELP).size().y;
+    keycap_at(p, pos.x, pos.y + line / 2.0, keys, size)
+}
+
+// A keycap whose box is centred on `cy`.
+pub fn keycap_at(p: &Painter, x: f32, cy: f32, keys: &str, size: f32) -> f32 {
+    let k = p.layout_no_wrap(keys.to_string(), sans(size * 0.86), KEYCAP);
+    let w = keycap_w(p, keys, size);
+    let r = Rect::from_center_size(pos2(x + w / 2.0, cy), vec2(w, size * 1.3));
+    let px = 1.0 / p.pixels_per_point();
+    p.rect_stroke(
+        r.shrink(px / 2.0),
+        3.0,
+        Stroke::new(px, DIM),
+        egui::StrokeKind::Inside,
+    );
+    shadowed(p, r.center() - k.size() / 2.0, k, KEYCAP);
+    w
+}
+
+pub fn keycap_w(p: &Painter, keys: &str, size: f32) -> f32 {
+    let k = p.layout_no_wrap(keys.to_string(), sans(size * 0.86), KEYCAP);
+    (k.size().x + size * 0.7).max(size * 1.3)
+}
+
+// One key hint: the keycap, then the word in helper grey. Returns the width used.
 pub fn key_hint(p: &Painter, pos: Pos2, keys: &str, word: &str, size: f32) -> f32 {
-    let k = p.layout_no_wrap(keys.to_string(), sans(size), KEYCAP);
+    let kw = keycap(p, pos, keys, size);
     let w = p.layout_no_wrap(word.to_string(), sans(size), HELP);
-    let kw = k.size().x;
     let ww = w.size().x;
-    let gap = size * 0.45;
-    shadowed(p, pos, k, KEYCAP);
+    let gap = size * 0.5;
     shadowed(p, pos + vec2(kw + gap, 0.0), w, HELP);
     kw + gap + ww
+}
+
+// The width `key_hint` takes.
+pub fn key_hint_w(p: &Painter, keys: &str, word: &str, size: f32) -> f32 {
+    let ww = p
+        .layout_no_wrap(word.to_string(), sans(size), HELP)
+        .size()
+        .x;
+    keycap_w(p, keys, size) + size * 0.5 + ww
 }
 
 // A line of key hints; returns its width.
@@ -731,6 +838,21 @@ pub fn key_hints(p: &Painter, pos: Pos2, items: &[(&str, &str)], size: f32) -> f
         x += key_hint(p, pos2(x, pos.y), k, w, size);
     }
     x - pos.x
+}
+
+// Key hints in `max_w`: the hints that would run past it are left out, last first.
+pub fn key_hints_fit(p: &Painter, pos: Pos2, items: &[(&str, &str)], size: f32, max_w: f32) -> f32 {
+    let mut used = 0.0;
+    let mut n = 0;
+    for (i, (k, w)) in items.iter().enumerate() {
+        let iw = key_hint_w(p, k, w, size) + if i > 0 { size * 1.3 } else { 0.0 };
+        if used + iw > max_w {
+            break;
+        }
+        used += iw;
+        n += 1;
+    }
+    key_hints(p, pos, &items[..n], size)
 }
 
 // A filled pad disc with its button letter (A / B / ≡).
@@ -820,7 +942,7 @@ pub fn value_ctl(
                     .size()
                     .x;
                 let size = st.size * ((r.width() - 8.0) / wide.max(1.0)).clamp(0.6, 1.0);
-                let g = p.layout(word.clone(), serif(size), TEXT, r.width().max(10.0));
+                let g = wrap(p, word.clone(), serif(size), TEXT, r.width().max(10.0));
                 let pos = if st.cells {
                     r.center() - g.size() / 2.0
                 } else {
@@ -953,7 +1075,8 @@ pub fn value_ctl(
         }
         Ctl::Value(text) => {
             let x = rect.min.x + if st.right { 0.0 } else { st.indent };
-            let g = p.layout(
+            let g = wrap(
+                p,
                 text.clone(),
                 sans(st.num * 0.8),
                 TEXT,
@@ -1081,26 +1204,9 @@ pub fn ctl_height(p: &Painter, ctl: &Ctl, st: &CtlStyle, w: f32) -> f32 {
     }
 }
 
-// The pieces a label never breaks inside: words, and single CJK characters (those wrap anywhere).
+// The pieces a label never breaks inside, without their spaces.
 pub fn unbreakable(text: &str) -> Vec<&str> {
-    let cjk = |c: char| matches!(u32::from(c), 0x2e80..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef);
-    let mut out = Vec::new();
-    for w in text.split_whitespace() {
-        let mut start = 0;
-        for (i, c) in w.char_indices() {
-            if cjk(c) {
-                if start < i {
-                    out.push(&w[start..i]);
-                }
-                out.push(&w[i..i + c.len_utf8()]);
-                start = i + c.len_utf8();
-            }
-        }
-        if start < w.len() {
-            out.push(&w[start..]);
-        }
-    }
-    out
+    pieces(text).into_iter().map(str::trim_end).collect()
 }
 
 // The label column (16 points of it the gap to the control): at least `base`, wide enough for the widest single

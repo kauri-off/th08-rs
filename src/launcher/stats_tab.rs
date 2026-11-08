@@ -79,7 +79,17 @@ impl Model {
         }
         let on = self.settings().stats;
         let save = self.settings().storage_dir();
-        if self.action_row(ui, x, w, "rp_refresh", lang) {
+        let summary = self.st.data.as_ref().map(|d| {
+            i18n::ui_fmt(
+                lang,
+                "st_playtime",
+                &[
+                    ("time", &stats::format_time(d.summary.frames)),
+                    ("runs", &d.summary.runs.to_string()),
+                ],
+            )
+        });
+        if self.summary_row(ui, x, w, summary.as_deref().unwrap_or(""), lang) {
             self.st.data = None;
             self.st.data = Some(self.load_stats());
         }
@@ -251,7 +261,8 @@ impl Model {
 
 // A sub-caption inside a section: the serif word in the accent colour.
 fn sub(ui: &mut egui::Ui, x: f32, w: f32, text: &str) {
-    let g = ui.painter().layout(
+    let g = theme::wrap(
+        ui.painter(),
         text.to_string(),
         theme::serif(theme::BODY + 2.0),
         theme::TEXT_HI,
@@ -269,6 +280,8 @@ fn sub(ui: &mut egui::Ui, x: f32, w: f32, text: &str) {
         false,
     );
 }
+
+const TABLE_MAX: f32 = 860.0;
 
 // A table in the text column: columns as wide as their widest cell; when they do not fit `w`, each row as one
 // wrapped line ("a · b · c") instead.
@@ -291,6 +304,19 @@ fn table(ui: &mut egui::Ui, x: f32, w: f32, head: &[String], rows: &[Vec<String>
     let total: f32 = cw.iter().sum::<f32>() + gap * (cols.max(1) - 1) as f32;
     let line = theme::BODY * 1.6;
     if total <= w {
+        // The first column takes the spare width, so the last ends at the column's right edge (up to a readable span).
+        cw[0] += (w.min(TABLE_MAX) - total).max(0.0);
+        let numeric: Vec<bool> = (0..cols)
+            .map(|i| {
+                i > 0
+                    && rows.iter().all(|r| {
+                        r.get(i).is_none_or(|c| {
+                            c.chars()
+                                .all(|ch| ch.is_ascii_digit() || ",: /".contains(ch))
+                        })
+                    })
+            })
+            .collect();
         let mut draw = |cells: &[String], f: &egui::FontId, c: egui::Color32| {
             let (r, _) = ui.allocate_exact_size(
                 egui::vec2(ui.max_rect().width(), line),
@@ -299,7 +325,12 @@ fn table(ui: &mut egui::Ui, x: f32, w: f32, head: &[String], rows: &[Vec<String>
             let mut cx = x;
             for (i, t) in cells.iter().enumerate() {
                 let g = lay(t, f, c);
-                theme::shadowed(&p, egui::pos2(cx, r.center().y - g.size().y / 2.0), g, c);
+                let gx = if numeric[i] {
+                    cx + cw[i] - g.size().x
+                } else {
+                    cx
+                };
+                theme::shadowed(&p, egui::pos2(gx, r.center().y - g.size().y / 2.0), g, c);
                 cx += cw[i] + gap;
             }
         };
@@ -328,19 +359,6 @@ fn play_ui(ui: &mut egui::Ui, x: f32, w: f32, lang: Lang, d: &Data) {
     let head = |keys: &[&str]| -> Vec<String> {
         keys.iter().map(|k| i18n::ui(lang, k).to_string()).collect()
     };
-    sub(
-        ui,
-        x,
-        w,
-        &i18n::ui_fmt(
-            lang,
-            "st_playtime",
-            &[
-                ("time", &stats::format_time(s.frames)),
-                ("runs", &s.runs.to_string()),
-            ],
-        ),
-    );
     if s.runs == 0 {
         note(
             ui,

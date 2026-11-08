@@ -138,7 +138,32 @@ pub const UI: &[(&str, &str)] = &[
     ("start_failed", "The game could not start"),
     (
         "start_failed_body",
-        "The details are below. Most often the game folder is wrong: choose the folder that holds th08.dat.",
+        "Most often the game folder is wrong: choose the folder that holds th08.dat.",
+    ),
+    (
+        "err_missing",
+        "The game files were not found: choose the folder that holds th08.dat and thbgm.dat.",
+    ),
+    (
+        "err_damaged",
+        "th08.dat could not be read: it is damaged, or it is not from Imperishable Night.",
+    ),
+    (
+        "err_denied",
+        "The port may not read this folder: check its permissions or choose another folder.",
+    ),
+    ("err_details", "Details"),
+    (
+        "help_reset",
+        "Put every setting on this screen back to its default.",
+    ),
+    (
+        "help_tab_replays",
+        "Your recorded replays: watch, export or delete one.",
+    ),
+    (
+        "help_tab_stats",
+        "Play time, runs, clears and spell cards from your save folder.",
     ),
     ("choose_folder", "Choose game folder…"),
     (
@@ -372,8 +397,8 @@ pub const UI: &[(&str, &str)] = &[
     ("rp_import", "Import replays…"),
     ("rp_refresh", "Refresh"),
     ("rp_sort", "Sort by"),
-    ("rp_sort_date", "date"),
-    ("rp_sort_score", "score"),
+    ("rp_sort_date", "Date"),
+    ("rp_sort_score", "Score"),
     (
         "rp_hint",
         "The replays in the save folder. Drop .rpy files on this window to import them.",
@@ -382,7 +407,7 @@ pub const UI: &[(&str, &str)] = &[
     ("rp_drop", "Drop to import the replays"),
     ("rp_detail", "{file} · {date} · slowdown {slow}%"),
     ("rp_practice", "practice"),
-    ("rp_damaged", "damaged: {err}"),
+    ("rp_damaged", "damaged or not a th08 replay"),
     ("rp_watch", "Watch"),
     ("rp_export", "Export…"),
     ("rp_delete", "Delete"),
@@ -602,35 +627,40 @@ pub fn source_strings() -> Vec<(String, &'static str)> {
     v
 }
 
-// The CJK face egui falls back to after its default fonts (Japanese text and the 日本語 choice in every language).
+// The system CJK face, last in the sans chain: glyphs the bundled UI face lacks (user paths, replay names).
 #[cfg(not(target_arch = "wasm32"))]
 fn cjk_font(font: Option<&str>) -> Option<egui::FontData> {
     th08_render::text::system_font(font).map(egui::FontData::from_static)
 }
 
-// Web: a Noto Sans CJK JP subset (OFL) holding the glyphs of ja.toml; `tools/i18n_font_subset` makes it.
 #[cfg(target_arch = "wasm32")]
 fn cjk_font(_: Option<&str>) -> Option<egui::FontData> {
-    Some(egui::FontData::from_static(include_bytes!(
-        "../i18n/fonts/NotoSansJP-launcher.otf"
-    )))
+    None
 }
+
+// The helper face of every script: a Noto Sans CJK JP Regular subset (OFL) of the UI tables, Latin and Cyrillic
+// included, so help lines never mix weights; `tools/i18n_font_subset` makes it.
+const UI_SANS: &[u8] = include_bytes!("../i18n/fonts/NotoSansJP-launcher.otf");
 
 // `font` = the `font` setting, tried before the system font paths.
 pub fn install_fonts(ctx: &egui::Context, font: Option<&str>) {
     let mut fonts = egui::FontDefinitions::default();
-    match cjk_font(font) {
-        Some(data) => {
-            fonts
-                .font_data
-                .insert("cjk".into(), std::sync::Arc::new(data));
-            for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(fam).or_default().push("cjk".into());
-            }
+    fonts.font_data.insert(
+        "ui_sans".into(),
+        std::sync::Arc::new(egui::FontData::from_static(UI_SANS)),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "ui_sans".into());
+    if let Some(data) = cjk_font(font) {
+        fonts
+            .font_data
+            .insert("cjk".into(), std::sync::Arc::new(data));
+        for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.entry(fam).or_default().push("cjk".into());
         }
-        None => log::warn!(
-            "no CJK font found (set TH08_FONT); Japanese help text falls back to the serif face"
-        ),
     }
     crate::theme::add_serif(&mut fonts);
     ctx.set_fonts(fonts);
