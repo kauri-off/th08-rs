@@ -3,8 +3,13 @@
 # Saves and port.cfg go to a throwaway copy of ~/.config/th08 unless XDG_CONFIG_HOME is set by the caller.
 if [[ -z $XDG_CONFIG_HOME ]]; then
   XDG_CONFIG_HOME=$(mktemp -d "${TMPDIR:-/tmp}/th08cfg.XXXXXX")
-  trap 'rm -rf "$XDG_CONFIG_HOME"' EXIT
+  made_cfg=1
   [[ -d $HOME/.config/th08 ]] && cp -r "$HOME/.config/th08" "$XDG_CONFIG_HOME/"
   export XDG_CONFIG_HOME
 fi
+# No sound reaches the user: ALSA gets a null device, PipeWire / Pulse an unreachable server.
+alsa_null=$(mktemp "${TMPDIR:-/tmp}/th08alsa.XXXXXX")
+trap 'rm -f "$alsa_null"; [[ -n ${made_cfg:-} ]] && rm -rf "$XDG_CONFIG_HOME"' EXIT
+printf 'pcm.!default { type null }\nctl.!default { type null }\n' > "$alsa_null"
+export ALSA_CONFIG_PATH=$alsa_null PIPEWIRE_REMOTE=th08-no-such-remote PULSE_SERVER=unix:/nonexistent/th08
 env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a "$@"
