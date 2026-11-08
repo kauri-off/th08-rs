@@ -120,9 +120,11 @@ component TabCell inherits Target {
     in property <bool> sel;
     in property <length> size;
     in property <bool> wrap-text;
+    in property <bool> focused;
     name: "tab|" + text;
     out property <length> natural: l.preferred-width;
     min-height: Ui.touch ? 120px : 48px;
+    if focused: FocusMark { bar: true; x: -12px; width: parent.width + 24px; }
     l := Ringed {
         width: 100%;
         text: root.text;
@@ -162,13 +164,12 @@ export component Tabs inherits Rectangle {
             for t in tabs: Text { text: t; font-family: Tk.serif; font-size: root.size; }
         }
     }
-    if bar: FocusMark { bar: true; x: -12px; width: parent.width + 24px; }
     if !rail: HorizontalLayout {
         spacing: tight ? 12px : 32px * fit;
         alignment: start;
         if prev-key != "": VerticalLayout { alignment: center; Keycap { cap: { text: prev-key, disc: false }; size: root.size * 0.7; } }
         for t[i] in tabs: TabCell {
-            text: t; sel: i == root.current; size: root.tight ? Ui.font(0, 13) : root.size * root.fit;
+            text: t; sel: i == root.current; focused: root.bar && i == root.current; size: root.tight ? Ui.font(0, 13) : root.size * root.fit;
             wrap-text: root.tight;
             preferred-width: root.tight ? (root.avail - 12px * (tabs.length - 1)) / tabs.length : self.natural;
             max-width: root.tight ? self.preferred-width : 100000px;
@@ -179,7 +180,7 @@ export component Tabs inherits Rectangle {
     if rail: VerticalLayout {
         alignment: start;
         for t[i] in tabs: TabCell {
-            text: t; sel: i == root.current; size: root.size; wrap-text: true;
+            text: t; sel: i == root.current; focused: root.bar && i == root.current; size: root.size; wrap-text: true;
             clicked => { root.pick(i); }
         }
     }
