@@ -287,5 +287,5 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           SHA: ${{ github.sha }}
         run: |
-          gh release create "$TAG" dist/* --title "$TAG" --notes-file .github/release-notes.md --generate-notes \
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file .github/release-notes.md \
             --target "$SHA"
