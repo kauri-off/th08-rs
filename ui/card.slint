@@ -300,7 +300,7 @@ export component PauseCard inherits Window {
     // A short pillar gives the help and device lines' room to the rows.
     property <length> rows-least: resume-h + 60px * gaps + (asking ? confirm-measure.preferred-height : mids.length * least-h + max(dangers.length * least-h, dangers-m.preferred-height));
     // The rows of a tight pillar share what is left, down to their least height.
-    property <length> row-fit: !pillar || asking ? row-h : clamp((rows-bottom - rows-top - resume-h - 60px * gaps) / max(1, mids.length + dangers.length), least-h, row-h);
+    property <length> row-fit: !pillar || asking ? row-h : clamp((rows-bottom - rows-top - resume-h - 60px * gaps - max(0, dangers-m.preferred-height - dangers.length * least-h)) / max(1, mids.length + dangers.length), least-h, row-h);
     property <length> column-rows: resume-h + 52px + (hide-mids-column ? 0 : mids.length * max(row-h, Ui.tap)) + (asking ? confirm-measure.preferred-height : dangers.length * max(row-h, Ui.tap));
     property <bool> foot-no-hints: pillar ? rows-top + rows-least + foot-base + 36px > geo.bottom : column && rows-top + column-rows + foot-base > geo.foot-limit;
     // Last step: the rows and the question always stay; the notes go when nothing else is left to give.
