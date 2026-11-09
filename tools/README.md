@@ -30,6 +30,7 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `android/ui_matrix.py` | all | Android launcher on an emulator with real gestures across orientation, language, theme, font scale and cut-out; reachability, value-guard and layout checks, contact sheets (`--port`, default `$QEMU_PORT`) |
 | `android/build_apk.sh` | all | convenience wrapper; `cargo xtask dist --target android-apk` is the supported way |
 | `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots); stall watchdog (`wait` exit 76, `kill ID`), two emulator slots (`QEMU_PORT`, own AVD per slot), emulator snapshot around emu jobs, scratch quota warning; `q selftest` |
+| `private_sessions [NAME]` | maintainer | prints where the maintainer's two human sessions are (`TH08_PRIVATE_SESSIONS`, else `devdata/sessions` of the main checkout); exit 1 when absent |
 | `arch_job NAME` | maintainer | `arch_check run devdata/arch_ref` as a `q` job |
 | `batch_job NAME` | maintainer | the replay batch (sets `ref500`, `ref_b2`) as a `q` job; `due` / `train [--now]`: the batch train for batch-due commits (bisects on FAIL) |
 | `check NAME` | maintainer | runs the `check_level` check of a worktree's committed HEAD as a `q` job; on PASS writes a stamp in `devdata/checks/` |

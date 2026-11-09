@@ -3,7 +3,7 @@
 # aarch64-linux-android (qemu-aarch64), wasm32-wasip1 (wasmtime) and x86_64-pc-windows-gnu (tools/wine_headless), and
 # compares each target's per-row hash stream with x86_64. Prints a table; exit 1 on any mismatch or failed run.
 # Env: J (parallel runs, default 8), TH08_DIR / TH08_GAME_SRC, TH08_EXT_REPLAYS, XPLAT_TARGETS (default "arm wasm win"),
-# XPLAT_LIMIT=N (first N entries only), WINE_HEADLESS (default tools/wine_headless).
+# TH08_REQUIRE_DATA=1 (a missing private session fails), TH08_PRIVATE_SESSIONS, XPLAT_LIMIT=N (first N entries only), WINE_HEADLESS (default tools/wine_headless).
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [[ -f $ROOT/re/tools/localenv.sh ]] && source "$ROOT/re/tools/localenv.sh"
@@ -12,7 +12,8 @@ GAME=${TH08_DIR:-${TH08_GAME_SRC:-}}
 [[ -n $GAME ]] || { echo "no game dir: set TH08_DIR or TH08_GAME_SRC"; exit 2; }
 GAME=$(realpath "$GAME")
 J=${J:-8} TARGETS=${XPLAT_TARGETS:-arm wasm win}
-for v in $(compgen -e); do [[ $v == TH08_* && $v != TH08_EXT_REPLAYS ]] && unset "$v"; done
+REQUIRE=${TH08_REQUIRE_DATA:-}
+for v in $(compgen -e); do [[ $v == TH08_* && $v != TH08_EXT_REPLAYS && $v != TH08_PRIVATE_SESSIONS ]] && unset "$v"; done
 X=$ROOT/target/xplat
 export CARGO_TARGET_DIR=$X
 
@@ -37,7 +38,11 @@ for t in $TARGETS; do
 done
 
 rm -rf "$OUT"; mkdir -p "$OUT"
-grep -v '^#' "$ROOT/tools/xplat_replays.list" | sed 's/ *#.*//' | awk 'NF' | head -n "${XPLAT_LIMIT:-1000000}" > "$OUT/list.txt"
+grep -v '^#' "$ROOT/tools/xplat_replays.list" | sed 's/ *#.*//' | awk 'NF' | head -n "${XPLAT_LIMIT:-1000000}" > "$OUT/all.txt"
+while read -r k a; do
+  if [[ $k != private ]] || why=$("$ROOT/tools/private_sessions" "$a" 2>&1 > /dev/null); then echo "$k $a"
+  else echo "skipped: $k $a: $why" >&2; [[ $REQUIRE == 1 ]] && exit 2; fi
+done < "$OUT/all.txt" > "$OUT/list.txt" || exit 2
 winpath() { local p; p=$(realpath -m "$1"); echo "Z:${p//\//\\}"; }
 WINE_HEADLESS=${WINE_HEADLESS:-$ROOT/tools/wine_headless}
 [[ " $TARGETS " != *" win "* || -x $WINE_HEADLESS ]] || { echo "no $WINE_HEADLESS"; exit 2; }
@@ -50,6 +55,7 @@ run_one() {
   id=$(echo "$kind-$arg" | tr '/' '_')
   case $kind in
     session) dir=$ROOT/$arg ;;
+    private) dir=$("$ROOT/tools/private_sessions" "$arg") ;;
     ext) dir=$TH08_EXT_REPLAYS/$arg ;;
   esac
   local o=$OUT/$id.$t.hash e=$OUT/$id.$t.err

@@ -358,7 +358,7 @@ def fixtures(tmp, imported):
         (d / "game").mkdir()
         (d / "game/th08.pak").write_bytes(b"x")
         (d / "game/thbgm.pak").write_bytes(b"x")
-        shutil.copy(REPO / "specs/data/sessions/golden/end/score.dat", d / "score.dat")
+        shutil.copy(REPO / "specs/data/sessions/hiscore_entry/end/score.dat", d / "score.dat")
         v = re.search(r"const VERSION: u\d+ = (\d+)", (REPO / "src/stats.rs").read_text())[1]
         lines, t = [], 1790000000
         for run_ in range(25):

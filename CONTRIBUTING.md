@@ -58,11 +58,13 @@ sleeps or wall-clock waits: use the frame counter or a mock clock. A test that a
 values copied from a trace or from the code under test prove nothing.
 
 **arch_check** (`tools/arch_check freeze DIR` on the commit before your change, then `tools/arch_check run DIR`)
-is a port-vs-port check: it builds, runs the CI set's lints and the tests with game data, then replays the six
-sessions in `specs/data/sessions/`, the four attract demos and the pilot replays (also with emits off) and compares
+is a port-vs-port check: it builds, runs the CI set's lints and the tests with game data, then replays the seven
+public sessions in `specs/data/sessions/`, the four attract demos and the pilot replays (also with emits off) and compares
 traces and draw hashes with the reference. It needs `TH08_DIR` (or `TH08_GAME_SRC` in `packaging/local/local.env`,
 see `packaging/local.env.example`); pilot replays (`PILOT_SRC`, else `$TH08_EXT_REPLAYS/ref`) are optional and
-skipped when absent. Draw hashes cover the draw commands, not the GPU output.
+skipped when absent. Draw hashes cover the draw commands, not the GPU output. The maintainer's two human sessions are
+local and also compared on their machine; everyone else sets `TH08_PUBLIC_SESSIONS_ONLY=1`, for freeze and run alike
+(without it arch_check stops, so that a missing session never means a smaller check).
 
 **The replay batch** plays third-party replays recorded in the original (sets `ref500` and `ref_b2` under
 `$TH08_EXT_REPLAYS`, not published) and fails on any replay that leaves `tools/batch/<set>.identical`. Only the
@@ -78,13 +80,13 @@ Logic must stay identical to the original, so the proof is port against the orig
 1. **Sessions and demos of the original** (committed, need only your game files):
    ```sh
    cargo build --release -p th08-tools
-   for s in golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg; do
+   for s in selftest1 gameover_save musicroom_practice options_cfg continue_retry hiscore_entry title_demo; do
      TH08_DIR=/path/to/game target/release/session specs/data/sessions/$s --no-drawlog --out /tmp/s_$s | grep -E 'differing row|ended at'
    done
    for n in 0 1 2 3; do TH08_DIR=/path/to/game target/release/demosync $n; done
    ```
    Every session must say `no differing row` and every demo `in sync for every frame`, before and after your change.
-   `fullrun_noclip` takes a few minutes. These are traces of the original: if one starts to differ, your change is
+   These are traces of the original: if one starts to differ, your change is
    wrong (or the spec is incomplete: a `// SPEC-GAP:` and a question, never a fix fitted to the trace).
 2. **arch_check**: freeze on the parent commit, run on yours. A bug fix that changes behaviour is expected to make
    items differ. A difference is accepted only for items whose `session` / `demosync` report against the original
@@ -100,8 +102,8 @@ change that must keep the 640×480 picture identical:
 
 ```sh
 # on the parent commit, then on yours (TH08_DIR set, a GPU or a software Vulkan adapter)
-target/release/hirescmp specs/data/sessions/golden --scale 1 --every 300 --events --save /tmp/px_old
-target/release/hirescmp specs/data/sessions/golden --scale 1 --every 300 --events --ref /tmp/px_old --out /tmp/px_cmp
+target/release/hirescmp specs/data/sessions/gameover_save --scale 1 --every 300 --events --save /tmp/px_old
+target/release/hirescmp specs/data/sessions/gameover_save --scale 1 --every 300 --events --ref /tmp/px_old --out /tmp/px_cmp
 ```
 
 `/tmp/px_cmp/1x/index.html` lists every frame worst first; for pixel identity the max difference must be 0 on every
@@ -133,8 +135,10 @@ that regenerates it instead of conflicting. Register it once per clone with `too
 The repository contains no game data. Everything that runs the game, including the tests with game data and the
 regression checks, needs your own copy of Touhou 8 (`th08.dat`, `thbgm.dat`; point `TH08_DIR` at the folder).
 
-Two `sessions` directories, two meanings: `specs/data/sessions/` holds the six committed reference sessions of the
-original (inputs, events and the state trace, ~6 MB; [README](specs/data/sessions/README.md)); `sessions/` is the
+Two `sessions` directories, two meanings: `specs/data/sessions/` holds the seven committed scripted reference
+sessions of the original (inputs, events and the state trace, ~2 MB; [README](specs/data/sessions/README.md)); the two
+sessions of human play (`golden`, `fullrun_noclip`) are the maintainer's and stay local, so tests that use them print
+`skipped: <test>: <why>` elsewhere; `sessions/` is the
 gitignored local output of `re/tools/record_session.sh` with the large draw logs
 ([sessions/README.md](sessions/README.md)). Third-party replays come from public Touhou replay sites and are not
 committed.

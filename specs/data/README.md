@@ -108,6 +108,6 @@ colours and fades are reliable.
 | ending_fade_s0450.png | 450 | 186,147,156 | 190.9 (fade finished) |
 
 
-Other folders: `drawlog/` (draw-log format and reference logs), `sessions/` (recorded sessions, README there),
+Other folders: `drawlog/` (draw-log format and reference logs), `sessions/` (recorded scripted sessions, README there; the two human ones are the maintainer's and local),
 `qNN/` (evidence for the RE-QNN / IMPLnn answers, see `specs/changelog/`), `spell_tables.md` (spell-practice text
 tables).

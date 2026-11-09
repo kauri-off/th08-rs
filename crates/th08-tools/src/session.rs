@@ -292,6 +292,13 @@ mod tests {
         ("fullrun_noclip", 124_707),
     ];
 
+    fn session_dir(name: &str) -> Option<std::path::PathBuf> {
+        match name {
+            "golden" | "fullrun_noclip" => th08_testkit::private_session(name),
+            _ => Some(data_dir(name)),
+        }
+    }
+
     #[test]
     fn short_port_trace_fails() {
         let row = |scene: i64| {
@@ -375,6 +382,9 @@ mod tests {
             return;
         };
         for (name, min) in MIN_LEADING {
+            let Some(session) = session_dir(name) else {
+                continue;
+            };
             let Some(gfx) = th08_testkit::need(
                 pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
                 th08_testkit::NO_GPU,
@@ -389,7 +399,7 @@ mod tests {
                 false,
             ))
             .unwrap();
-            let s = Session::load(&data_dir(name)).unwrap();
+            let s = Session::load(&session).unwrap();
             let Ok(rec) = s.recorded() else {
                 eprintln!("{name}: reference unreadable, skipped");
                 continue;
@@ -478,6 +488,9 @@ mod tests {
         else {
             return;
         };
+        let Some(session) = session_dir("fullrun_noclip") else {
+            return;
+        };
         let Some(gfx) = th08_testkit::need(
             pollster::block_on(th08_render::gfx::Gfx::headless()).ok(),
             th08_testkit::NO_GPU,
@@ -492,7 +505,7 @@ mod tests {
             false,
         ))
         .unwrap();
-        let s = Session::load(&data_dir("fullrun_noclip")).unwrap();
+        let s = Session::load(&session).unwrap();
         let Ok(rec) = s.recorded() else {
             eprintln!("fullrun trace unreadable: smoke skipped");
             return;

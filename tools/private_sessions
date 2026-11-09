@@ -1,0 +1,18 @@
+#!/bin/bash
+# usage: tools/private_sessions [NAME] — prints the directory of the maintainer's private sessions (of session NAME if given); exit 1 and the reason on stderr when absent.
+# Looks in $TH08_PRIVATE_SESSIONS, else devdata/sessions of the main checkout (from any git worktree).
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+if [[ -n ${TH08_PRIVATE_SESSIONS:-} ]]; then
+  dir=$TH08_PRIVATE_SESSIONS
+elif common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2> /dev/null); then
+  dir=$(dirname "$common")/devdata/sessions
+else
+  echo "private sessions not found: no git checkout and TH08_PRIVATE_SESSIONS unset" >&2
+  exit 1
+fi
+dir=$(realpath -m "$dir")
+target=$dir${1:+/$1}
+marker=$target; [[ -n ${1:-} ]] && marker=$target/meta.txt
+[[ -e $marker ]] || { echo "private session data not found at $target (maintainer only; TH08_PRIVATE_SESSIONS)" >&2; exit 1; }
+echo "$target"

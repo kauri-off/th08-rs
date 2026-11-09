@@ -1,7 +1,7 @@
-# tools/xplat_replays inputs: session DIR (repo-relative), demo N, ext SET/NAME (under $TH08_EXT_REPLAYS).
+# tools/xplat_replays inputs: session DIR (repo-relative), private NAME (tools/private_sessions, skipped when absent), demo N, ext SET/NAME (under $TH08_EXT_REPLAYS).
 session specs/data/sessions/selftest1
-session specs/data/sessions/golden
-session specs/data/sessions/fullrun_noclip
+private golden
+private fullrun_noclip
 session specs/data/sessions/gameover_save
 session specs/data/sessions/musicroom_practice
 session specs/data/sessions/options_cfg

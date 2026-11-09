@@ -3,11 +3,13 @@
 Format: `specs/data/drawlog/README.md` "Sessions". Each directory holds `input.txt` (TH08_INPUT, frame 1 = first main-menu frame), `polls.txt`, `events.txt` (boot seed, loader timing), `meta.txt`, `trace.txt.xz` (36-column state trace), `start/` (score.dat, th08.cfg the game read at launch) and `end/` (files after exit).
 Draw logs are large and stay outside git in `sessions/<name>/draw_*.drawlog.xz` (chunks; `cat` them into one .xz stream).
 
-- `golden`: human play, 25 634 frames (~7 min): menu → stage 1 → stage 2 → start of stage 3 → back to the menu. Replay in the original is identical (trace and draw log).
+The scripted sessions below are public. `golden` and `fullrun_noclip` are the maintainer's own play: they are local, not in this repository (`tools/private_sessions` finds them; tests skip without them).
+
+- `golden` (maintainer only): human play, 25 634 frames (~7 min): menu → stage 1 → stage 2 → start of stage 3 → back to the menu. Replay in the original is identical (trace and draw log).
 - `selftest1`: scripted, 1 922 frames: title → stage 1 → pause → quit → title → quit.
 - `gameover_save`, `musicroom_practice`, `options_cfg`: scripted (RE-Q22), see "Scripted reference sessions" below.
 - `continue_retry`, `hiscore_entry`, `title_demo`: scripted (RE_SESS_GAPS), see "Scripted sessions for uncovered paths" below.
-- `fullrun_noclip`: human play with `--noclip` (`noclip: 1`, 2 733 absorbed hits logged as `noclip_hit` in events.txt), 124 705 frames (~35 min): menu → stages 1–6 → ending/staff roll. Re-verified by a full replay in the original after RE-Q22: 124 708 trace rows, 0 differ, events identical (see `fullrun_noclip/verify.txt`).
+- `fullrun_noclip` (maintainer only): human play with `--noclip` (`noclip: 1`, 2 733 absorbed hits logged as `noclip_hit` in events.txt), 124 705 frames (~35 min): menu → stages 1–6 → ending/staff roll. Re-verified by a full replay in the original after RE-Q22: 124 708 trace rows, 0 differ, events identical (see `fullrun_noclip/verify.txt`).
 
 ## Scripted reference sessions (RE-Q22)
 

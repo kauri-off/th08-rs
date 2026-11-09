@@ -3,8 +3,8 @@
 Each subdirectory is one session of the **original** th08, recorded with `re/tools/record_session.sh`. It holds everything
 needed to replay the session bit-exactly (in the original and in the port) and to compare the two. This directory is
 git-ignored except for this README. The small files of the reference sessions (`meta.txt`, `input.txt`, `polls.txt`,
-`events.txt`, `trace.txt.xz`, `start/`, `end/`, saved replays) are tracked under
-[`specs/data/sessions/<name>/`](../specs/data/sessions/README.md); the draw logs, diagnostics and `play_*/` replays
+`events.txt`, `trace.txt.xz`, `start/`, `end/`, saved replays) of the scripted sessions are tracked under
+[`specs/data/sessions/<name>/`](../specs/data/sessions/README.md) (the maintainer's two human sessions stay local); the draw logs, diagnostics and `play_*/` replays
 stay local in `sessions/<name>/`.
 
 ## Recording a session

@@ -3,7 +3,8 @@
 # freeze: build, then write port traces + draw hashes of all sessions, demos 0-3 and the pilot replays into DIR.
 # run: fmt, 0-warning build, clippy, core deps (no wgpu/cpal/winit/egui/rfd/clap/liblzma in th08-core / th08-out), emit rule, doc pointers, wasm + android
 # check, cargo test, then rerun every item (plus emit-off session replays) and compare with DIR; exit 1 on any diff.
-# Env: J, CARGO_TARGET_DIR, RUN_OUT, ONLY (item regex), FAST=1 (traces only), SCOPE=logic (LOGIC_ITEMS), PACK (pack mounted, same results).
+# Env: J, CARGO_TARGET_DIR, RUN_OUT, ONLY (item regex), FAST=1 (traces only), SCOPE=logic (LOGIC_ITEMS), PACK (pack mounted, same results),
+# TH08_PUBLIC_SESSIONS_ONLY=1 (without the maintainer's private sessions; otherwise their absence is an error).
 # Needs TH08_DIR (or TH08_GAME_SRC in packaging/local/local.env); pilot replays: PILOT_SRC or $TH08_EXT_REPLAYS/ref, else none.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -11,7 +12,8 @@ TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 BIN=$TARGET/release
 # Binary names (cargo --bin, in crates/th08-tools); these names must stay.
 SESSION_BIN=session DEMOSYNC_BIN=demosync DRAWRUN_BIN=drawrun
-SESSIONS="golden fullrun_noclip selftest1 gameover_save musicroom_practice options_cfg continue_retry hiscore_entry title_demo"
+PRIVATE_SESSIONS="golden fullrun_noclip"
+SESSIONS="selftest1 gameover_save musicroom_practice options_cfg continue_retry hiscore_entry title_demo"
 SESSION_SRC=$ROOT/specs/data/sessions
 # packaging/local/local.env (through re/tools/localenv.sh) may set TH08_GAME_SRC and TH08_EXT_REPLAYS; both optional.
 [[ -f $ROOT/re/tools/localenv.sh ]] && source "$ROOT/re/tools/localenv.sh"
@@ -29,7 +31,19 @@ export TH08_DIR="${TH08_DIR:-${TH08_GAME_SRC:+$TH08_GAME_SRC/}}"
 export XDG_CONFIG_HOME=$ROOT/devdata/arch_cfg
 export CARGO_TARGET_DIR=$TARGET
 if [[ -n ${PACK:-} ]]; then export TH08_PACK=$(realpath "$PACK") RUST_LOG=th08::packs=info; echo "pack $TH08_PACK"; else unset TH08_PACK; fi
-export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PILOT_SRC TIME
+PRIVATE_SRC=
+if [[ ${TH08_PUBLIC_SESSIONS_ONLY:-} == 1 ]]; then
+  for s in $PRIVATE_SESSIONS; do echo "skipped: session $s: TH08_PUBLIC_SESSIONS_ONLY=1"; done
+else
+  for s in $PRIVATE_SESSIONS; do
+    p=$("$ROOT/tools/private_sessions" "$s") || { echo "arch_check: private session $s missing; set TH08_PUBLIC_SESSIONS_ONLY=1 to check without it"; exit 2; }
+    PRIVATE_SRC=$(dirname "$p")
+  done
+  SESSIONS="$PRIVATE_SESSIONS $SESSIONS"
+fi
+session_dir() { if [[ " $PRIVATE_SESSIONS " == *" $1 "* ]]; then echo "$PRIVATE_SRC/$1"; else echo "$SESSION_SRC/$1"; fi; }
+export -f session_dir
+export BIN SESSION_BIN DEMOSYNC_BIN DRAWRUN_BIN SESSION_SRC PRIVATE_SESSIONS PRIVATE_SRC PILOT_SRC TIME
 
 mode=${1:-} dir=${2:-}
 FAST=${FAST:-}; SCOPE=${SCOPE:-}; [[ $mode == freeze ]] && FAST= SCOPE=
@@ -54,7 +68,11 @@ noemit_items() {
   items | grep -E '^(s|p)_' | sed 's/^/n_/'
 }
 
-all_items() { if [[ $SCOPE == logic ]]; then tr ' ' '\n' <<< "$LOGIC_ITEMS"; else items; noemit_items; fi; }
+all_items() {
+  if [[ $SCOPE == logic ]]; then
+    tr ' ' '\n' <<< "$LOGIC_ITEMS" | if [[ -z $PRIVATE_SRC ]]; then grep -vE "_(${PRIVATE_SESSIONS// /|})\$"; else cat; fi
+  else items; noemit_items; fi
+}
 
 # One item into $1/$2: trace.txt, report.txt (stdout), draw.hash, time (seconds + peak RSS kB per process),
 # digest (sha256 of trace, report, draw.hash; written last — tools/arch_job counts */digest).
@@ -64,10 +82,10 @@ run_item() {
   local dl="--draw-hash --no-drawlog"; [[ -n ${FAST:-} ]] && dl=--no-drawlog
   local t=(); [[ -n $TIME ]] && t=("$TIME" -a -o "$o/time" -f "%e %M")
   case $2 in
-    n_*) local r=${2#n_} src=$SESSION_SRC; [[ $r == p_* ]] && src=$PILOT_SRC
-         nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$src/${r#?_}" --out "$o" --no-emit --no-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    f_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" --no-drawlog --to "$FULLRUN_TO" > "$o/report.txt" 2> "$o/stderr.txt" ;;
-    s_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$SESSION_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    n_*) local r=${2#n_} src; if [[ $r == p_* ]]; then src=$PILOT_SRC/${r#p_}; else src=$(session_dir "${r#s_}"); fi
+         nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$src" --out "$o" --no-emit --no-drawlog > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    f_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$(session_dir "$n")" --out "$o" --no-drawlog --to "$FULLRUN_TO" > "$o/report.txt" 2> "$o/stderr.txt" ;;
+    s_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$(session_dir "$n")" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
     p_*) nice -n 10 "${t[@]}" "$BIN/$SESSION_BIN" "$PILOT_SRC/$n" --out "$o" $dl > "$o/report.txt" 2> "$o/stderr.txt" ;;
     d_*) nice -n 10 "${t[@]}" "$BIN/$DEMOSYNC_BIN" "$n" 1-9999999 > "$o/trace.txt" 2> /dev/null
          [[ -n ${FAST:-} ]] && : > "$o/report.txt" || nice -n 10 "${t[@]}" "$BIN/$DRAWRUN_BIN" --draw-hash "$o" demo "$n" > "$o/report.txt" 2> "$o/stderr.txt" ;;
@@ -120,6 +138,11 @@ if [[ $mode == freeze ]]; then
   exit 0
 fi
 
+if [[ -n $PRIVATE_SRC && -z ${ONLY:-} ]]; then
+  for s in $PRIVATE_SESSIONS; do
+    grep -q "^s_$s " "$dir/digests.txt" || { echo "arch_check: reference $dir has no s_$s (frozen with TH08_PUBLIC_SESSIONS_ONLY=1?)"; exit 2; }
+  done
+fi
 fail=0
 cargo fmt --all --check > /dev/null 2>&1 && echo "fmt ok" || { echo "fmt FAILED"; fail=1; }
 w=$(cargo build --release --workspace 2>&1 | grep -cE '^(warning|error)')
@@ -169,7 +192,7 @@ while read -r i _ tr _ rp _ dr; do
     w=$((f > 5 ? f - 5 : 1))-$((f + 5))
     case $i in
       d_*) hint="$BIN/$DRAWRUN_BIN --window $w $out/$i/draw.drawlog.xz demo ${i#d_}" ;;
-      s_*) hint="$BIN/$SESSION_BIN $SESSION_SRC/${i#s_} --out $out/$i --port-drawlog --draw-window $w" ;;
+      s_*) hint="$BIN/$SESSION_BIN $(session_dir "${i#s_}") --out $out/$i --port-drawlog --draw-window $w" ;;
       p_*) hint="$BIN/$SESSION_BIN $PILOT_SRC/${i#p_} --out $out/$i --port-drawlog --draw-window $w" ;;
     esac
   fi
