@@ -1014,8 +1014,9 @@ impl PortMenu {
             place,
             navs,
         );
-        if live_values(&self.model) != before {
-            self.changed = true;
+        // Settings draws on the next pass, and nothing else would ask for one until the next input.
+        if live_values(&self.model) != before || self.focus.page == Page::Settings {
+            self.changed |= live_values(&self.model) != before;
             window.request_redraw();
         }
         self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
