@@ -107,9 +107,12 @@ class Screen:
         tappable = [n for n in hits if n.click_target()]
         return (tappable or ([] if clickable else hits) or [None])[0]
 
-    def below(self, y, *labels):
-        """The tappable match nearest under y: a segment of the row whose title is at y, not a same-named value elsewhere."""
-        hits = sorted((n for n in self.find_all(*labels) if n.click_target() and n.y0 >= y), key=lambda n: n.y0)
+    def below(self, row, *labels):
+        """The tappable match nearest under the row title, in its column: its segment, not a same-named value elsewhere."""
+        grids = [n for n in self.nodes if n.scrollable and n.x0 <= row.x0 and n.x1 >= row.x1]
+        mid = (grids[0].x0 + grids[0].x1) // 2 if grids else None
+        same = lambda n: mid is None or (n.cx < mid) == (row.cx < mid)
+        hits = sorted((n for n in self.find_all(*labels) if n.click_target() and n.y0 >= row.y0 and same(n)), key=lambda n: n.y0)
         return hits[0] if hits else None
 
     def texts(self):
@@ -165,7 +168,7 @@ class Ui:
             if n.clickable and n.w and n.h and full and not covered and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
                 self.problem("small target", f"{where}: '{n.label or n.cls}' {round(n.w / self.dp)}x{round(n.h / self.dp)} dp")
             if n.label and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
-                self.problem("cut-out overlap", f"{where}: '{n.label[:40]}'")
+                self.problem("cut-out overlap", f"{where}: '{n.label[:40]}' x {n.x0}..{n.x1} y {n.y0}..{n.y1}, cut-out {cut}")
             if n.x1 > W + 1 or n.x0 < -1:
                 self.problem("off-screen", f"{where}: '{n.label[:40]}' x {n.x0}..{n.x1}")
         for n in leaves:
@@ -448,14 +451,14 @@ def exercise_row(ui, st, e, lang, n):
     if n.click_target() is None:
         before, other = ui.cfg(), next((l for v, l in words.items() if v != e["default"]), None)
         s = ui.dump()
-        seg = s.below(n.y0, other) if other else None
+        seg = s.below(n, other) if other else None
         if seg is None:
             ui.problem("segment not found", label)
             return
         ui.tap(seg)
         if ui.cfg() == before:
             ui.problem("segment did not change the value", label)
-        back = s.below(n.y0, words.get(e["default"], ""))
+        back = s.below(n, words.get(e["default"], ""))
         if back:
             ui.tap(back)
         return
