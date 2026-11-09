@@ -494,6 +494,8 @@ pub struct Gfx {
     // Translations for `TextCmd` keys, pack font, overflow per site; empty = vanilla text.
     pack: crate::textdb::PackText,
     font: Option<String>,
+    // Port UI scenes: made with the device, so no menu transition makes a GPU object.
+    scene: Option<crate::scene_draw::SceneRenderer>,
 }
 
 // Texture × diffuse (05 §12.4 stage 0 MODULATE), alpha test ALPHAREF 4 / GREATEREQUAL, then 06 §10.1 step 3 fog mix.
@@ -1268,6 +1270,10 @@ impl Gfx {
         config: wgpu::SurfaceConfiguration,
     ) -> Self {
         let gpu = Gpu::new(&device, config.format);
+        let scene = Some(crate::scene_draw::SceneRenderer::new(
+            &device,
+            config.format,
+        ));
         let lost = watch_loss(&device);
         #[cfg(debug_assertions)]
         let loss_at = std::env::var("TH08_DEVICE_LOSS")
@@ -1292,6 +1298,7 @@ impl Gfx {
             queue,
             config,
             gpu,
+            scene,
             depth: None,
             depth_test: false,
             textures: Vec::new(),
@@ -1367,6 +1374,10 @@ impl Gfx {
         let (device, queue) = pollster::block_on(request_device(&adapter))?;
         self.lost = watch_loss(&device);
         self.gpu = Gpu::new(&device, self.config.format);
+        self.scene = Some(crate::scene_draw::SceneRenderer::new(
+            &device,
+            self.config.format,
+        ));
         self.scale = 1;
         self.device = device;
         self.queue = queue;
@@ -2292,6 +2303,43 @@ impl Gfx {
         self.queue.present(frame);
         self.presented();
         true
+    }
+
+    // `present_last` with `scene` drawn over the held frame.
+    pub fn present_scene(&mut self, scene: &th08_ui::scene::Scene) -> bool {
+        let mut r = self.scene.take();
+        let shown = self.present_last(|t, enc| {
+            if let Some(r) = &mut r {
+                r.draw(scene, &t, enc);
+            }
+        });
+        self.scene = r;
+        shown
+    }
+
+    // `scene` drawn on `view`, for tools and tests with no window.
+    pub fn draw_scene(
+        &mut self,
+        scene: &th08_ui::scene::Scene,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+        enc: &mut wgpu::CommandEncoder,
+    ) {
+        let t = OverlayTarget {
+            device: &self.device,
+            queue: &self.queue,
+            view,
+            format: self.config.format,
+            size,
+            frame: self.frame_rect(size.0, size.1),
+        };
+        if let Some(r) = &mut self.scene {
+            r.draw(scene, &t, enc);
+        }
+    }
+
+    pub fn scene_renderer(&mut self) -> Option<&mut crate::scene_draw::SceneRenderer> {
+        self.scene.as_mut()
     }
 
     // `present_last` with this device's own overlays (held replay frame).

@@ -20,7 +20,7 @@ choices never wrap. Selected word white, others dim, no box.
 
 **Narrow panes.** A row stacks its control under the label when a label piece is wider than the label column, or
 when the stepper with its widest word does not fit. A word is never broken inside; Japanese breaks only between BudouX
-phrases, with kinsoku (`slintui/text.rs`).
+phrases, with kinsoku (`th08-ui` `wrap.rs`).
 
 **Targets.** Every tap target on touch is at least 48 dp tall; steppers, choices and tabs also 48 dp wide. Exception:
 the list's paging margin.

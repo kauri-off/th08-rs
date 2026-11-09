@@ -64,7 +64,7 @@ pub const RADIUS: u8 = 0;
 pub const RADIUS_PANEL: u8 = 0;
 
 // The menu face: Noto Serif CJK JP SemiBold, cut to the glyphs of the UI tables (`tools/i18n_font_subset`).
-pub const SERIF_FONT: &[u8] = include_bytes!("../i18n/fonts/NotoSerifJP-ui.otf");
+pub use th08_ui::text::SERIF_FONT;
 
 pub fn serif_family() -> FontFamily {
     FontFamily::Name("serif".into())
@@ -403,70 +403,7 @@ pub fn balanced(p: &Painter, text: &str, font: FontId, color: Color32, w: f32) -
     wrap(p, text.to_string(), font, color, hi.ceil())
 }
 
-// Kana, CJK ideographs and full-width forms: the characters Japanese line breaking applies to.
-pub fn is_ja(c: char) -> bool {
-    matches!(u32::from(c), 0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff | 0xff00..=0xffef)
-}
-
-// Characters a line never starts with, and never ends with (kinsoku shori).
-fn no_start(c: char) -> bool {
-    "、。，．・：；？！ー）」』】〕〉》｝’”…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々%％)]},.!?:;".contains(c)
-}
-
-fn no_end(c: char) -> bool {
-    "（「『【〔〈《｛‘“([{".contains(c)
-}
-
-// The pieces a line never breaks inside, in order, each with its trailing spaces: Japanese phrases (BudouX, then
-// kinsoku), and every other word whole.
-pub fn pieces(text: &str) -> Vec<&str> {
-    thread_local! {
-        static JA: budoux_phf_rs::Parser = budoux_phf_rs::Parser::japanese_parser();
-    }
-    let mut cuts = vec![0usize];
-    let mut i = 0;
-    for (at, c) in text.char_indices() {
-        if at < i {
-            continue;
-        }
-        if c.is_whitespace() {
-            let end = text[at..]
-                .find(|c: char| !c.is_whitespace())
-                .map_or(text.len(), |e| at + e);
-            if end < text.len() {
-                cuts.push(end);
-            }
-            i = end;
-            continue;
-        }
-        let end = text[at..]
-            .find(char::is_whitespace)
-            .map_or(text.len(), |e| at + e);
-        let word = &text[at..end];
-        if word.chars().any(is_ja) {
-            let mut off = at;
-            JA.with(|j| {
-                j.parse_with(word, |chunk| {
-                    if off > at {
-                        cuts.push(off);
-                    }
-                    off += chunk.len();
-                });
-            });
-        }
-        i = end;
-    }
-    cuts.push(text.len());
-    cuts.dedup();
-    // Kinsoku: no cut before a closing mark or small kana, none after an opening bracket.
-    cuts.retain(|&c| {
-        c == 0
-            || c == text.len()
-            || !(text[c..].chars().next().is_some_and(no_start)
-                || text[..c].chars().next_back().is_some_and(no_end))
-    });
-    cuts.windows(2).map(|w| &text[w[0]..w[1]]).collect()
-}
+pub use th08_ui::wrap::{is_ja, pieces, unbreakable};
 
 // Text wrapped at `w` as `Painter::layout` does, except that text with Japanese in it breaks only between
 // `pieces` (a piece wider than `w` still wraps inside).
@@ -1247,11 +1184,6 @@ pub fn ctl_height(p: &Painter, ctl: &Ctl, st: &CtlStyle, w: f32) -> f32 {
         Ctl::None => 0.0,
         _ => line_h(st),
     }
-}
-
-// The pieces a label never breaks inside, without their spaces.
-pub fn unbreakable(text: &str) -> Vec<&str> {
-    pieces(text).into_iter().map(str::trim_end).collect()
 }
 
 // The label column (16 points of it the gap to the control): at least `base`, wide enough for the widest single

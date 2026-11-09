@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/th08-formats", "crates/th08-out", "crates/th08-core", "crates/th08-render", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "crates/th08-replay", "crates/th08-testkit", "xtask"]
+members = [".", "crates/th08-formats", "crates/th08-out", "crates/th08-core", "crates/th08-render", "crates/th08-ui", "crates/th08-audio", "crates/th08-thcrap", "crates/th08-repack", "crates/th08-tools", "crates/th08-replay", "crates/th08-testkit", "xtask"]
 resolver = "3"
 exclude = ["vendor"]
 
@@ -48,7 +48,7 @@ th08-formats = { path = "crates/th08-formats" }
 th08-render = { path = "crates/th08-render" }
 anyhow = "1.0.104"
 # Japanese phrase boundaries for line breaking in the port UI (theme.rs).
-budoux-phf-rs = { version = "0.1.10", default-features = false, features = ["std", "ja"] }
+th08-ui = { path = "crates/th08-ui" }
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 egui-wgpu = { version = "0.37", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
