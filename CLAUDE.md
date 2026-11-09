@@ -42,8 +42,7 @@ same checks directly, without the queue: [CONTRIBUTING.md](CONTRIBUTING.md#check
   keep (arch_check reference and config, agent task log) lives in the gitignored `devdata/`; the Android debug key in
   `~/.local/share/th08-dev/`.
 
-- Every git worktree builds in its own `target/`; never link or share target dirs between worktrees. Plain cargo
-  build / check / clippy / fmt / unit tests need no lock.
+- Every git worktree builds in its own `target/`; never link or share target dirs between worktrees.
 - Heavy runs (arch_check, cargo tests with game data, the emulator, replay batches) go through the job queue:
   `tools/q submit --kind check|test|emu|full|batch --label NAME -C DIR -- CMD…`, then `tools/q wait ID` in the
   foreground until it ends (exit 75 = not done yet; 76 = stalled: no output and ~no CPU for 10 min, not killed —
