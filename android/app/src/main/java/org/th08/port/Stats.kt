@@ -157,7 +157,7 @@ private fun Loaded(o: JSONObject, w: Words, wide: Boolean) {
             }
         }
         when (tab) {
-            Tab.Overview -> overview(o, st, w)
+            Tab.Overview -> overview(o, st, w, !wide)
             Tab.Scores -> sd?.let { scores(o, it, w) }
             Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
             Tab.History -> history(st, w)
@@ -251,7 +251,7 @@ private fun Entry(title: String, detail: String?, values: List<String>, head: Bo
 private fun Note(t: String) = Text(t, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
-private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words) {
+private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words, stacked: Boolean) {
     if (st.getInt("runs") == 0) {
         item("none") { Note(str(R.string.stats_none)) }
         return
@@ -282,7 +282,7 @@ private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words) {
         val cap = c.getInt("captures")
         val no = c.getInt("card") + 1
         Entry(c.getString("name").ifEmpty { str(R.string.stats_card_no, no) }, "No. %03d".format(Locale.US, no),
-            listOf((a - cap).toString(), "$cap / $a"))
+            listOf((a - cap).toString(), "$cap / $a"), stacked = stacked)
     }
 }
 

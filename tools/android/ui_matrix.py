@@ -177,7 +177,7 @@ class Ui:
         st = strings(self.combo["lang"])
         tabs = [t.y1 for t in s.nodes if t.text in (st["stats_tab_overview"], st["stats_tab_history"])]
         for n in s.nodes:
-            if tabs and n.y0 <= max(tabs) + 2 and n.clickable and n.y1 > max(tabs):
+            if tabs and n.y0 <= max(tabs) + 2 and n.clickable:
                 continue
             full = n.y0 > 0 and n.y1 < H - 1 and not (vp and (n.y0 <= vp[1] + 2 or n.y1 >= vp[3] - 2))
             if n.clickable and n.w and n.h and full and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
