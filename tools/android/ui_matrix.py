@@ -167,7 +167,7 @@ class Ui:
             covered = any(c is not n and n.x1 > c.x0 - pad and n.x0 < c.x1 + pad and n.y1 > c.y0 - pad and n.y0 < c.y1 + pad for c in covers)
             if n.clickable and n.w and n.h and full and not covered and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
                 self.problem("small target", f"{where}: '{n.label or n.cls}' {round(n.w / self.dp)}x{round(n.h / self.dp)} dp")
-            if n.label and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
+            if (n.text or n.desc) and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
                 self.problem("cut-out overlap", f"{where}: '{n.label[:40]}' x {n.x0}..{n.x1} y {n.y0}..{n.y1}, cut-out {cut}")
             if n.x1 > W + 1 or n.x0 < -1:
                 self.problem("off-screen", f"{where}: '{n.label[:40]}' x {n.x0}..{n.x1}")
