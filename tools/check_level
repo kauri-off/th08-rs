@@ -8,6 +8,7 @@
 #   A manifest / Cargo.lock change that leaves that tree alone is full plus a `batch-due:` line (the batch train
 #   covers it: `tools/batch_job due COMMIT` after landing it); one that only bumps workspace versions is full.
 # Launcher / port menu / theme changed: a `ui:` line; tools/check then runs the uishots layout check.
+# Port menu, its model or the event loop changed: an `emu:` line; tools/check then also runs tools/android/menu_check.
 # th08-render changed: also a pixel check (arch_check hashes the draw commands, not the GPU output), printed as
 #   `pixels: …` after the level.
 # A core / formats source whose changed lines are all comments or blank is full, not batch.
@@ -94,6 +95,8 @@ else echo light; fi
   echo "batch-due: $due; after landing: tools/batch_job due COMMIT (the batch train runs it)"
 grep -qE '^src/(launcher|platform/portmenu|theme|uicheck|slintui)|^ui/|^crates/th08-tools/src/bin/uishots\.rs$' <<<"$files" &&
   echo "ui: uishots (layout check of the launcher / port-menu matrix; tools/check runs it)"
+grep -qE '^src/(app\.rs|menu_model\.rs|settings_store\.rs|slintui/|platform/portmenu)|^ui/|^tools/android/menu_check$' <<<"$files" &&
+  echo "emu: tools/android/menu_check (in-game menu, real touch; tools/check runs it as a second job)"
 grep -q '^crates/th08-render/' <<<"$files" &&
   echo "pixels: hirescmp SRC --scale 1 --save OLD on the old build, --ref OLD on the new one (TH08_DIR, GPU); cargo test -p th08-render"
 exit 0

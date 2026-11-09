@@ -1,0 +1,82 @@
+#!/bin/bash
+# usage: tools/android/menu_check [OUT_DIR] — the in-game menu on an emulator with real touch on egui and Slint: each tap, with nothing sent after it, must present its screen. Run as a q emu job.
+# Needs the game files (TH08_DIR, else TH08_GAME_SRC in packaging/local/local.env); without them it skips (exit 0; TH08_REQUIRE_DATA=1: exit 1). PROBE=1: screenshots only.
+set -u
+cd "$(dirname "$0")/../.." || exit 1
+MAIN=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+env=$MAIN/packaging/local/local.env
+[[ -f $env ]] && . "$env"
+SRC=${TH08_DIR:-${TH08_GAME_SRC:-}}
+if [[ -z $SRC || ! -e $SRC ]]; then
+  echo "menu_check skipped: no game files"
+  [[ ${TH08_REQUIRE_DATA:-} == 1 ]] && exit 1
+  exit 0
+fi
+: "${QEMU_PORT:?run as a q emu job}"
+D=${1:-target/android/menu_check}; mkdir -p "$D"
+# Screen points on the th08dbg AVD (2400x1080, landscape, split menu).
+SETTINGS="300 667" TAB="220 383" BACK="220 105" RETRY="300 826" KEEP="300 826" RESUME="300 525"
+SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}; A="$SDK/platform-tools/adb -s emulator-$QEMU_PORT"; PKG=org.th08.port.debug
+export TARGETS=x86_64 PACKED=$SRC
+tools/android/run_debug.sh build || exit 1
+env -u WAYLAND_DISPLAY "$SDK/emulator/emulator" -avd th08dbg -port "$QEMU_PORT" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$D/emu.log" 2>&1 &
+E=$!; LOGCAT=
+trap '[[ -n $LOGCAT ]] && kill $LOGCAT 2>/dev/null; kill $E 2>/dev/null' EXIT
+$A wait-for-device; until [[ $($A shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]]; do sleep 2; done
+$A install -r target/android/th08-debug.apk || exit 1
+fail=0
+shot() { $A exec-out screencap -p > "$D/$1.png"; }
+log=
+count() { grep -c -- "$1" "$log"; }
+# Taps once, sends nothing else, and waits for one more presented "$3" line.
+expect_tap() {
+  local x=$1 y=$2 pat=$3 n i
+  n=$(count "$pat")
+  $A shell input tap "$x" "$y"
+  for i in {1..40}; do
+    (( $(count "$pat") > n )) && { echo "ok   $ui: $pat"; return 0; }
+    sleep 0.25
+  done
+  echo "FAIL $ui: no frame for '$pat' after one tap at $x,$y"; fail=1; shot "fail_${ui}_${pat//[^a-z]/_}"; return 1
+}
+for ui in egui slint; do
+  $A shell am force-stop $PKG; $A logcat -c
+  log=$D/$ui.log; $A logcat -v brief -s th08:I RustStdoutStderr:I AndroidRuntime:E ActivityManager:E > "$log" & LOGCAT=$!
+  $A shell am start -n $PKG/org.th08.port.LauncherActivity; sleep 12
+  if [[ $ui == slint ]]; then
+    $A shell run-as $PKG sh -c "'i=0; while [ \$i -lt 120 ]; do echo slint_ui=on > files/launch.cfg; i=\$((i+1)); sleep 0.05; done'" &
+    sleep 1
+  fi
+  $A shell input tap 907 2011; sleep 22
+  # Through the title and select screens before the attract demo starts: the demo's card has no Retry.
+  for i in {1..7}; do $A shell input tap 2239 803; sleep 1.8; done
+  sleep 8
+  shot ${ui}_game
+  for i in 1 2 3 4 5 6; do
+    $A shell input tap 216 110; sleep 6
+    (( $(count 'menu-open') > 0 )) && break
+  done
+  shot ${ui}_card
+  if [[ ${PROBE:-} == 1 ]]; then
+    $A shell input tap 250 1020; sleep 4; shot ${ui}_settings
+    $A shell input keyevent KEYCODE_BACK; sleep 4; shot ${ui}_back
+    kill $LOGCAT; LOGCAT=; continue
+  fi
+  expect_tap $SETTINGS "card>settings ui=$ui"; sleep 1; shot ${ui}_settings
+  expect_tap $TAB "tab ui=$ui"; sleep 1; shot ${ui}_tab
+  expect_tap $BACK "settings>card ui=$ui"; sleep 1
+  expect_tap $RETRY "card>confirm ui=$ui"; sleep 1; shot ${ui}_confirm
+  expect_tap $KEEP "confirm>card ui=$ui"; sleep 1
+  expect_tap $RESUME "menu-resume ui=$ui"; sleep 3
+  kill $LOGCAT; LOGCAT=
+  grep -E 'panic|FATAL|ANR in' "$log" && fail=1
+  if [[ $ui == slint ]]; then
+    (( $(count 'slintui build: menu') > 0 )) || { echo "FAIL slint path did not run"; fail=1; }
+    n=$(sed -n 's/.*slintui session: pass n=\([0-9]*\).*/\1/p' "$log" | tail -1)
+    echo "slint passes in the session: ${n:-none}"
+    (( ${n:-0} > 0 && ${n:-0} < 400 )) || { echo "FAIL menu pass count ${n:-none}: spinning or missing"; fail=1; }
+  fi
+done
+$A shell am force-stop $PKG
+[[ $fail == 0 ]] && echo "menu_check PASS" || echo "menu_check FAIL"
+exit $fail

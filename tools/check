@@ -5,6 +5,7 @@
 #   check too) and waits up to ~8 min; exit 75 =
 #   still running, continue with `tools/check --wait ID`. On PASS writes devdata/checks/<tree>.pass in the main checkout,
 #   which tools/land reads. Lints run first, outside the queue. Refuses uncommitted or untracked files. --block NAME waits until the job ends.
+#   An `emu:` line adds a q emu job (tools/android/menu_check); the stamp needs both jobs, and --wait then takes ID,ID.
 set -u
 TOOLS=$(cd "$(dirname "$0")" && pwd)
 SELF=$TOOLS/check
@@ -13,19 +14,45 @@ MAIN=$(cd "$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)/.." 
 Q=$MAIN/tools/q
 cd "$W" || exit 2
 
-# Waits for job $1 (all of it with $2 = block); passes through q wait's exit code.
+# Waits for the comma-separated jobs $1 in order (all of it with $2 = block); passes through q wait's exit code.
 wait_job() {
-  local rc
-  while :; do
-    "$Q" wait "$1" --max 480 --tail 30; rc=$?
-    [[ $rc == 75 && ${2:-} == block ]] || break
+  local rc id
+  for id in ${1//,/ }; do
+    while :; do
+      "$Q" wait "$id" --max 480 --tail 30; rc=$?
+      [[ $rc == 75 && ${2:-} == block ]] || break
+    done
+    [[ $rc == 75 ]] && echo "tools/check: job $id still running; continue with: tools/check --wait $1"
+    [[ $rc == 0 ]] || return $rc
   done
-  [[ $rc == 75 ]] && echo "tools/check: job $1 still running; continue with: tools/check --wait $1"
-  return $rc
+  return 0
+}
+
+# Writes the stamp once the main job and, when one was asked for, the emulator job have both passed.
+promote() {
+  local f=$1
+  [[ -f $f.main && ( ! -f $f.needs_emu || -f $f.emu ) ]] || return 0
+  cat "$f.main" - <<< "emu: $(cat "$f.emu" 2> /dev/null || echo none)" > "$f.tmp" && mv "$f.tmp" "$f"
+  rm -f "$f.main" "$f.emu" "$f.needs_emu"
+  echo "== stamp $f"
 }
 
 clean() { [[ -z $(git status --porcelain) ]]; }
 rank() { case $1 in light) echo 1 ;; full) echo 2 ;; batch) echo 3 ;; *) echo 0 ;; esac; }
+
+if [[ ${1:-} == emu ]]; then
+  head=$2 name=$3
+  clean && [[ $(git rev-parse HEAD) == "$head" ]] || { echo "FAIL: $W changed since the check was queued"; exit 1; }
+  [[ -n ${J:-} ]] && export CARGO_BUILD_JOBS=$J
+  tools/android/menu_check || { echo "== check $name: FAIL: menu_check"; exit 1; }
+  clean && [[ $(git rev-parse HEAD) == "$head" ]] || { echo "FAIL: $W changed during the check"; exit 1; }
+  f=$MAIN/devdata/checks/$(git rev-parse "$head^{tree}").pass
+  job=$(readlink /proc/$$/fd/1 | sed -n 's#.*/jobs/\([^/]*\)/out\.log$#\1#p')
+  echo "${job:--}" > "$f.emu"
+  promote "$f"
+  echo "== check $name: menu_check PASS"
+  exit 0
+fi
 
 if [[ ${1:-} == run ]]; then
   level=$2 head=$3 name=$4
@@ -60,8 +87,9 @@ if [[ ${1:-} == run ]]; then
   f=$MAIN/devdata/checks/$tree.pass
   { echo "level: $level"; echo "tree: $tree"; echo "head: $head"; echo "branch: $(git branch --show-current)"
     echo "name: $name"; echo "jobs: ${job:--}"; echo "time: $(date -Is)"; if [[ $level == batch ]]; then echo "batch_due: yes"; fi
-  } > "$f.tmp" && mv "$f.tmp" "$f"
-  echo "== check $name: PASS ($level), stamp $f"
+  } > "$f.main"
+  promote "$f"
+  echo "== check $name: PASS ($level), $f"
   exit 0
 fi
 
@@ -93,6 +121,15 @@ for lint in "cargo fmt --all --check" "cargo clippy -q --locked --workspace --al
   $lint || { echo "tools/check: FAIL before queueing: $lint"; exit 1; }
 done
 kind=full; [[ $level == light ]] && kind=check
+rm -f "$f.main" "$f.emu" "$f.needs_emu"
+want_emu=
+if "$TOOLS/check_level" "$(git merge-base master HEAD)" "$head" | grep -q '^emu:'; then
+  mkdir -p "$(dirname "$f")"; : > "$f.needs_emu"; want_emu=1
+fi
 id=$("$Q" submit --kind "$kind" --label "check-$name" -C "$W" -- "$SELF" run "$level" "$head" "$name") || exit 2
+if [[ -n $want_emu ]]; then
+  emu=$("$Q" submit --kind emu --label "menu-$name" -C "$W" -- "$SELF" emu "$head" "$name") || exit 2
+  id=$id,$emu
+fi
 echo "tools/check: job $id"
 wait_job "$id" $block
