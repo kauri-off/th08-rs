@@ -2,6 +2,7 @@
 
 use crate::launcher::{Action, Folder, Screen, View};
 use crate::pacer::{Pacer, Tick};
+use crate::platform::transition;
 use crate::settings::Settings;
 use crate::transport::{Action as Transp, Transport};
 use std::sync::Arc;
@@ -444,6 +445,7 @@ impl ApplicationHandler<UserEvent> for App {
         {
             h.joystick.pump();
             if h.joystick.take_menu() && !menu.editing() {
+                transition::input();
                 return self.resume_game(el);
             }
             let mut redraw = false;
@@ -451,6 +453,7 @@ impl ApplicationHandler<UserEvent> for App {
                 redraw |= menu.pad_button(b);
             }
             if redraw {
+                transition::input();
                 self.window().request_redraw();
             }
             let t = Instant::now() + PAD_PUMP;
@@ -478,6 +481,9 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, ev: WindowEvent) {
+        if is_user_input(&ev) {
+            transition::input();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let WindowEvent::ModifiersChanged(m) = &ev {
             self.display.alt = m.state().alt_key();
@@ -739,6 +745,7 @@ impl App {
             return;
         }
         log::info!("lifecycle: resumed");
+        transition::input();
         let window = self.window().clone();
         let res = match &mut self.shell {
             Shell::Running(r) | Shell::PortMenu(r, _) => gfx(&mut r.ctx).attach(window.clone()),
@@ -758,6 +765,13 @@ impl App {
             }
         }
         self.sync_audio();
+        match &self.shell {
+            Shell::PortMenu(r, _) => {
+                transition::begin("background-resume to menu".into(), ui_name(r));
+            }
+            Shell::Running(r) => transition::begin("background-resume to game".into(), ui_name(r)),
+            _ => {}
+        }
         self.refresh_safe(true);
         window.request_redraw();
     }
@@ -1086,6 +1100,7 @@ impl App {
         menu.speed = menu_speed(&r);
         menu.no_saves = no_score_saves(&mut r);
         let built = open_began.elapsed().as_micros();
+        transition::begin_menu_open(ui_name(&r));
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
         log::info!(
@@ -1103,6 +1118,7 @@ impl App {
             && let Some(h) = r.ctx.host_as::<crate::platform::AppHost>()
             && menu.pad_axes(h.joystick.events.state.axis)
         {
+            transition::input();
             window.request_redraw();
         }
     }
@@ -1125,6 +1141,7 @@ impl App {
             h.input.set_focus(true);
         }
         log::info!("port menu: resume");
+        transition::begin("menu-resume".into(), ui_name(&r));
         self.shell = Shell::Running(r);
         self.sync_audio();
         el.set_control_flow(ControlFlow::Wait);
@@ -1133,6 +1150,7 @@ impl App {
 
     // Back (key or OnBackInvokedCallback): in the game one X / Esc pulse; in the port menu a step back, then resume.
     fn back(&mut self, el: &ActiveEventLoop) {
+        transition::input();
         match &mut self.shell {
             Shell::Running(r) => {
                 let bit = crate::platform::touch::TouchScene::back_bit_of(&r.ctx.w);
@@ -1521,6 +1539,21 @@ fn audio_state(background: bool, stopped: bool) -> AudioState {
     }
 }
 
+fn ui_name(r: &Running) -> &'static str {
+    if r.settings.slint_ui { "slint" } else { "egui" }
+}
+
+// A discrete user action: the moment a transition's latency counts from.
+fn is_user_input(ev: &WindowEvent) -> bool {
+    use winit::event::TouchPhase::{Ended, Started};
+    match ev {
+        WindowEvent::KeyboardInput { event, .. } => event.state == ElementState::Pressed,
+        WindowEvent::Touch(t) => matches!(t.phase, Started | Ended),
+        WindowEvent::MouseInput { .. } => true,
+        _ => false,
+    }
+}
+
 // In a stage (scene game): where pad Select and a resume from the background open the port menu.
 fn in_stage(r: &Running) -> bool {
     r.ctx.w.game.scene == th08_core::types::SceneId::Game
@@ -1587,7 +1620,10 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
         // Paused replay: the last picture is presented again only when it or the HUD changes.
         Tick::Held => {
             let changed = update_hud(r, window, now);
-            if (changed || std::mem::take(&mut r.held_dirty)) && !gfx(&mut r.ctx).present_held() {
+            let redraw = changed || std::mem::take(&mut r.held_dirty);
+            if redraw && gfx(&mut r.ctx).present_held() {
+                transition::presented();
+            } else if redraw {
                 r.held_dirty = true;
             }
             r.wake = Some(now + HELD_POLL);
@@ -1656,6 +1692,7 @@ fn frame(r: &mut Running, window: &Window) -> Frame {
     r.pacer
         .record_work(now.elapsed().as_secs_f64(), per_draw * draws);
     r.ctx.present();
+    transition::presented();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(hz) = r.settings.present_hz {
         sim_vsync(r.vsync_epoch, f64::from(hz));

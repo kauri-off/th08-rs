@@ -630,6 +630,28 @@ pub struct PortMenu {
     // Nothing drawn yet: when the menu opened, for the log.
     opened_at: Option<web_time::Instant>,
     session_started: bool,
+    // What the last presented frame showed.
+    shown: Option<Shown>,
+}
+
+// The screen one frame shows; a change between presented frames is a transition.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    Card,
+    Confirm,
+    Settings(usize),
+    Layout,
+}
+
+impl Shown {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::Confirm => "confirm",
+            Self::Settings(_) => "settings",
+            Self::Layout => "layout",
+        }
+    }
 }
 
 impl PortMenu {
@@ -693,6 +715,7 @@ impl PortMenu {
             slint,
             opened_at: Some(began),
             session_started: false,
+            shown: None,
         }
     }
 
@@ -862,6 +885,15 @@ impl PortMenu {
             .drain(..)
             .map(|n| focus.nav(n, &m, model))
             .collect();
+        let showing = if edit.is_some() {
+            Shown::Layout
+        } else if focus.page == Page::Settings {
+            Shown::Settings(focus.tab)
+        } else if focus.ask.is_some() {
+            Shown::Confirm
+        } else {
+            Shown::Card
+        };
         let mut done = None;
         let mut out = self.ctx.run_pass(raw, |ctx| {
             if let Some(e) = edit {
@@ -915,10 +947,32 @@ impl PortMenu {
         }
         let shown = gfx.present_last(|t, enc| paint(renderer, pending, &jobs, ppp, &t, enc));
         gfx.safe = s;
-        if !shown {
+        if shown {
+            self.note_shown(showing);
+        } else {
             window.request_redraw();
         }
         act
+    }
+
+    // A frame showing `now` reached the screen: ends the transition it completes.
+    fn note_shown(&mut self, now: Shown) {
+        use super::transition;
+        let ui = if self.edit.is_none() && self.use_slint {
+            "slint"
+        } else {
+            "egui"
+        };
+        match self.shown.replace(now) {
+            Some(Shown::Settings(a)) if matches!(now, Shown::Settings(b) if a != b) => {
+                transition::begin("tab".into(), ui);
+            }
+            Some(was) if was.name() != now.name() => {
+                transition::begin(format!("{}>{}", was.name(), now.name()), ui);
+            }
+            _ => {}
+        }
+        transition::presented();
     }
 
     // Carries out what the card asked for; the action for the app, if any.
@@ -1030,7 +1084,13 @@ impl PortMenu {
         let shown = gfx.present_last(|t, enc| menu.paint(screen, None, &t, enc));
         crate::slintui::host::note_present(began);
         gfx.safe = safe;
-        if !shown {
+        if shown {
+            self.note_shown(if screen == "confirm" {
+                Shown::Confirm
+            } else {
+                Shown::Card
+            });
+        } else {
             window.request_redraw();
         }
         self.run_dos(todo, window, gfx)
@@ -1078,7 +1138,9 @@ impl PortMenu {
         let shown = gfx.present_last(|t, enc| menu.paint("settings", tab, &t, enc));
         crate::slintui::host::note_present(began);
         gfx.safe = safe;
-        if !shown {
+        if shown {
+            self.note_shown(Shown::Settings(self.focus.tab));
+        } else {
             window.request_redraw();
         }
     }

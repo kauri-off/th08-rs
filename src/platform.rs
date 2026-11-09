@@ -14,6 +14,7 @@ pub mod safearea;
 pub mod screenshot;
 pub mod touch;
 pub mod touchedit;
+pub mod transition;
 
 use th08_core::host::{Host, LocalTime, MAX_PLAYERS, RawInput, Words};
 #[cfg(test)]
