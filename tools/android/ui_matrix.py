@@ -566,6 +566,7 @@ def walk(ui, emu, c, full_controls, sc):
     n = ui.scroll_to(st["developer_options"])
     if n is None:
         ui.problem("unreachable", "developer options")
+    else:
         ui.tap(n)
         ui.scroll_all("settings_dev", .5, want=[text_of(e, lang)["label"] for e in rows if e["audience"] == "dev"], shots=True)
         n = ui.scroll_to(st["developer_options"])
