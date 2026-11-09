@@ -61,6 +61,10 @@ class LeftApp(Exception):
     pass
 
 
+class EmulatorGone(Exception):
+    pass
+
+
 class Node:
     def __init__(self, e, parent):
         self.a, self.parent = e.attrib, parent
@@ -112,11 +116,8 @@ class Screen:
         return tappable[0] if tappable else (hits[-1] if hits and not clickable else None)
 
     def below(self, row, *labels):
-        """The tappable match nearest under the row title, in its column: its segment, not a same-named value elsewhere."""
-        grids = [n for n in self.nodes if n.scrollable and n.x0 <= row.x0 and n.x1 >= row.x1]
-        mid = (grids[0].x0 + grids[0].x1) // 2 if grids else None
-        same = lambda n: mid is None or (n.cx < mid) == (row.cx < mid)
-        hits = sorted((n for n in self.find_all(*labels) if n.click_target() and n.y0 >= row.y0 and same(n)), key=lambda n: n.y0)
+        """The tappable match nearest under the row title: its segment, not a same-named value elsewhere."""
+        hits = sorted((n for n in self.find_all(*labels) if n.click_target() and n.y0 >= row.y0), key=lambda n: n.y0)
         return hits[0] if hits else None
 
     def texts(self):
@@ -133,6 +134,7 @@ class Ui:
         self.dpi = int(re.search(r"\d+$", emu.sh("wm density").splitlines()[-1]).group())
         self.seen_problem = set()
         self.actions, self.foreign_ok = [], False
+        self.xmin, self.page = 0, None
 
     @property
     def dp(self):
@@ -152,8 +154,12 @@ class Ui:
                 pkg = s.nodes[0].a.get("package", "") if s.nodes else ""
                 if pkg != PKG and not self.foreign_ok:
                     raise LeftApp(f"foreground is {pkg!r}; last actions: {self.actions[-8:]}")
+                if self.xmin:
+                    s.nodes = [n for n in s.nodes if n.x0 >= self.xmin]
                 return s
             time.sleep(1)
+        if self.emu.proc and self.emu.proc.poll() is not None:
+            raise EmulatorGone(f"emulator exited with {self.emu.proc.returncode}; last actions: {self.actions[-8:]}")
         raise RuntimeError("uiautomator dump failed")
 
     def problem(self, kind, detail):
@@ -169,12 +175,12 @@ class Ui:
         leaves = [n for n in s.nodes if n.text]
         vp = self.scroll_region(s)
         st = strings(self.combo["lang"])
-        covers = [c for c in (s.find(st["play"]), s.find(st["play_need_data"])) if c is not None]
+        tabs = [t.y1 for t in s.nodes if t.text in (st["stats_tab_overview"], st["stats_tab_history"])]
         for n in s.nodes:
+            if tabs and n.y0 <= max(tabs) + 2 and n.clickable and n.y1 > max(tabs):
+                continue
             full = n.y0 > 0 and n.y1 < H - 1 and not (vp and (n.y0 <= vp[1] + 2 or n.y1 >= vp[3] - 2))
-            pad = 8 * self.dp
-            covered = any(c is not n and n.x1 > c.x0 - pad and n.x0 < c.x1 + pad and n.y1 > c.y0 - pad and n.y0 < c.y1 + pad for c in covers)
-            if n.clickable and n.w and n.h and full and not covered and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
+            if n.clickable and n.w and n.h and full and (n.w < DP_MIN * self.dp - 2 or n.h < DP_MIN * self.dp - 2):
                 self.problem("small target", f"{where}: '{n.label or n.cls}' {round(n.w / self.dp)}x{round(n.h / self.dp)} dp")
             if (n.text or n.desc) and cut and n.x0 < cut[2] and n.x1 > cut[0] and n.y0 < cut[3] and n.y1 > cut[1] and n.w < W * .98:
                 self.problem("cut-out overlap", f"{where}: '{n.label[:40]}' x {n.x0}..{n.x1} y {n.y0}..{n.y1}, cut-out {cut}")
@@ -278,7 +284,7 @@ class Ui:
     def cfg(self):
         return self.emu.sh(f"run-as {PKG} cat files/port.cfg", check=False)
 
-    def scroll_all(self, name, frac_x=.5, want=(), shots=True, max_swipes=60):
+    def scroll_all(self, name, frac_x=.5, want=(), shots=True, max_swipes=60, restore=True):
         """Swipes to the end by real gestures; returns every label seen and checks no value changed."""
         s = self.dump()
         region = self.scroll_region(s)
@@ -317,7 +323,7 @@ class Ui:
         missing = [w for w in want if w not in seen and not any(t.startswith(w) for t in seen)]
         for w in missing:
             self.problem("unreachable", f"{name}: '{w}'")
-        for _ in range(i + 2):
+        for _ in range(i + 2 if restore else 0):
             self.swipe_down(frac_x, region)
         return seen, not missing
 
@@ -411,14 +417,16 @@ def configure(emu, c):
     time.sleep(2.5)
 
 
-def install_fx(emu, tmp, c):
+def install_fx(emu, tmp, c, plain=False):
     d = fixtures(tmp, c["imported"])
     tar = tmp / f"{d.name}.tar"
     if not tar.exists():
         subprocess.run(["tar", "-C", str(d), "-cf", str(tar), "."], check=True)
     emu.adb("push", tar, "/data/local/tmp/fx.tar")
-    emu.sh(f"run-as {PKG} sh -c 'rm -rf files cache/*; mkdir files; cd files; tar xf /data/local/tmp/fx.tar; "
+    emu.sh(f"run-as {PKG} sh -c 'rm -rf files shared_prefs cache/*; mkdir files; cd files; tar xf /data/local/tmp/fx.tar; "
            f"printf \"language = {c['lang']}\\n\" > port.cfg'")
+    if plain:
+        emu.sh(f"run-as {PKG} sh -c 'rm -f files/last_error.txt files/update_test.json; echo update_check = off >> files/port.cfg'")
 
 
 def launch(emu):
@@ -440,17 +448,6 @@ def ensure_rotation(ui, emu, c):
     ui.problem("driver error", "could not set the orientation")
 
 
-def walk_basic(ui, emu, c, sc):
-    st, lang = strings(c["lang"]), c["lang"]
-    ui.shot("home")
-    ui.scroll_all("settings", .25, want=[text_of(e, lang)["label"] for e in sc["entries"] if "android" in e["platforms"] and e["audience"] != "dev"])
-    n = ui.scroll_to(st["replays_browse"])
-    if n:
-        ui.tap(n)
-        ui.shot("replays")
-        ui.back()
-
-
 def is_open(ui, st, labels=()):
     s = ui.dump()
     return s.find(st["cancel"], clickable=True) or s.find(st["ok"], clickable=True) or any(s.find(l) for l in labels)
@@ -464,8 +461,82 @@ def close_overlay(ui, st):
 
 
 def go(ui, st, tab):
+    ui.xmin, ui.page = 0, None
     if not ui.tap_label(st[tab]):
         ui.problem("no destination", tab)
+
+
+def is_land(ui):
+    W, H = ui.size()
+    return W > H
+
+
+def open_page(ui, st, title):
+    """The Settings page: a list row to push in portrait, the left pane's row in landscape."""
+    if ui.page == title:
+        return True
+    ui.xmin = 0
+    if is_land(ui):
+        s = ui.dump()
+        W, _ = ui.size()
+        left = [n for n in s.nodes if n.scrollable and n.x1 < W * .6]
+        region = (left[0].x0, left[0].y0, left[0].x1, left[0].y1) if left else None
+        for swipe in [None] + [ui.swipe_down] * 6 + [ui.swipe_up] * 12:
+            if swipe and region:
+                swipe(.5, region)
+                s = ui.dump()
+            hit = [n for n in s.find_all(title) if n.click_target() and n.x1 < W * .6]
+            if hit:
+                ui.tap(hit[0])
+                ui.page, ui.xmin = title, int(W * .4)
+                return True
+        ui.problem("unreachable", f"page '{title}'")
+        return False
+    s = ui.dump()
+    arrow = s.find(st["back"], clickable=True)
+    if arrow is not None:
+        ui.tap(arrow)
+    n = ui.scroll_to(title)
+    if n is None:
+        ui.problem("unreachable", f"page '{title}'")
+        return False
+    ui.tap(n)
+    ui.page = title
+    return True
+
+
+def sections():
+    """(title string name, keys) per section, from the launcher's one table."""
+    src = (REPO / "android/app/src/main/java/org/th08/port/Sections.kt").read_text()
+    out = []
+    for part in src[src.index("val SECTIONS"):].split("Section(")[1:]:
+        keys = part.split("listOf(", 1)[1].split(")", 1)[0]
+        out.append((re.search(r"R\.string\.(\w+)", part)[1], re.findall(r'"([a-z_]+)"', keys)))
+    return out
+
+
+def check_no_play(ui, st, where):
+    n = ui.dump().find(st["play"])
+    if n is not None:
+        ui.problem("Play outside Home", where)
+
+
+def on_main(ui, st):
+    """No overlay on top: another destination's navigation item is tappable (the selected one never is)."""
+    xmin, ui.xmin = ui.xmin, 0
+    found = ui.dump().find(st["replays_title"], clickable=True) is not None
+    ui.xmin = xmin
+    return found
+
+
+def wait_closed(ui, st):
+    """After Back on an overlay: wait until it is gone, so a slow system never gets a second Back."""
+    for _ in range(10):
+        if on_main(ui, st):
+            return True
+        ui.wait(.5)
+    ui.problem("overlay did not close", str(ui.actions[-3:]))
+    return False
 
 
 def check_play(ui, st, where):
@@ -512,12 +583,11 @@ def exercise_row(ui, st, e, lang, n):
     if ui.cfg() != before:
         ui.problem("opening a control changed its value", label)
     ui.shot(f"ctl_{e['key']}")
-    if ui.dump().find(st["nav_settings"], clickable=True) is not None:
+    if on_main(ui, st):
         ui.problem("control opened nothing", label)
         return
     ui.back()
-    if ui.dump().find(st["cancel"], clickable=True):
-        ui.back()
+    wait_closed(ui, st)
 
 
 def slider_drag(ui, st, rows, lang):
@@ -528,18 +598,24 @@ def slider_drag(ui, st, rows, lang):
     if not bars:
         ui.problem("no slider node", "volume_master")
         return
+    region = ui.scroll_region(s)
     b, before = bars[0], ui.cfg()
-    ui.actions.append(f"slider {b.x0}..{b.x1} y {b.cy}; nodes over its start: {[x.label[:20] for x in s.nodes if x.clickable and x is not b and x.x0 <= b.x0 + b.w * 9 // 10 <= x.x1 and x.y0 <= b.cy <= x.y1]}")
-    print(ui.actions[-1], flush=True)
+    if region and b.y1 > region[3]:
+        ui.problem("driver error", "slider below the viewport")
+        return
     ui.emu.sh(f"input swipe {b.x0 + b.w * 9 // 10} {b.cy} {b.x0 + b.w // 2} {b.cy} 500")
-    ui.wait()
-    if ui.cfg() == before:
+    for _ in range(16):
+        if ui.cfg() != before:
+            break
+        ui.wait(.5)
+    else:
         ui.problem("slider drag did not change the value", "volume_master")
     ui.shot("slider_dragged")
 
 
 def picker(ui, st):
     """Export through the system picker, then pick the zip for import; a miss is reported, not fatal."""
+    open_page(ui, st, st["section_app"])
     n = ui.scroll_to(st["saves_export"])
     if n is None:
         ui.problem("unreachable", "export")
@@ -571,10 +647,84 @@ def picker(ui, st):
     ui.foreign_ok = False
 
 
+def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
+    secs = sections()
+    where = {k: st[t] for t, keys in secs for k in keys}
+    rows = [e for e in rows if e["key"] in where]
+    seen = set()
+    app = st["section_app"]
+    open_page(ui, st, app)
+    n = ui.scroll_to(st["version"])
+    if n is None:
+        ui.problem("unreachable", "version line")
+    else:
+        ui.tap(n)
+    ui.page = None
+    for i, (t, _) in enumerate(secs):
+        if open_page(ui, st, st[t]):
+            got, _ = ui.scroll_all(f"settings_{t}", .5, restore=False)
+            seen |= got
+    for e in rows:
+        if text_of(e, lang)["label"] not in seen:
+            ui.problem("unreachable", f"control '{e['key']}'")
+    if not full_controls:
+        return
+    for e in rows:
+        if e["audience"] == "dev":
+            continue
+        if not open_page(ui, st, where[e["key"]]):
+            continue
+        n = ui.scroll_to(text_of(e, lang)["label"], clickable=False)
+        if n is None:
+            ui.problem("unreachable", f"control '{e['key']}'")
+            continue
+        exercise_row(ui, st, e, lang, n)
+    open_page(ui, st, where["volume_master"])
+    slider_drag(ui, st, rows, lang)
+    open_page(ui, st, where["language"])
+    info = ui.dump().find(st["about_setting"], clickable=True)
+    if info:
+        ui.tap(info)
+        ui.shot("info")
+        rotate(ui, emu, c, "info_dialog", st["ok"])
+        close_overlay(ui, st)
+    if ui.tap_label(st["more"]):
+        ui.tap_label(st["reset_all"])
+        ui.shot("reset_confirm")
+        ui.back()
+        wait_closed(ui, st)
+    picker(ui, st)
+
+
+def walk_stats(ui, c, full_controls, st):
+    ui.wait(1.5)
+    labels = ["stats_tab_overview", "stats_scores", "stats_tab_cards", "stats_tab_history"]
+    if not c["imported"]:
+        ui.shot("stats_empty")
+        return
+    for k in labels:
+        tab = ui.dump().find(st[k])
+        if tab is None:
+            ui.problem("unreachable", f"stats tab {k}")
+            continue
+        if tab.click_target():
+            ui.tap(tab)
+        ui.wait(.8)
+        if k == "stats_tab_cards":
+            n = ui.scroll_to(st["stats_cards_all"])
+            if n is None:
+                ui.problem("unreachable", "show cards never attempted")
+            else:
+                before = len(ui.dump().nodes)
+                ui.tap(n)
+                ui.shot("stats_cards_all")
+                ui.tap(ui.scroll_to(st["stats_cards_all"]) or n)
+        ui.scroll_all(f"stats_{k[-5:]}", .5, max_swipes=40 if full_controls else 6)
+
+
 def walk(ui, emu, c, full_controls, sc):
     st, lang = strings(c["lang"]), c["lang"]
     rows = [e for e in sc["entries"] if "android" in e["platforms"]]
-    player = [text_of(e, lang)["label"] for e in rows if e["audience"] != "dev"]
     ui.shot("home")
     check_play(ui, st, "home")
     if not c["imported"]:
@@ -583,7 +733,6 @@ def walk(ui, emu, c, full_controls, sc):
         if s.find(st["play_need_data"]) is None:
             ui.problem("no message for blocked Play", "missing data")
         ui.shot("play_blocked", s)
-        ui.wait(5)
     elif full_controls:
         n = ui.dump().find(st["update_install"], clickable=True)
         if n:
@@ -591,67 +740,60 @@ def walk(ui, emu, c, full_controls, sc):
             ui.wait(4)
             ui.shot("update_failed")
     go(ui, st, "nav_settings")
-    check_play(ui, st, "settings")
-    ui.scroll_all("settings_x25", .25, want=player)
-    if full_controls:
-        ui.scroll_all("settings_x85", .85, want=player, shots=False)
-    n = ui.scroll_to(st["developer_options"])
-    if n is None:
-        ui.problem("unreachable", "developer options")
-    else:
-        ui.tap(n)
-        ui.scroll_all("settings_dev", .5, want=[text_of(e, lang)["label"] for e in rows if e["audience"] == "dev"], shots=True)
-        n = ui.scroll_to(st["developer_options"])
-        if n:
-            ui.tap(n)
-    if full_controls:
-        for e in rows:
-            if e["audience"] == "dev":
-                continue
-            n = ui.scroll_to(text_of(e, lang)["label"], clickable=False)
-            if n is None:
-                ui.problem("unreachable", f"control '{e['key']}'")
-                continue
-            exercise_row(ui, st, e, lang, n)
-        slider_drag(ui, st, rows, lang)
-        s = ui.dump()
-        info = s.find(st["about_setting"], clickable=True)
-        if info:
-            ui.tap(info)
-            ui.shot("info")
-            rotate(ui, emu, c, "info_dialog", st["ok"])
-            close_overlay(ui, st)
-        if ui.tap_label(st["more"]):
-            ui.tap_label(st["reset_all"])
-            ui.shot("reset_confirm")
-            ui.back()
-        picker(ui, st)
+    check_no_play(ui, st, "settings")
+    walk_settings(ui, emu, c, full_controls, sc, st, lang, rows)
     go(ui, st, "replays_title")
-    check_play(ui, st, "replays")
+    check_no_play(ui, st, "replays")
     ui.scroll_all("replays", .5, want=["th8_damaged.rpy"])
     if full_controls:
-        d = ui.dump().find(st["replays_delete"], clickable=True)
-        if d:
-            ui.tap(d)
-            ui.shot("replay_delete")
-            rotate(ui, emu, c, "replay_delete", st["cancel"])
-            close_overlay(ui, st)
+        s = ui.dump()
+        more = sorted(s.find_all(st["more"]), key=lambda n: n.y0)
+        if len(more) > 1:
+            ui.tap(more[1])
+            ui.shot("replay_menu")
+            if ui.tap_label(st["replays_delete"]):
+                ui.shot("replay_delete")
+                rotate(ui, emu, c, "replay_delete", st["cancel"])
+                close_overlay(ui, st)
         rotate(ui, emu, c, "replays", st["replays_sort_date"])
     go(ui, st, "stats_title")
-    check_play(ui, st, "stats")
-    ui.wait(1.5)
-    ui.scroll_all("stats", .5, max_swipes=60 if full_controls else 6)
+    check_no_play(ui, st, "stats")
+    walk_stats(ui, c, full_controls, st)
+
+
+def walk_plain(ui, emu, c):
+    """What a player sees: no error card, no update card; imported combos also with no runs recorded."""
+    st = strings(c["lang"])
+    def plain_home(name):
+        ui.shot(name)
+        s = ui.dump()
+        check_play(ui, st, name)
+        p = s.find(st["play"])
+        if p is not None and p.y1 > ui.size()[1]:
+            ui.problem("Play not in the first screen", name)
+        for k in ("last_failed", "update_install", "update_notes"):
+            if s.find(st[k]) is not None:
+                ui.problem("card in the no-fixture state", f"{name}: {k}")
+    plain_home("home_plain")
+    if c["imported"]:
+        emu.sh(f"am force-stop {PKG}")
+        emu.sh(f"run-as {PKG} rm -f files/stats.jsonl files/score.dat")
+        launch(emu)
+        ensure_rotation(ui, emu, c)
+        plain_home("home_fresh")
 
 
 def rotate(ui, emu, c, name, keep):
     emu.sh("wm user-rotation lock %d" % (0 if c["land"] else 1))
     time.sleep(2.5)
+    xmin, ui.xmin = ui.xmin, 0
     s = ui.dump()
     ui.shot(f"{name}_rotated", s)
     if s.find(keep) is None:
         ui.problem("state lost on rotation", f"{name}: '{keep}' gone")
     emu.sh("wm user-rotation lock %d" % (1 if c["land"] else 0))
     time.sleep(2.5)
+    ui.xmin = xmin
 
 
 def sheet(shots, out, title):
@@ -697,7 +839,6 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--port", type=int, default=os.environ.get("QEMU_PORT"), required="QEMU_PORT" not in os.environ, help="emulator console port (default: $QEMU_PORT of the emu job)")
     p.add_argument("--matrix", choices=["smoke", "audit", "full"], default="full")
-    p.add_argument("--basic", action="store_true", help="only the home screen and the settings scroll")
     p.add_argument("--only", help="substring filter on the combo name")
     p.add_argument("--no-boot", action="store_true", help="use a running emulator")
     a = p.parse_args()
@@ -718,16 +859,23 @@ def main():
             d = out / name
             d.mkdir(exist_ok=True)
             configure(emu, c)
-            install_fx(emu, tmp, c)
+            install_fx(emu, tmp, c, plain=True)
             launch(emu)
             ui = Ui(emu, d, c)
             ensure_rotation(ui, emu, c)
             t = time.time()
             try:
-                if a.basic:
-                    walk_basic(ui, emu, c, sc)
-                else:
-                    walk(ui, emu, c, c["full"], sc)
+                walk_plain(ui, emu, c)
+                emu.sh(f"am force-stop {PKG}")
+                install_fx(emu, tmp, c)
+                launch(emu)
+                ensure_rotation(ui, emu, c)
+                walk(ui, emu, c, c["full"], sc)
+            except EmulatorGone as e:
+                ui.problem("emulator gone", str(e))
+                results += ui.problems
+                print(f"{name}: {e}", flush=True)
+                break
             except LeftApp as e:
                 ui.problem("left the app", str(e))
                 print(emu.adb("logcat", "-d", "-t", "60", "-s", "ActivityTaskManager:I", "WindowManager:W", check=False).decode(errors="replace")[-3000:], flush=True)

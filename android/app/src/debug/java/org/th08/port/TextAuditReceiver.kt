@@ -38,15 +38,16 @@ class TextAuditReceiver : BroadcastReceiver() {
         n.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.let { get ->
             val out = mutableListOf<TextLayoutResult>()
             get(out)
-            out.forEach { audit(it, broken, cut) }
+            out.forEach { audit(it, n.size.width, broken, cut) }
         }
         n.children.forEach { walk(it, broken, cut) }
     }
 
-    private fun audit(r: TextLayoutResult, broken: JSONArray, cut: JSONArray) {
+    private fun audit(r: TextLayoutResult, shown: Int, broken: JSONArray, cut: JSONArray) {
         val t = r.layoutInput.text.text
         if (t.isEmpty()) return
-        if (r.hasVisualOverflow) cut.put(t)
+        val last = r.lineCount - 1
+        if (r.isLineEllipsized(last) || r.getLineRight(last) - r.getLineLeft(last) > shown + 1f) cut.put(t)
         val words = BreakIterator.getWordInstance(ULocale.ROOT).apply { setText(t) }
         for (l in 0 until r.lineCount - 1) {
             val k = r.getLineEnd(l)
