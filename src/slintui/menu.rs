@@ -78,14 +78,16 @@ impl Menu {
         if scale <= 0.0 {
             return None;
         }
-        let kind = self.pointer.event(&self.adapter, ev, scale)?;
-        if self.view == Some(View::Settings) {
-            Ui::get(&self.ui).set_modality(match kind {
-                Pointing::Mouse => Modality::Mouse,
-                Pointing::Touch => Modality::Touch,
-            });
-        }
-        Some(kind)
+        self.pointer.event(&self.adapter, ev, scale)
+    }
+
+    pub fn set_modality(&self, m: crate::menu_model::Modality) {
+        use crate::menu_model::Modality as M;
+        Ui::get(&self.ui).set_modality(match m {
+            M::Keys => Modality::Keys,
+            M::Pointer => Modality::Mouse,
+            M::Touch => Modality::Touch,
+        });
     }
 
     // Runs timers; how soon the next repaint is due.

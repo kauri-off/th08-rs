@@ -1,9 +1,9 @@
-//! The port menu's settings page on Slint: binds `launcher::Model` rows to `ui/settings.slint`.
+//! The port menu's settings page on Slint: shows `MenuModel` state in `ui/settings.slint` and reports what is tapped.
 use super::host::Adapter;
-use super::input;
 use super::text::breakable;
 use super::{Cap, Geometry, Hint, MenuRoot, Modality, PageApi, RowData, Ui};
-use crate::platform::portmenu::{self, Nav, Shape};
+use crate::menu_model::{Cursor, Effect, Hit, Input, MenuModel, Nav, Target};
+use crate::platform::portmenu::{self, Shape};
 use crate::settings_store::SettingsStore as Model;
 use crate::theme::{Ctl, CtlOut};
 use slint::{Global, Model as _, ModelRc, SharedString, VecModel};
@@ -17,7 +17,6 @@ enum Cmd {
     Pick(usize, usize),
     Frac(usize, f32),
     Activate(usize),
-    Reset,
     Back,
     Tab(usize),
 }
@@ -165,8 +164,6 @@ impl Page {
         let c = cmds.clone();
         api.on_activate(move |i| c.borrow_mut().push(Cmd::Activate(idx(i))));
         let c = cmds.clone();
-        api.on_reset_page(move || c.borrow_mut().push(Cmd::Reset));
-        let c = cmds.clone();
         api.on_back(move || c.borrow_mut().push(Cmd::Back));
         let c = cmds.clone();
         api.on_tab_changed(move |i| c.borrow_mut().push(Cmd::Tab(idx(i))));
@@ -188,19 +185,12 @@ impl Page {
         PageApi::get(&self.ui)
     }
 
-    // The view was just switched in: a fresh page, nothing from its last time on screen counts.
+    // The view was just switched in: nothing from its last time on screen counts.
     pub fn open(&self, touch: bool) {
         self.cmds.borrow_mut().clear();
-        let api = self.api();
-        api.set_cursor(0);
-        api.set_armed(false);
-        api.set_scroll(0.0);
+        self.api().set_content_y(0.0);
+        self.api().set_hovered(-1);
         Ui::get(&self.ui).set_touch(touch);
-        Ui::get(&self.ui).set_modality(if touch {
-            Modality::Touch
-        } else {
-            Modality::Keys
-        });
     }
 
     // The fixed strings; true when they changed.
@@ -341,43 +331,64 @@ impl Page {
         }
     }
 
-    // Applies what the page asked for since the last call; true when the page asks to go back.
-    pub fn apply(&mut self, model: &mut Model, lang: crate::i18n::Lang) -> bool {
-        let cmds: Vec<Cmd> = self.cmds.borrow_mut().drain(..).collect();
-        let mut back = false;
-        for c in cmds {
-            let key = |i: usize| self.keys.get(i).copied();
-            match c {
-                Cmd::Step(i, d) => {
-                    if let Some(k) = key(i) {
-                        model.step(k, d);
-                    }
-                }
-                Cmd::Pick(i, w) => {
-                    if let Some(k) = key(i) {
-                        model.ctl_input(k, CtlOut::Pick(w));
-                    }
-                }
-                Cmd::Frac(i, f) => {
-                    if let Some(k) = key(i) {
-                        model.ctl_input(k, CtlOut::Frac(f));
-                    }
-                }
-                Cmd::Activate(i) => {
-                    if let Some(k) = key(i) {
-                        model.activate(k);
-                    }
-                }
-                Cmd::Reset => model.reset_rows(&self.keys),
-                Cmd::Back => back = true,
-                Cmd::Tab(t) => self.show_tab(t, model, lang),
-            }
+    // Hover, the list's position, keys and then taps go to the model; the page then shows what the model says.
+    pub fn apply(
+        &mut self,
+        menu: &mut MenuModel,
+        navs: Vec<Nav>,
+        lang: crate::i18n::Lang,
+    ) -> Vec<Effect> {
+        let api = self.api();
+        menu.apply(Input::Scrolled(api.get_scroll()));
+        if let Ok(r) = usize::try_from(api.get_hovered()) {
+            menu.apply(Input::Over(Hit::Row(r)));
         }
-        self.sync_rows(model, lang);
-        back
+        drop(api);
+        let mut out = menu.apply(Input::HoverEnd);
+        for n in navs {
+            out.extend(menu.apply(Input::Nav(n)));
+        }
+        let cmds: Vec<Cmd> = self.cmds.borrow_mut().drain(..).collect();
+        for c in cmds {
+            let input = match c {
+                Cmd::Step(i, d) => Input::Control(Target::Row(i), CtlOut::Step(d)),
+                Cmd::Pick(i, w) => Input::Control(Target::Row(i), CtlOut::Pick(w)),
+                Cmd::Frac(i, f) => Input::Control(Target::Row(i), CtlOut::Frac(f)),
+                Cmd::Activate(i) => Input::Tap(Target::Row(i)),
+                Cmd::Back => Input::Tap(Target::Back),
+                Cmd::Tab(t) => Input::Tap(Target::Tab(t)),
+            };
+            out.extend(menu.apply(input));
+        }
+        if menu.tab() != self.tab {
+            self.show_tab(menu.tab(), &menu.store, lang);
+        }
+        self.sync_rows(&menu.store, lang);
+        self.show(menu);
+        if out.contains(&Effect::ScrollMoved) {
+            self.api().set_content_y(-menu.scroll());
+        }
+        menu.set_moved(false);
+        out
     }
 
-    pub fn nav(&self, n: Nav) {
-        input::send_nav(&self.adapter, n);
+    // Focus state as the page's properties; -1 is the tab bar or no row.
+    fn show(&self, menu: &MenuModel) {
+        let api = self.api();
+        api.set_cursor(match menu.cursor() {
+            Cursor::Tabs => -1,
+            Cursor::Row(r) => i32::try_from(r).unwrap_or(0),
+        });
+        api.set_armed(menu.armed());
+        Ui::get(&self.ui).set_modality(match menu.modality() {
+            crate::menu_model::Modality::Keys => Modality::Keys,
+            crate::menu_model::Modality::Pointer => Modality::Mouse,
+            crate::menu_model::Modality::Touch => Modality::Touch,
+        });
+        api.set_help_row(
+            menu.help_row()
+                .and_then(|r| i32::try_from(r).ok())
+                .unwrap_or(-1),
+        );
     }
 }

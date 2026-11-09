@@ -10,6 +10,7 @@ pub mod i18n;
 pub mod icon;
 pub mod joystick;
 pub mod launcher;
+pub mod menu_model;
 pub mod nowplaying;
 pub mod pacer;
 pub mod packs;

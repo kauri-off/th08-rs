@@ -5,6 +5,11 @@ use super::touch::{TouchConfig, TouchLayout};
 use super::touchedit::{EditOut, TouchEdit};
 use crate::i18n::{self, Lang};
 use crate::launcher::{self, Action};
+pub use crate::menu_model::Nav;
+use crate::menu_model::{
+    Ask, Context, Cursor, Effect, Hit, Input, Item, ListGeometry, MenuModel, Modality, Page,
+    Target, VOLUME,
+};
 use crate::settings::Settings;
 use crate::theme::{self, Ctl, CtlOut, CtlStyle, Edge};
 use egui::{Id, LayerId, Order, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
@@ -12,19 +17,6 @@ use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
 use winit::event::{ElementState, WindowEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 use winit::window::Window;
-
-// Menu input from keys and pad buttons.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Nav {
-    Up,
-    Down,
-    Left,
-    Right,
-    Activate,
-    Back,
-    PrevTab,
-    NextTab,
-}
 
 impl Nav {
     // Keyboard; Esc, F1 and Android Back go through the app (`PortMenu::back`).
@@ -111,9 +103,6 @@ pub struct Layout {
 const PILLAR: f32 = 480.0;
 // A phone side bar's least width, points.
 const SPLIT_BAR: f32 = 420.0;
-// Coasting after a release, points per second.
-const FLING_MIN: f32 = 200.0;
-const FLING_MAX: f32 = 3000.0;
 // A phone stepper or choice cell: 48 dp at the phone's scale, in points.
 const STEP_CELL: f32 = 120.0;
 // The picture may shrink to this share of its full size to make room for the pillar.
@@ -202,87 +191,7 @@ impl Layout {
     }
 }
 
-// The card's targets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Item {
-    Resume,
-    Hitboxes,
-    Volume,
-    Speed,
-    Screenshot,
-    TouchLayout,
-    Settings,
-    Retry,
-    Quit,
-}
-
-impl Item {
-    fn danger(self) -> bool {
-        matches!(self, Self::Retry | Self::Quit)
-    }
-}
-
-// The card's targets in focus order: the column / pillar top to bottom; the phone's left bar, then its quick settings.
-fn card_items(m: &MenuState<'_>, split: bool) -> Vec<Item> {
-    let quick = {
-        let mut v = vec![Item::Volume, Item::Hitboxes];
-        if m.speed.is_some() {
-            v.push(Item::Speed);
-        }
-        v.push(Item::Screenshot);
-        if m.touch {
-            v.push(Item::TouchLayout);
-        }
-        v
-    };
-    let run: &[Item] = if m.quit {
-        &[Item::Retry, Item::Quit]
-    } else {
-        &[]
-    };
-    if split {
-        [vec![Item::Resume, Item::Settings], run.to_vec(), quick].concat()
-    } else {
-        let mut mid = vec![Item::Hitboxes, Item::Volume];
-        if m.speed.is_some() {
-            mid.push(Item::Speed);
-        }
-        mid.push(Item::Screenshot);
-        if m.touch {
-            mid.push(Item::TouchLayout);
-        }
-        mid.push(Item::Settings);
-        [vec![Item::Resume], mid, run.to_vec()].concat()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Page {
-    Card,
-    Settings,
-}
-
-// A run action waiting for its in-place confirm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ask {
-    Retry,
-    Quit,
-}
-
-// What a press or click asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Do {
-    Nothing,
-    Resume,
-    Quit,
-    Retry,
-    Screenshot,
-    Speed((u32, u32)),
-    Hitboxes(Hitboxes),
-    EditLayout,
-}
-
-impl Do {
+impl Effect {
     // What the app does for this request; Hitboxes and the layout editor stay in the menu.
     pub fn action(self) -> Option<Action> {
         match self {
@@ -291,313 +200,9 @@ impl Do {
             Self::Retry => Some(Action::Retry),
             Self::Screenshot => Some(Action::Screenshot),
             Self::Speed(r) => Some(Action::Speed(r)),
-            Self::Nothing | Self::Hitboxes(_) | Self::EditLayout => None,
+            _ => None,
         }
     }
-}
-
-const VOLUME: &str = "volume_master";
-
-// A row the pointer can be over: a card item, a settings row, the question's Keep playing (false) / action (true).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Hit {
-    Item(Item),
-    Row(usize),
-    Yes(bool),
-}
-
-// Focus: the card item; on the settings page the tab and the row (0 = the tab bar, keys + 1 = "Reset this page").
-#[derive(Debug)]
-#[expect(clippy::struct_excessive_bools, reason = "independent focus flags")]
-struct Focus {
-    page: Page,
-    item: Item,
-    // Retry / Quit asked; `yes` = the confirm's action row is focused (else "Keep playing").
-    ask: Option<Ask>,
-    yes: bool,
-    tab: usize,
-    row: usize,
-    // "Reset this page" was pressed once; the next press resets.
-    reset: bool,
-    // Moved by a key this pass: the focused row is scrolled into view.
-    moved: bool,
-    // Settings rows scrolled by this many points.
-    scroll: f32,
-    // A finger is dragging the settings list; its speed and the speed the list keeps after the release (points/s).
-    dragging: bool,
-    drag_speed: f32,
-    fling: f32,
-    split: bool,
-    // Hover and the last input kind: the focus bar shows only under key / pad input.
-    input: theme::Input<Hit>,
-}
-
-impl Default for Focus {
-    fn default() -> Self {
-        Self {
-            page: Page::Card,
-            item: Item::Resume,
-            ask: None,
-            yes: false,
-            tab: 0,
-            row: 1,
-            reset: false,
-            moved: false,
-            scroll: 0.0,
-            dragging: false,
-            drag_speed: 0.0,
-            fling: 0.0,
-            split: false,
-            input: theme::Input::new(theme::Modality::Keys),
-        }
-    }
-}
-
-impl Focus {
-    fn items(&self, m: &MenuState<'_>) -> Vec<Item> {
-        card_items(m, self.split)
-    }
-
-    // The focused item, moved to Resume when it is not on the card.
-    fn clamp(&mut self, items: &[Item]) -> Item {
-        if !items.contains(&self.item) {
-            self.item = Item::Resume;
-        }
-        self.item
-    }
-
-    fn nav(
-        &mut self,
-        n: Nav,
-        m: &MenuState<'_>,
-        model: &mut crate::settings_store::SettingsStore,
-    ) -> Do {
-        self.moved = true;
-        // The first key / pad press after pointer or touch input shows the bar (on the hovered row) and moves nothing.
-        if let Some(hover) = self.input.key() {
-            match hover {
-                Some(Hit::Item(it)) if self.page == Page::Card && self.ask.is_none() => {
-                    self.item = it;
-                }
-                Some(Hit::Row(r)) if self.page == Page::Settings => self.row = r,
-                Some(Hit::Yes(y)) if self.ask.is_some() => self.yes = y,
-                _ => {}
-            }
-            if matches!(n, Nav::Up | Nav::Down | Nav::Left | Nav::Right) {
-                return Do::Nothing;
-            }
-        }
-        match self.page {
-            Page::Card => self.card_nav(n, m, model),
-            Page::Settings => {
-                self.settings_nav(n, model);
-                Do::Nothing
-            }
-        }
-    }
-
-    fn card_nav(
-        &mut self,
-        n: Nav,
-        m: &MenuState<'_>,
-        model: &mut crate::settings_store::SettingsStore,
-    ) -> Do {
-        if self.ask.is_some() {
-            match n {
-                Nav::Up | Nav::Down => self.yes = !self.yes,
-                Nav::Activate => return self.confirm(),
-                Nav::Back => self.cancel(),
-                _ => {}
-            }
-            return Do::Nothing;
-        }
-        let items = self.items(m);
-        let it = self.clamp(&items);
-        let at = items.iter().position(|&x| x == it).unwrap_or(0);
-        match n {
-            Nav::Up => self.item = items[at.saturating_sub(1)],
-            Nav::Down => self.item = items[(at + 1).min(items.len() - 1)],
-            Nav::Left | Nav::Right => {
-                let dir = if n == Nav::Left { -1 } else { 1 };
-                return self.step(it, dir, m, model);
-            }
-            Nav::Activate => return self.activate(it, m),
-            Nav::Back => return Do::Resume,
-            Nav::PrevTab | Nav::NextTab => {}
-        }
-        Do::Nothing
-    }
-
-    // ← / → on a value item.
-    fn step(
-        &self,
-        it: Item,
-        dir: i32,
-        m: &MenuState<'_>,
-        model: &mut crate::settings_store::SettingsStore,
-    ) -> Do {
-        match it {
-            Item::Volume if has_volume(model) => {
-                model.step(VOLUME, dir);
-            }
-            Item::Hitboxes => {
-                let at = m.hitboxes as usize;
-                let to = at.saturating_add_signed(dir as isize).min(2);
-                if to != at {
-                    return Do::Hitboxes(hitbox_mode(to));
-                }
-            }
-            Item::Speed => {
-                if let Some(now) = m.speed {
-                    let rates = crate::transport::SLOW;
-                    let at = rates.iter().position(|&x| x == now).unwrap_or(0);
-                    let to = at.saturating_add_signed(dir as isize).min(rates.len() - 1);
-                    if to != at {
-                        return Do::Speed(rates[to]);
-                    }
-                }
-            }
-            _ => {}
-        }
-        Do::Nothing
-    }
-
-    // Z on the question's focused row: the action, or "Keep playing" back to the item.
-    fn confirm(&mut self) -> Do {
-        match self.ask {
-            Some(a) if self.yes => {
-                self.ask = None;
-                self.yes = false;
-                match a {
-                    Ask::Retry => Do::Retry,
-                    Ask::Quit => Do::Quit,
-                }
-            }
-            _ => {
-                self.cancel();
-                Do::Nothing
-            }
-        }
-    }
-
-    fn cancel(&mut self) {
-        if let Some(a) = self.ask.take() {
-            self.item = match a {
-                Ask::Retry => Item::Retry,
-                Ask::Quit => Item::Quit,
-            };
-        }
-        self.yes = false;
-    }
-
-    fn settings_nav(&mut self, n: Nav, model: &mut crate::settings_store::SettingsStore) {
-        let tabs = model.live_tabs();
-        if tabs.is_empty() {
-            if n == Nav::Back {
-                self.back();
-            }
-            return;
-        }
-        self.tab = self.tab.min(tabs.len() - 1);
-        let keys = model.live_rows(tabs[self.tab]);
-        let last_row = keys.len() + 1;
-        self.row = self.row.min(last_row);
-        let last = tabs.len() - 1;
-        if !matches!(n, Nav::Activate) {
-            self.reset = false;
-        }
-        match n {
-            Nav::Up => self.row = self.row.saturating_sub(1),
-            Nav::Down => self.row = (self.row + 1).min(last_row),
-            Nav::Left if self.row == 0 => self.tab = self.tab.saturating_sub(1),
-            Nav::Right if self.row == 0 => self.tab = (self.tab + 1).min(last),
-            Nav::Left | Nav::Right if self.row <= keys.len() => {
-                model.step(keys[self.row - 1], if n == Nav::Left { -1 } else { 1 });
-            }
-            Nav::PrevTab | Nav::NextTab => {
-                self.tab = if n == Nav::PrevTab {
-                    self.tab.checked_sub(1).unwrap_or(last)
-                } else if self.tab == last {
-                    0
-                } else {
-                    self.tab + 1
-                };
-                self.row = self.row.min(1);
-                self.scroll = 0.0;
-            }
-            Nav::Activate if self.row == last_row => {
-                if std::mem::take(&mut self.reset) {
-                    model.reset_rows(&keys);
-                } else {
-                    self.reset = true;
-                }
-            }
-            Nav::Activate if self.row > 0 => {
-                model.activate(keys[self.row - 1]);
-            }
-            Nav::Left | Nav::Right | Nav::Activate => {}
-            Nav::Back => {
-                self.back();
-            }
-        }
-    }
-
-    // A press or click of a card item.
-    fn activate(&mut self, it: Item, m: &MenuState<'_>) -> Do {
-        self.item = it;
-        match it {
-            Item::Resume => Do::Resume,
-            Item::Retry => {
-                self.ask = Some(Ask::Retry);
-                self.yes = false;
-                Do::Nothing
-            }
-            Item::Quit => {
-                self.ask = Some(Ask::Quit);
-                self.yes = false;
-                Do::Nothing
-            }
-            Item::Volume | Item::Speed => Do::Nothing,
-            Item::Hitboxes => Do::Hitboxes(m.hitboxes.next()),
-            Item::Screenshot => Do::Screenshot,
-            Item::TouchLayout => Do::EditLayout,
-            Item::Settings => {
-                self.page = Page::Settings;
-                self.tab = 0;
-                self.row = 1;
-                self.scroll = 0.0;
-                self.reset = false;
-                Do::Nothing
-            }
-        }
-    }
-
-    // One level back; false on the plain card (the menu closes).
-    fn back(&mut self) -> bool {
-        if self.page == Page::Settings {
-            self.page = Page::Card;
-            self.item = Item::Settings;
-            self.reset = false;
-            return true;
-        }
-        if self.ask.is_some() {
-            self.cancel();
-            return true;
-        }
-        false
-    }
-}
-
-fn hitbox_mode(i: usize) -> Hitboxes {
-    match i {
-        0 => Hitboxes::Off,
-        1 => Hitboxes::Player,
-        _ => Hitboxes::All,
-    }
-}
-
-fn has_volume(model: &crate::settings_store::SettingsStore) -> bool {
-    model.live_keys().contains(&VOLUME)
 }
 
 #[expect(clippy::struct_excessive_bools, reason = "independent menu flags")]
@@ -611,7 +216,7 @@ pub struct PortMenu {
     // When egui wants the next repaint.
     pub repaint_at: Option<web_time::Instant>,
     // The `live` settings rows; the language row sets the menu's language.
-    model: crate::settings_store::SettingsStore,
+    menu: MenuModel,
     // A row changed since the last `take_changed`.
     changed: bool,
     // "Give up and retry" / "Quit to title" are offered (`quittitle::available`).
@@ -635,7 +240,6 @@ pub struct PortMenu {
     touch: Option<TouchConfig>,
     edit: Option<TouchEdit>,
     saved: Option<TouchLayout>,
-    focus: Focus,
     // Key / pad presses since the last pass.
     navs: Vec<Nav>,
     mods: winit::keyboard::ModifiersState,
@@ -691,11 +295,14 @@ impl PortMenu {
         );
         let state_us = began.elapsed().as_micros() - ctx_us;
         let modality = if touch.is_some() {
-            theme::Modality::Touch
+            Modality::Touch
         } else {
-            theme::Modality::Keys
+            Modality::Keys
         };
-        let model = crate::settings_store::SettingsStore::port_menu(s, touch.is_some());
+        let menu = MenuModel::new(
+            crate::settings_store::SettingsStore::port_menu(s, touch.is_some()),
+            modality,
+        );
         log::info!(
             "slintui open: egui ctx {ctx_us} us, egui state {state_us} us, model {} us",
             began.elapsed().as_micros() - ctx_us - state_us,
@@ -706,7 +313,7 @@ impl PortMenu {
             renderer: None,
             pending: egui::TexturesDelta::default(),
             repaint_at: None,
-            model,
+            menu,
             changed: false,
             quit_ok: false,
             opened: (i18n::resolve(s.language), s.now_playing),
@@ -720,10 +327,6 @@ impl PortMenu {
             touch,
             edit: None,
             saved: None,
-            focus: Focus {
-                input: theme::Input::new(modality),
-                ..Focus::default()
-            },
             navs: Vec::new(),
             mods: winit::keyboard::ModifiersState::empty(),
             axes: [0; 2],
@@ -747,7 +350,7 @@ impl PortMenu {
         if self.edit.take().is_some() {
             return true;
         }
-        self.focus.back()
+        self.menu.back()
     }
 
     // The layout editor is open (F1 / Select then close it first).
@@ -774,7 +377,7 @@ impl PortMenu {
 
     // The live rows changed since the last call: (key, value text) of every shown row.
     pub fn take_changed(&mut self) -> Option<Vec<(&'static str, String)>> {
-        std::mem::take(&mut self.changed).then(|| live_values(&self.model))
+        std::mem::take(&mut self.changed).then(|| self.menu.live_values())
     }
 
     // The language and `now_playing` the menu opened with.
@@ -784,7 +387,7 @@ impl PortMenu {
 
     // Writes the rows changed in the menu to port.cfg.
     pub fn save(&self) {
-        self.model.save_changes();
+        self.menu.store.save_changes();
     }
 
     // A layout the editor saved since the last call.
@@ -823,10 +426,9 @@ impl PortMenu {
             let Some(kind) = m.on_event(ev) else {
                 return false;
             };
-            if self.focus.page != Page::Settings {
-                let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
-                self.focus.input.pointer(touch);
-            }
+            let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
+            self.menu.apply(Input::Pointer { touch });
+            m.set_modality(self.menu.modality());
             return true;
         }
         self.state.on_window_event(window, ev).repaint
@@ -857,10 +459,10 @@ impl PortMenu {
             if !self.ensure_slint(window, gfx) {
                 return None;
             }
-            if self.focus.page == Page::Settings {
-                self.redraw_slint(window, gfx, lay);
+            if self.menu.page() == Page::Settings {
+                let act = self.redraw_slint(window, gfx, lay);
                 crate::slintui::host::pass_end("settings", pass);
-                return None;
+                return act;
             }
             let act = self.redraw_card(window, gfx, lay);
             crate::slintui::host::pass_end("card", pass);
@@ -893,19 +495,18 @@ impl PortMenu {
             quit: self.quit_ok,
             stage: self.stage.as_ref(),
         };
-        let (model, focus, edit) = (&mut self.model, &mut self.focus, &mut self.edit);
-        focus.split = lay.shape == Shape::Split;
-        let before = live_values(model);
-        let mut todo: Vec<Do> = self
+        let (menu, edit) = (&mut self.menu, &mut self.edit);
+        menu.set_context(m.context(&lay));
+        let mut todo: Vec<Effect> = self
             .navs
             .drain(..)
-            .map(|n| focus.nav(n, &m, model))
+            .flat_map(|n| menu.apply(Input::Nav(n)))
             .collect();
         let showing = if edit.is_some() {
             Shown::Layout
-        } else if focus.page == Page::Settings {
-            Shown::Settings(focus.tab)
-        } else if focus.ask.is_some() {
+        } else if menu.page() == Page::Settings {
+            Shown::Settings(menu.tab())
+        } else if menu.ask().is_some() {
             Shown::Confirm
         } else {
             Shown::Card
@@ -913,16 +514,12 @@ impl PortMenu {
         let mut done = None;
         let mut out = self.ctx.run_pass(raw, |ctx| {
             if let Some(e) = edit {
-                done = e.ui(ctx, model.lang(), lay.edit_ppp);
+                done = e.ui(ctx, menu.store.lang(), lay.edit_ppp);
             } else {
-                todo.extend(menu_ui(ctx, &m, model, focus, &lay));
+                todo.extend(menu_ui(ctx, &m, menu, &lay));
             }
         });
-        focus.moved = false;
-        if live_values(model) != before {
-            self.changed = true;
-            window.request_redraw();
-        }
+        menu.set_moved(false);
         let act = self.run_dos(todo, window, gfx);
         match done {
             Some(EditOut::Save(l)) => {
@@ -992,16 +589,17 @@ impl PortMenu {
     }
 
     // Carries out what the card asked for; the action for the app, if any.
-    fn run_dos(&mut self, todo: Vec<Do>, window: &Window, gfx: &mut Gfx) -> Option<Action> {
+    fn run_dos(&mut self, todo: Vec<Effect>, window: &Window, gfx: &mut Gfx) -> Option<Action> {
         let mut act = None;
         for d in todo {
-            if d == Do::Nothing {
+            if matches!(d, Effect::ScrollMoved | Effect::HoverChanged) {
                 continue;
             }
             act = d.action().or(act);
             match d {
-                Do::Hitboxes(to) => super::hitbox::set_mode(gfx, to),
-                Do::EditLayout => {
+                Effect::SettingsChanged => self.changed = true,
+                Effect::Hitboxes(to) => super::hitbox::set_mode(gfx, to),
+                Effect::EditLayout => {
                     if let Some(t) = &self.touch {
                         self.edit = Some(TouchEdit::new(t.clone()));
                     }
@@ -1051,7 +649,7 @@ impl PortMenu {
         true
     }
 
-    // One pass of the Slint pause card; the shared `Focus` decides everything, so keys and confirms match the egui card.
+    // One pass of the Slint pause card; the shared model decides everything, so keys and confirms match the egui card.
     fn redraw_card(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
         use crate::slintui::menu::View;
         use crate::slintui::settings_page::Place;
@@ -1073,25 +671,16 @@ impl PortMenu {
         if menu.enter(View::Card) {
             menu.card.open();
         }
-        let before = live_values(&self.model);
         let navs = std::mem::take(&mut self.navs);
         let place = Place { lay, safe, size };
-        let todo = card_pass(
-            &mut menu.card,
-            &m,
-            &mut self.model,
-            &mut self.focus,
-            place,
-            navs,
-        );
+        let todo = card_pass(&mut menu.card, &m, &mut self.menu, place, navs);
         // Settings draws on the next pass, and nothing else would ask for one until the next input.
-        if live_values(&self.model) != before || self.focus.page == Page::Settings {
-            self.changed |= live_values(&self.model) != before;
+        if self.menu.page() == Page::Settings {
             window.request_redraw();
         }
         self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
         gfx.safe = lay.picture;
-        let screen = if self.focus.ask.is_some() {
+        let screen = if self.menu.ask().is_some() {
             "confirm"
         } else {
             "card"
@@ -1113,16 +702,14 @@ impl PortMenu {
     }
 
     // One pass of the Slint settings page; texture work only when the page changed.
-    fn redraw_slint(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) {
+    fn redraw_slint(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
         use crate::slintui::menu::View;
         use crate::slintui::settings_page::Place;
         let safe = gfx.safe;
         let size = gfx.surface_size();
-        let lang = self.model.lang();
+        let lang = self.menu.store.lang();
         let words = page_words(lang, self.controller.as_deref(), &lay);
-        let Some(menu) = &mut self.slint else {
-            return;
-        };
+        let menu = self.slint.as_mut()?;
         let entered = menu.enter(View::Settings);
         if entered {
             menu.page.open(lay.touch);
@@ -1130,35 +717,27 @@ impl PortMenu {
         let reworded = menu.page.set_words(&words);
         menu.page.place(Place { lay, safe, size });
         if entered || reworded {
-            menu.page.show_tab(self.focus.tab, &self.model, lang);
+            menu.page.show_tab(self.menu.tab(), &self.menu.store, lang);
         }
-        for n in self.navs.drain(..) {
-            menu.page.nav(n);
-        }
-        let before = live_values(&self.model);
-        let back = menu.page.apply(&mut self.model, lang);
-        self.focus.tab = menu.page.tab();
-        if live_values(&self.model) != before {
-            self.changed = true;
-            window.request_redraw();
-        }
+        let navs = std::mem::take(&mut self.navs);
+        let todo = menu.page.apply(&mut self.menu, navs, lang);
         self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
-        if back {
-            self.focus.back();
+        if self.menu.page() != Page::Settings {
             window.request_redraw();
-            return;
+            return self.run_dos(todo, window, gfx);
         }
         gfx.safe = lay.picture;
-        let tab = Some(self.focus.tab);
+        let tab = Some(self.menu.tab());
         let began = web_time::Instant::now();
         let shown = gfx.present_last(|t, enc| menu.paint("settings", tab, &t, enc));
         crate::slintui::host::note_present(began);
         gfx.safe = safe;
         if shown {
-            self.note_shown(Shown::Settings(self.focus.tab));
+            self.note_shown(Shown::Settings(self.menu.tab()));
         } else {
             window.request_redraw();
         }
+        self.run_dos(todo, window, gfx)
     }
 }
 
@@ -1204,19 +783,16 @@ fn card_item(
 }
 
 // What the Slint card shows this pass.
-fn card_view(
-    m: &MenuState<'_>,
-    model: &crate::settings_store::SettingsStore,
-    focus: &Focus,
-    lay: &Layout,
-) -> crate::slintui::card::CardView {
-    let words = Words { lang: model.lang() };
-    let items = card_items(m, focus.split);
-    let item = |it: Item| card_item(it, m, model, &words);
+fn card_view(m: &MenuState<'_>, menu: &MenuModel, lay: &Layout) -> crate::slintui::card::CardView {
+    let words = Words {
+        lang: menu.store.lang(),
+    };
+    let items = menu.items();
+    let item = |it: Item| card_item(it, m, &menu.store, &words);
     let run = |it: &&Item| it.danger();
     let plain = |it: &&Item| !it.danger() && !matches!(it, Item::Resume);
     let split_quick = |it: &&Item| !it.danger() && !matches!(it, Item::Resume | Item::Settings);
-    let (mids, quick) = if focus.split {
+    let (mids, quick) = if menu.context().split {
         (
             Vec::new(),
             items.iter().filter(split_quick).map(|&i| item(i)).collect(),
@@ -1227,21 +803,21 @@ fn card_view(
             Vec::new(),
         )
     };
-    let (question, note, act) = match focus.ask {
+    let (question, note, act) = match menu.ask() {
         Some(Ask::Retry) => ("retry_ask", "retry_note", "retry_do"),
         Some(Ask::Quit) => ("quit_ask", "quit_note", "quit_do"),
         None => ("", "", ""),
     };
     let ui = |id: &str| if id.is_empty() { "" } else { words.ui(id) };
-    let which = if focus.ask.is_some() {
+    let which = if menu.ask().is_some() {
         Hints::Confirm
     } else {
         Hints::Card
     };
-    let focused = if focus.input.bar() && focus.ask.is_none() {
+    let focused = if menu.bar() && menu.ask().is_none() {
         items
             .iter()
-            .position(|&x| x == focus.item)
+            .position(|&x| x == menu.item())
             .and_then(|i| i32::try_from(i).ok())
             .unwrap_or(-1)
     } else {
@@ -1259,12 +835,12 @@ fn card_view(
         dangers: items.iter().filter(run).map(|&i| item(i)).collect(),
         quick,
         focused,
-        ask: i32::from(focus.ask.is_some()),
-        yes: focus.yes,
+        ask: i32::from(menu.ask().is_some()),
+        yes: menu.yes(),
         heading: words.ui("paused_title").into(),
         caption: words.heading_caption(m, lay.shape != Shape::Split),
         quick_caption: words.ui("quick_settings").into(),
-        help: sentence(card_help(focus, &words)),
+        help: sentence(card_help(menu, &words)),
         notes: words.notes(m),
         device: dev,
         version: version(words.lang),
@@ -1278,8 +854,8 @@ fn card_view(
             .map(|(k, v)| (k, v.to_string()))
             .collect(),
         ru: words.lang == Lang::Ru,
-        keys: focus.input.bar(),
-        mouse: focus.input.modality == theme::Modality::Pointer,
+        keys: menu.bar(),
+        mouse: menu.modality() == Modality::Pointer,
     }
 }
 
@@ -1287,65 +863,47 @@ fn card_view(
 fn card_pass(
     card: &mut crate::slintui::card::Card,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     place: crate::slintui::settings_page::Place,
     navs: Vec<Nav>,
-) -> Vec<Do> {
+) -> Vec<Effect> {
     use crate::slintui::card::Cmd;
-    focus.split = place.lay.shape == Shape::Split;
-    let items = focus.items(m);
-    focus.clamp(&items);
-    let mut out: Vec<Do> = navs.into_iter().map(|n| focus.nav(n, m, model)).collect();
+    menu.set_context(m.context(&place.lay));
+    let items = menu.items();
+    let mut out: Vec<Effect> = navs
+        .into_iter()
+        .flat_map(|n| menu.apply(Input::Nav(n)))
+        .collect();
     for c in card.take_cmds() {
-        let at = |i: usize| items.get(i).copied();
-        match c {
-            Cmd::Answer(y) if focus.ask.is_some() => {
-                focus.yes = y;
-                out.push(focus.confirm());
-            }
-            Cmd::Answer(_) => {}
-            _ if focus.ask.is_some() => {}
-            Cmd::Activate(i) => {
-                if let Some(it) = at(i) {
-                    out.push(focus.activate(it, m));
-                }
-            }
-            Cmd::Step(i, d) => {
-                if let Some(it) = at(i) {
-                    focus.item = it;
-                    out.push(item_input(it, CtlOut::Step(d), m, model));
-                }
-            }
-            Cmd::Pick(i, w) => {
-                if let Some(it) = at(i) {
-                    focus.item = it;
-                    out.push(item_input(it, CtlOut::Pick(w), m, model));
-                }
-            }
-            Cmd::Frac(i, f) => {
-                if let Some(it) = at(i) {
-                    focus.item = it;
-                    out.push(item_input(it, CtlOut::Frac(f), m, model));
-                }
-            }
+        let item = |i: usize| items.get(i).copied().map(Target::Item);
+        let input = match c {
+            Cmd::Answer(y) => Some(Input::Tap(Target::Answer(y))),
+            Cmd::Activate(i) => item(i).map(Input::Tap),
+            Cmd::Step(i, d) => item(i).map(|t| Input::Control(t, CtlOut::Step(d))),
+            Cmd::Pick(i, w) => item(i).map(|t| Input::Control(t, CtlOut::Pick(w))),
+            Cmd::Frac(i, f) => item(i).map(|t| Input::Control(t, CtlOut::Frac(f))),
+        };
+        if let Some(input) = input {
+            out.extend(menu.apply(input));
         }
     }
     match (
-        focus.ask.is_some(),
+        menu.ask().is_some(),
         card.hovered_item(),
         card.hovered_answer(),
     ) {
-        (true, _, Some(y)) => focus.input.over(Hit::Yes(y)),
+        (true, _, Some(y)) => {
+            menu.apply(Input::Over(Hit::Yes(y)));
+        }
         (false, Some(i), _) => {
             if let Some(&it) = items.get(i) {
-                focus.input.over(Hit::Item(it));
+                menu.apply(Input::Over(Hit::Item(it)));
             }
         }
         _ => {}
     }
-    focus.input.end();
-    let view = card_view(m, model, focus, &place.lay);
+    out.extend(menu.apply(Input::HoverEnd));
+    let view = card_view(m, menu, &place.lay);
     card.show(view, place);
     out
 }
@@ -1412,6 +970,20 @@ struct MenuState<'a> {
     stage: Option<&'a StageLine>,
 }
 
+impl MenuState<'_> {
+    fn context(&self, lay: &Layout) -> Context {
+        Context {
+            overlay: self.touch,
+            touch_screen: lay.touch,
+            hitboxes: self.hitboxes,
+            speed: self.speed,
+            rates: &crate::transport::SLOW,
+            quit: self.quit,
+            split: lay.shape == Shape::Split,
+        }
+    }
+}
+
 // The paused stage ("1" … "6B", "Extra"), difficulty word and shot type (0–11), while a stage is played.
 #[derive(Clone, Copy, Debug)]
 pub struct StageLine {
@@ -1449,13 +1021,6 @@ fn insets(s: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
         top: s.top as f32 / ppp,
         bottom: s.bottom as f32 / ppp,
     })
-}
-
-fn live_values(m: &crate::settings_store::SettingsStore) -> Vec<(&'static str, String)> {
-    m.live_keys()
-        .into_iter()
-        .filter_map(|k| Some((k, m.value_text(k)?)))
-        .collect()
 }
 
 // ---- Painting. Every rect below is in points of `Layout` (one point = one mock-up px).
@@ -1802,13 +1367,15 @@ fn sans_text(
 fn menu_ui(
     ctx: &egui::Context,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
-) -> Vec<Do> {
+) -> Vec<Effect> {
     let geo = Geo::new(ctx, lay);
     let mut out = Vec::new();
-    focus.input.begin(ctx, m.touch);
+    if let Some(touch) = theme::pointer_seen(ctx, m.touch) {
+        menu.apply(Input::Pointer { touch });
+    }
+    theme::note_finger(ctx, m.touch || menu.modality() == Modality::Touch, m.touch);
     if m.touch {
         let tap = theme::TAP_DP * lay.density / lay.ppp;
         ctx.options_mut(|o| o.input_options.max_click_dist = tap);
@@ -1831,13 +1398,16 @@ fn menu_ui(
         .show(ctx, |ui| {
             ui.set_min_size(geo.screen.size());
             ui.set_clip_rect(geo.screen);
-            let words = Words { lang: model.lang() };
-            if focus.page == Page::Settings {
-                settings_ui(ui, m, model, focus, lay, &geo, &words);
+            let words = Words {
+                lang: menu.store.lang(),
+            };
+            if menu.page() == Page::Settings {
+                out = settings_ui(ui, m, menu, lay, &geo, &words);
             } else {
-                out = card_ui(ui, m, model, focus, lay, &geo, &words);
+                out = card_ui(ui, m, menu, lay, &geo, &words);
             }
-            if focus.input.end() {
+            let hover = menu.apply(Input::HoverEnd);
+            if !hover.is_empty() {
                 ui.ctx().request_repaint();
             }
         });
@@ -1926,7 +1496,7 @@ fn item_ctl(
                 .collect(),
             sel: Some(m.hitboxes as usize),
         },
-        Item::Volume if has_volume(model) => model.ctl(VOLUME, lang),
+        Item::Volume if model.live_keys().contains(&VOLUME) => model.ctl(VOLUME, lang),
         Item::Speed => {
             let now = m.speed.unwrap_or((1, 1));
             let rates = crate::transport::SLOW;
@@ -1939,36 +1509,6 @@ fn item_ctl(
             }
         }
         _ => Ctl::None,
-    }
-}
-
-// A click / tap on an item's control.
-fn item_input(
-    it: Item,
-    o: CtlOut,
-    m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-) -> Do {
-    match (it, o) {
-        (Item::Volume, o) => {
-            model.ctl_input(VOLUME, o);
-            Do::Nothing
-        }
-        (Item::Hitboxes, CtlOut::Pick(i)) => Do::Hitboxes(hitbox_mode(i)),
-        (Item::Hitboxes, CtlOut::Step(d)) => Do::Hitboxes(hitbox_mode(
-            (m.hitboxes as usize)
-                .saturating_add_signed(d as isize)
-                .min(2),
-        )),
-        (Item::Speed, CtlOut::Pick(i)) => crate::transport::SLOW
-            .get(i)
-            .map_or(Do::Nothing, |&r| Do::Speed(r)),
-        (Item::Speed, CtlOut::Step(d)) => {
-            let rates = crate::transport::SLOW;
-            let at = rates.iter().position(|&x| Some(x) == m.speed).unwrap_or(0);
-            Do::Speed(rates[at.saturating_add_signed(d as isize).min(rates.len() - 1)])
-        }
-        _ => Do::Nothing,
     }
 }
 
@@ -2070,12 +1610,11 @@ fn item_row(
     size: f32,
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     words: &Words,
     dimmed: bool,
-    out: &mut Vec<Do>,
+    out: &mut Vec<Effect>,
 ) {
     let id = Id::unique(("card item", it as u8));
     let resp = ui.interact(
@@ -2087,14 +1626,14 @@ fn item_row(
             Sense::click()
         },
     );
-    let live = !dimmed && focus.ask.is_none();
+    let live = !dimmed && menu.ask().is_none();
     if live && resp.contains_pointer() {
-        focus.input.over(Hit::Item(it));
+        menu.apply(Input::Over(Hit::Item(it)));
     }
-    let bar = live && focus.input.bar() && focus.item == it;
-    let lit = live && focus.input.lit(Hit::Item(it));
+    let bar = live && menu.bar() && menu.item() == it;
+    let lit = live && menu.lit(Hit::Item(it));
     // On touch there is no focus to carry: Resume keeps the band as the screen's primary action.
-    let primary = it == Item::Resume && lay.touch && live && !focus.input.bar();
+    let primary = it == Item::Resume && lay.touch && live && !menu.bar();
     let focused = bar || lit || primary;
     if primary {
         theme::focus(
@@ -2122,7 +1661,7 @@ fn item_row(
     } else {
         theme::TEXT
     };
-    let ctl = item_ctl(it, m, model, words.lang);
+    let ctl = item_ctl(it, m, &menu.store, words.lang);
     let label_w = if matches!(ctl, Ctl::None) {
         rect.width() - size
     } else {
@@ -2150,36 +1689,34 @@ fn item_row(
     let (st, off) = item_ctl_layout(p, rect.width(), it, size, cm, &ctl, words);
     let crect = Rect::from_min_max(pos2(rect.min.x + off, rect.min.y), rect.max);
     if !dimmed && let Some(o) = theme::value_ctl(ui, p, id, crect, &ctl, focused, &st) {
-        focus.item = it;
-        out.push(item_input(it, o, m, model));
+        out.extend(menu.apply(Input::Control(Target::Item(it), o)));
     } else if resp.clicked() {
-        focus.item = it;
-        out.push(focus.activate(it, m));
+        out.extend(menu.apply(Input::Tap(Target::Item(it))));
     }
-    if focused && focus.moved {
+    if focused && menu.moved() {
         resp.scroll_to_me(None);
     }
 }
 
 // The help line of the card: the focused item under keys, the hovered one under the mouse.
-fn card_help(focus: &Focus, words: &Words) -> &'static str {
-    let yes = if focus.input.bar() {
-        Some(focus.yes)
+fn card_help(menu: &MenuModel, words: &Words) -> &'static str {
+    let yes = if menu.bar() {
+        Some(menu.yes())
     } else {
-        match focus.input.hovered() {
+        match menu.hovered() {
             Some(Hit::Yes(y)) => Some(y),
             _ => None,
         }
     };
-    let item = if focus.input.bar() {
-        Some(focus.item)
+    let item = if menu.bar() {
+        Some(menu.item())
     } else {
-        match focus.input.hovered() {
+        match menu.hovered() {
             Some(Hit::Item(it)) => Some(it),
             _ => None,
         }
     };
-    match (focus.ask, yes, item) {
+    match (menu.ask(), yes, item) {
         (Some(a), Some(true), _) => words.help(match a {
             Ask::Retry => Item::Retry,
             Ask::Quit => Item::Quit,
@@ -2218,10 +1755,10 @@ fn confirm_block(
     band: (f32, f32),
     ask: Ask,
     cm: &CardMetrics,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     words: &Words,
-    out: &mut Vec<Do>,
+    out: &mut Vec<Effect>,
 ) -> f32 {
     let (q, note, act) = match ask {
         Ask::Retry => ("retry_ask", "retry_note", "retry_do"),
@@ -2246,12 +1783,12 @@ fn confirm_block(
         let b = Rect::from_x_y_ranges(band.0..=band.1, rect.y_range());
         let resp = ui.interact(b, Id::unique(("confirm", i)), Sense::click());
         if resp.contains_pointer() {
-            focus.input.over(Hit::Yes(yes));
+            menu.apply(Input::Over(Hit::Yes(yes)));
         }
-        let bar = focus.input.bar() && focus.yes == yes;
-        let lit = focus.input.lit(Hit::Yes(yes));
+        let bar = menu.bar() && menu.yes() == yes;
+        let lit = menu.lit(Hit::Yes(yes));
         // On touch nothing has a marker: the safe answer keeps the plain band, as Resume does.
-        let rest = lay.touch && !yes && !focus.input.bar();
+        let rest = lay.touch && !yes && !menu.bar();
         let f = bar || lit || rest;
         if rest && !resp.is_pointer_button_down_on() {
             p.rect_filled(b, 0.0, theme::BAND);
@@ -2269,8 +1806,7 @@ fn confirm_block(
         };
         label(p, rect, words.ui(id), theme::serif(cm.row * 1.07), color, f);
         if resp.clicked() {
-            focus.yes = yes;
-            out.push(focus.confirm());
+            out.extend(menu.apply(Input::Tap(Target::Answer(yes))));
         }
         cy += rh;
     }
@@ -2280,24 +1816,18 @@ fn confirm_block(
 fn card_ui(
     ui: &mut Ui,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
-) -> Vec<Do> {
-    let items = focus.items(m);
-    focus.clamp(&items);
+) -> Vec<Effect> {
+    let items = menu.items();
     let cm = card_metrics(lay);
     let mut out = Vec::new();
     let p = ui.painter().clone();
     match lay.shape {
-        Shape::Split => split_card(
-            ui, &p, &items, &cm, m, model, focus, lay, geo, words, &mut out,
-        ),
-        _ => list_card(
-            ui, &p, &items, &cm, m, model, focus, lay, geo, words, &mut out,
-        ),
+        Shape::Split => split_card(ui, &p, &items, &cm, m, menu, lay, geo, words, &mut out),
+        _ => list_card(ui, &p, &items, &cm, m, menu, lay, geo, words, &mut out),
     }
     out
 }
@@ -2311,12 +1841,11 @@ fn list_card(
     items: &[Item],
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
-    out: &mut Vec<Do>,
+    out: &mut Vec<Effect>,
 ) {
     let pillar = lay.shape == Shape::Pillar;
     let (x, w, band, top) = if pillar {
@@ -2389,7 +1918,7 @@ fn list_card(
             116.0
         };
     // The bottom block of the pillar is pinned; rows shrink when the list would reach it.
-    let which = if focus.ask.is_some() {
+    let which = if menu.ask().is_some() {
         Hints::Confirm
     } else {
         Hints::Card
@@ -2406,7 +1935,7 @@ fn list_card(
         hints_y - if short { 34.0 } else { 58.0 }
     };
     let notes_y = dev_y - 26.0 * notes.len() as f32;
-    let help_text = card_help(focus, words);
+    let help_text = card_help(menu, words);
     let help_g = theme::wrap(
         p,
         help_text.to_string(),
@@ -2453,7 +1982,7 @@ fn list_card(
         }
     };
     // The question's block replaces the two danger rows while asked.
-    let ask_h = focus.ask.map_or(0.0, |a| {
+    let ask_h = menu.ask().map_or(0.0, |a| {
         confirm_height(
             p,
             w,
@@ -2475,23 +2004,25 @@ fn list_card(
         items
             .iter()
             .filter(|i| !matches!(i, Item::Resume) && !i.danger())
-            .map(|&it| (item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0 - rh).max(0.0))
+            .map(|&it| {
+                (item_ctl_h(p, w, it, cm.row, cm, m, &menu.store, words) + 6.0 - rh).max(0.0)
+            })
             .sum()
     };
     let need = |rh: f32| {
-        if focus.ask.is_some() {
+        if menu.ask().is_some() {
             mids * rh + ask_h + grow(rh)
         } else {
             mids * rh + dangers * rh * tall_k + grow(rh)
         }
     };
     // While asked, a short card drops the dimmed items above the question before it squeezes anything.
-    let hide_mids = focus.ask.is_some() && need(rh) > room;
+    let hide_mids = menu.ask().is_some() && need(rh) > room;
     if !hide_mids && need(rh) > room {
         let per = mids + dangers * tall_k;
         rh = rh.min(((room - need(0.0)) / per).max(min_rh));
     }
-    let dimmed = focus.ask.is_some();
+    let dimmed = menu.ask().is_some();
     let mut op = p.clone();
     if dimmed {
         op.set_opacity(0.3);
@@ -2509,8 +2040,7 @@ fn list_card(
         cm.resume,
         cm,
         m,
-        model,
-        focus,
+        menu,
         lay,
         words,
         dimmed,
@@ -2525,7 +2055,7 @@ fn list_card(
     {
         let r = row(
             y,
-            rh.max(item_ctl_h(p, w, it, cm.row, cm, m, model, words) + 6.0),
+            rh.max(item_ctl_h(p, w, it, cm.row, cm, m, &menu.store, words) + 6.0),
         );
         item_row(
             ui,
@@ -2536,8 +2066,7 @@ fn list_card(
             cm.row,
             cm,
             m,
-            model,
-            focus,
+            menu,
             lay,
             words,
             dimmed,
@@ -2552,13 +2081,13 @@ fn list_card(
             theme::rule(p, egui::Rangef::new(x, x + w), y);
             y += gk * if pillar { 10.0 } else { 6.0 };
         }
-        if let Some(ask) = focus.ask {
+        if let Some(ask) = menu.ask() {
             y += 6.0;
             let cmr = CardMetrics {
                 row_h: ask_row,
                 ..*cm
             };
-            confirm_block(ui, p, x, y, w, band, ask, &cmr, focus, lay, words, out);
+            confirm_block(ui, p, x, y, w, band, ask, &cmr, menu, lay, words, out);
             y += ask_h;
         } else {
             for &it in items.iter().filter(|i| i.danger()) {
@@ -2572,8 +2101,7 @@ fn list_card(
                     cm.row,
                     cm,
                     m,
-                    model,
-                    focus,
+                    menu,
                     lay,
                     words,
                     false,
@@ -2617,7 +2145,7 @@ fn list_card(
             };
             theme::shadowed(p, pos2(x + w - v.size().x, vy), v, theme::HELP);
         }
-        let which = if focus.ask.is_some() {
+        let which = if menu.ask().is_some() {
             Hints::Confirm
         } else {
             Hints::Card
@@ -2633,7 +2161,7 @@ fn list_card(
         // 4:3: the notes, device and key hints follow the list in its column, leaving the HUD art alone and ending
         // above the player; the device line is the first to go when they would not.
         let limit = geo.game(0.0, 360.0, 0.0, 0.0).min.y;
-        let which = if focus.ask.is_some() {
+        let which = if menu.ask().is_some() {
             Hints::Confirm
         } else {
             Hints::Card
@@ -2678,12 +2206,11 @@ fn split_card(
     items: &[Item],
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
-    out: &mut Vec<Do>,
+    out: &mut Vec<Effect>,
 ) {
     let left = Rect::from_x_y_ranges(geo.screen.min.x..=geo.frame.min.x, geo.screen.y_range());
     let right = Rect::from_x_y_ranges(geo.frame.max.x..=geo.screen.max.x, geo.screen.y_range());
@@ -2713,7 +2240,7 @@ fn split_card(
         theme::HELP,
         w,
     );
-    let dimmed = focus.ask.is_some();
+    let dimmed = menu.ask().is_some();
     let mut op = p.clone();
     if dimmed {
         op.set_opacity(0.3);
@@ -2723,13 +2250,13 @@ fn split_card(
     // Bottom-up: Quit, Retry (or the question), rule, Settings, Resume.
     let mut yb = bottom;
     let dangers: Vec<Item> = items.iter().copied().filter(|i| i.danger()).collect();
-    if let Some(ask) = focus.ask {
+    if let Some(ask) = menu.ask() {
         yb -= confirm_height(p, w, ask, cm, words);
         let cmr = CardMetrics {
             row_h: cm.row_h,
             ..*cm
         };
-        confirm_block(ui, p, x, yb, w, band, ask, &cmr, focus, lay, words, out);
+        confirm_block(ui, p, x, yb, w, band, ask, &cmr, menu, lay, words, out);
         yb -= 24.0;
         theme::rule(p, egui::Rangef::new(x, x + w), yb + 8.0);
     } else if !dangers.is_empty() {
@@ -2746,8 +2273,7 @@ fn split_card(
                 cm.row * 0.94,
                 cm,
                 m,
-                model,
-                focus,
+                menu,
                 lay,
                 words,
                 false,
@@ -2771,8 +2297,7 @@ fn split_card(
             cm.row,
             cm,
             m,
-            model,
-            focus,
+            menu,
             lay,
             words,
             dimmed,
@@ -2789,8 +2314,7 @@ fn split_card(
             cm.resume,
             cm,
             m,
-            model,
-            focus,
+            menu,
             lay,
             words,
             dimmed,
@@ -2816,7 +2340,7 @@ fn split_card(
     // Choice words a step under the labels, as in the mock-up.
     let word = lab * 0.9;
     // Choice cells are at least 120 points (48 dp) and fit their word; those that do not fit one line wrap.
-    let grid = |it: Item| match item_ctl(it, m, model, words.lang) {
+    let grid = |it: Item| match item_ctl(it, m, &menu.store, words.lang) {
         Ctl::Choices { words: ws, .. } => {
             let widest = ws
                 .iter()
@@ -2874,10 +2398,10 @@ fn split_card(
             },
         );
         if !dimmed && resp.contains_pointer() {
-            focus.input.over(Hit::Item(it));
+            menu.apply(Input::Over(Hit::Item(it)));
         }
-        let bar = !dimmed && focus.input.bar() && focus.item == it;
-        let lit = !dimmed && focus.input.lit(Hit::Item(it));
+        let bar = !dimmed && menu.bar() && menu.item() == it;
+        let lit = !dimmed && menu.lit(Hit::Item(it));
         let focused = bar || lit;
         theme::mark(
             &op,
@@ -2888,7 +2412,7 @@ fn split_card(
             !dimmed && resp.is_pointer_button_down_on(),
         );
         let color = if focused { theme::TEXT_HI } else { theme::TEXT };
-        let ctl = item_ctl(it, m, model, words.lang);
+        let ctl = item_ctl(it, m, &menu.store, words.lang);
         if matches!(ctl, Ctl::None) {
             let lr = if it == Item::TouchLayout {
                 Rect::from_min_size(r.min, vec2(rw - lab, h))
@@ -2900,7 +2424,7 @@ fn split_card(
                 theme::chevron(&op, pos2(r.max.x - 8.0, r.center().y), lab, theme::HELP);
             }
             if resp.clicked() {
-                out.push(focus.activate(it, m));
+                out.extend(menu.apply(Input::Tap(Target::Item(it))));
             }
         } else {
             label(
@@ -2954,10 +2478,9 @@ fn split_card(
                 _ => theme::value_ctl(ui, &op, id, cells, &ctl, focused, &st),
             };
             if let Some(o) = res.filter(|_| !dimmed) {
-                focus.item = it;
-                out.push(item_input(it, o, m, model));
+                out.extend(menu.apply(Input::Control(Target::Item(it), o)));
             } else if resp.clicked() {
-                out.push(focus.activate(it, m));
+                out.extend(menu.apply(Input::Tap(Target::Item(it))));
             }
             if it != *items.last().unwrap_or(&it) {
                 theme::rule(&op, egui::Rangef::new(rx, rx + rw), y + h - 8.0);
@@ -2968,8 +2491,8 @@ fn split_card(
 }
 
 // A finger on the settings list: a vertical drag scrolls it from anywhere on it, the list then coasts briefly and
-// comes to rest on a row (`nearest`).
-fn drag_list(ui: &Ui, list: Rect, focus: &mut Focus, nearest: impl Fn(f32) -> f32) {
+// comes to rest on a row.
+fn drag_list(ui: &Ui, list: Rect, menu: &mut MenuModel) {
     let ctx = ui.ctx();
     let (origin, down, dy, dt) = ctx.input(|i| {
         (
@@ -2980,30 +2503,16 @@ fn drag_list(ui: &Ui, list: Rect, focus: &mut Focus, nearest: impl Fn(f32) -> f3
         )
     });
     if down && origin.is_some_and(|o| list.contains(o)) {
-        focus.fling = 0.0;
+        menu.apply(Input::Press);
         if theme::press_axis(ctx) == theme::Axis::Vertical {
-            focus.dragging = true;
-            focus.scroll -= dy;
-            focus.drag_speed = focus.drag_speed * 0.7 + (-dy / dt) * 0.3;
+            menu.apply(Input::Drag { dy, dt });
             ctx.request_repaint();
         }
         return;
     }
-    if std::mem::take(&mut focus.dragging) {
-        if focus.drag_speed.abs() > FLING_MIN {
-            focus.fling = focus.drag_speed.clamp(-FLING_MAX, FLING_MAX);
-        } else {
-            focus.scroll = nearest(focus.scroll);
-        }
-        focus.drag_speed = 0.0;
-    }
-    if focus.fling != 0.0 {
-        focus.scroll += focus.fling * dt;
-        focus.fling *= 1.0 - (6.0 * dt).min(0.9);
-        if focus.fling.abs() < FLING_MIN {
-            focus.fling = 0.0;
-            focus.scroll = nearest(focus.scroll);
-        }
+    menu.apply(Input::Release);
+    menu.apply(Input::Frame { dt });
+    if menu.animating() {
         ctx.request_repaint();
     }
 }
@@ -3080,7 +2589,7 @@ fn rail_head(
     p: &Painter,
     m: &MenuState<'_>,
     tabs: &[crate::settings::Group],
-    focus: &Focus,
+    menu: &MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
@@ -3119,9 +2628,9 @@ fn rail_head(
     let mut clicked = None;
     for (i, &g) in tabs.iter().enumerate() {
         let r = Rect::from_min_size(pos2(lx, top + 168.0 + th * i as f32), vec2(lw, th));
-        let sel = i == focus.tab;
+        let sel = i == menu.tab();
         let resp = ui.interact(r, Id::unique(("tab", i)), Sense::click());
-        if focus.input.bar() && focus.row == 0 && sel {
+        if menu.bar() && menu.cursor() == Cursor::Tabs && sel {
             theme::focus(
                 &p,
                 Rect::from_x_y_ranges(geo.safe.min.x..=left.max.x - 6.0, r.y_range()),
@@ -3186,7 +2695,7 @@ fn wide_head(
     p: &Painter,
     m: &MenuState<'_>,
     tabs: &[crate::settings::Group],
-    focus: &Focus,
+    menu: &MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
@@ -3286,12 +2795,12 @@ fn wide_head(
     }
     let mut clicked = None;
     for (i, l) in labels.iter().enumerate() {
-        let sel = i == focus.tab;
+        let sel = i == menu.tab();
         let col = if sel { theme::TEXT_HI } else { theme::HELP };
         let g = p.layout_no_wrap((*l).to_string(), theme::serif(size), col);
         let (gw, gh) = (g.size().x, g.size().y);
         let r = Rect::from_min_size(pos2(tx - 8.0, ty - 10.0), vec2(gw + 16.0, gh + 24.0));
-        if focus.input.bar() && focus.row == 0 && sel {
+        if menu.bar() && menu.cursor() == Cursor::Tabs && sel {
             theme::focus(&p, r, 3.0, false);
         }
         theme::outlined(&p, pos2(tx, ty), g, col, false);
@@ -3337,15 +2846,14 @@ fn wide_head(
 fn settings_ui(
     ui: &mut Ui,
     m: &MenuState<'_>,
-    model: &mut crate::settings_store::SettingsStore,
-    focus: &mut Focus,
+    menu: &mut MenuModel,
     lay: &Layout,
     geo: &Geo,
     words: &Words,
-) {
+) -> Vec<Effect> {
     let p = ui.painter().clone();
-    let tabs = model.live_tabs();
-    focus.tab = focus.tab.min(tabs.len().saturating_sub(1));
+    let mut out = Vec::new();
+    let tabs = menu.tabs();
     let split = lay.shape == Shape::Split;
     let f = |mock, dp| lay.font(mock, dp);
     let ru = words.lang == Lang::Ru;
@@ -3373,9 +2881,9 @@ fn settings_ui(
         }
     };
     let head = if split {
-        rail_head(ui, &p, m, &tabs, focus, lay, geo, words, &pm)
+        rail_head(ui, &p, m, &tabs, menu, lay, geo, words, &pm)
     } else {
-        wide_head(ui, &p, m, &tabs, focus, lay, geo, words, &pm)
+        wide_head(ui, &p, m, &tabs, menu, lay, geo, words, &pm)
     };
     let Head {
         panel,
@@ -3386,37 +2894,21 @@ fn settings_ui(
         tab: tab_clicked,
     } = head;
     if back_clicked {
-        focus.back();
-        return;
+        menu.apply(Input::Tap(Target::Back));
+        return out;
     }
     if let Some(i) = tab_clicked {
-        focus.tab = i;
-        focus.row = focus.row.min(1);
-        focus.scroll = 0.0;
-        focus.fling = 0.0;
-        focus.reset = false;
+        menu.apply(Input::Tap(Target::Tab(i)));
     }
-    let Some(&g) = tabs.get(focus.tab) else {
-        return;
-    };
-    let keys = model.live_rows(g);
-    focus.row = focus.row.min(keys.len() + 1);
+    if tabs.get(menu.tab()).is_none() {
+        return out;
+    }
+    let keys = menu.keys();
     // Bottom block: help line (and on desktop the hints and device line).
-    // Touch has no hover: the help line follows the last tapped row (the first one at open).
-    let help_row = if focus.input.bar() {
-        focus.row
-    } else if lay.touch {
-        focus.row.max(1)
-    } else {
-        match focus.input.hovered() {
-            Some(Hit::Row(r)) => r,
-            _ => 0,
-        }
-    };
-    let help = match help_row {
-        0 => "",
-        r if r <= keys.len() => model.row_text(keys[r - 1], words.lang).1,
-        _ => words.ui("help_reset_page"),
+    let help = match menu.help_row() {
+        Some(r) if r < keys.len() => menu.store.row_text(keys[r], words.lang).1,
+        Some(_) => words.ui("help_reset_page"),
+        None => "",
     };
     let help_g = theme::wrap(&p, sentence(help), theme::sans(pm.help), theme::HELP_HI, w);
     let help_h = help_g.size().y.max(pm.help * 3.0);
@@ -3433,7 +2925,7 @@ fn settings_ui(
     let font = theme::serif(pm.row);
     let labels: Vec<&str> = keys
         .iter()
-        .map(|k| model.row_text(k, words.lang).0)
+        .map(|k| menu.store.row_text(k, words.lang).0)
         .collect();
     // A narrow rows panel (phone side bar, 4:3 beside the playfield) keeps every value on one line: choices that
     // do not fit become a ◀ value ▶ stepper, and the labels get the wider share.
@@ -3469,7 +2961,7 @@ fn settings_ui(
     let mut y = 0.0;
     for (key, lab) in keys.iter().zip(&labels) {
         tops.push(y);
-        let ctl = model.ctl(key, words.lang);
+        let ctl = menu.store.ctl(key, words.lang);
         let lh = label_galley(&p, label_w - 24.0, lab, font.clone(), theme::TEXT)
             .size()
             .y;
@@ -3497,47 +2989,25 @@ fn settings_ui(
     tops.push(y);
     y += rh;
     tops.push(y);
-    let content = y;
-    // The first row whose top makes the rest fit: the largest scroll.
-    let max_scroll = tops[..n]
-        .iter()
-        .copied()
-        .find(|&t| content - t <= list.height())
-        .unwrap_or(tops[n - 1]);
+    menu.apply(Input::Geometry(ListGeometry {
+        tops: tops.clone(),
+        height: list.height(),
+    }));
     if ui.rect_contains_pointer(list) {
-        let d = ui.input(|i| i.smooth_scroll_delta.y);
-        focus.scroll -= d;
+        let dy = ui.input(|i| i.smooth_scroll_delta.y);
+        menu.apply(Input::Wheel { dy });
     }
-    let nearest = |v: f32| {
-        tops[..n]
-            .iter()
-            .copied()
-            .min_by(|a, b| (a - v).abs().total_cmp(&(b - v).abs()))
-            .unwrap_or(0.0)
-    };
     if theme::touch_input(ui.ctx()) {
-        drag_list(ui, list, focus, nearest);
+        drag_list(ui, list, menu);
     }
-    if focus.moved && focus.row > 0 {
-        let (ft, fb) = (tops[focus.row - 1], tops[focus.row]);
-        if ft < focus.scroll {
-            focus.scroll = ft;
-        } else if fb > focus.scroll + list.height() {
-            focus.scroll = tops[..n]
-                .iter()
-                .copied()
-                .find(|&t| fb - t <= list.height())
-                .unwrap_or(ft);
-        }
-    }
-    focus.scroll = focus.scroll.clamp(0.0, max_scroll);
+    menu.apply(Input::Settle);
     let shown = tops[..n]
         .iter()
         .copied()
         .min_by(|a, b| {
-            (a - focus.scroll)
+            (a - menu.scroll())
                 .abs()
-                .total_cmp(&(b - focus.scroll).abs())
+                .total_cmp(&(b - menu.scroll()).abs())
         })
         .unwrap_or(0.0);
     let visible = |i: usize| tops[i] >= shown - 0.5 && tops[i + 1] <= shown + list.height() + 0.5;
@@ -3565,10 +3035,10 @@ fn settings_ui(
         let id = Id::unique(("row", *key));
         let resp = ui.interact(b, id, Sense::click());
         if resp.contains_pointer() {
-            focus.input.over(Hit::Row(k + 1));
+            menu.apply(Input::Over(Hit::Row(k)));
         }
-        let bar = focus.input.bar() && focus.row == k + 1;
-        let focused = bar || focus.input.lit(Hit::Row(k + 1));
+        let bar = menu.bar() && menu.cursor() == Cursor::Row(k);
+        let focused = bar || menu.lit(Hit::Row(k));
         theme::mark(
             &lp,
             b,
@@ -3597,13 +3067,11 @@ fn settings_ui(
             );
             Rect::from_min_max(pos2(x + label_w, r.min.y), r.max)
         };
-        let ctl = model.ctl(key, words.lang);
+        let ctl = menu.store.ctl(key, words.lang);
         if let Some(o) = theme::value_ctl(ui, &lp, id, cr, &ctl, focused, &st) {
-            focus.row = k + 1;
-            model.ctl_input(key, o);
+            out.extend(menu.apply(Input::Control(Target::Row(k), o)));
         } else if resp.clicked() {
-            focus.row = k + 1;
-            model.activate(key);
+            out.extend(menu.apply(Input::Tap(Target::Row(k))));
         }
     }
     if visible(n - 1) {
@@ -3613,10 +3081,10 @@ fn settings_ui(
         let b = Rect::from_x_y_ranges(panel.min.x + 6.0..=panel.max.x, r.y_range());
         let resp = ui.interact(b, Id::unique("reset page"), Sense::click());
         if resp.contains_pointer() {
-            focus.input.over(Hit::Row(keys.len() + 1));
+            menu.apply(Input::Over(Hit::Row(keys.len())));
         }
-        let bar = focus.input.bar() && focus.row == keys.len() + 1;
-        let focused = bar || focus.input.lit(Hit::Row(keys.len() + 1));
+        let bar = menu.bar() && menu.cursor() == Cursor::Row(keys.len());
+        let focused = bar || menu.lit(Hit::Row(keys.len()));
         theme::mark(
             &lp,
             b,
@@ -3625,24 +3093,19 @@ fn settings_ui(
             focused,
             resp.is_pointer_button_down_on(),
         );
-        let text = if focus.reset {
+        let text = if menu.armed() {
             words.ui("reset_page_ask")
         } else {
             words.ui("reset_page")
         };
-        let col = if focus.reset {
+        let col = if menu.armed() {
             theme::QUESTION
         } else {
             theme::DANGER
         };
         label(&lp, r, text, theme::serif(pm.row), col, focused);
         if resp.clicked() {
-            focus.row = keys.len() + 1;
-            if std::mem::take(&mut focus.reset) {
-                model.reset_rows(&keys);
-            } else {
-                focus.reset = true;
-            }
+            out.extend(menu.apply(Input::Tap(Target::Row(keys.len()))));
         }
     }
     // More rows above / below: a triangle in the right margin; the margin beside it pages the list.
@@ -3665,12 +3128,12 @@ fn settings_ui(
         mark(list.min.y + 12.0, false);
         let zone = Rect::from_x_y_ranges(margin.clone(), geo.screen.min.y..=list.center().y);
         if page(ui, zone, "up") {
-            focus.scroll = tops[..n]
+            let to = tops[..n]
                 .iter()
                 .copied()
                 .find(|&t| shown - t <= list.height())
                 .unwrap_or(0.0);
-            focus.fling = 0.0;
+            menu.apply(Input::ScrollTo(to));
         }
     }
     // The list ends under its last whole row: the ▾ and the help line follow it rather than a gap.
@@ -3682,8 +3145,7 @@ fn settings_ui(
         mark(end - 14.0, true);
         let zone = Rect::from_x_y_ranges(margin, list.center().y..=geo.safe.max.y);
         if page(ui, zone, "down") {
-            focus.scroll = tops[next];
-            focus.fling = 0.0;
+            menu.apply(Input::ScrollTo(tops[next]));
         }
     }
     ui.set_clip_rect(ui_clip);
@@ -3709,6 +3171,7 @@ fn settings_ui(
         };
         theme::shadowed(&p, pos2(x + w - dw, dy), d, theme::HELP);
     }
+    out
 }
 
 fn paint(
@@ -3926,8 +3389,8 @@ fn shot_passes(
     shot: &Shot,
     script: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
     mut each: impl FnMut(bool, egui::FullOutput),
-) -> (crate::settings_store::SettingsStore, Focus) {
-    let mut model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
+) -> MenuModel {
+    let store = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
     let lay = layout(
         safe,
         (w, h),
@@ -3948,28 +3411,26 @@ fn shot_passes(
         quit: shot.quit,
         stage: shot.stage.as_ref(),
     };
-    let mut focus = Focus {
-        split: lay.shape == Shape::Split,
-        ..Focus::default()
-    };
-    if shot.touch {
-        focus.input.pointer(true);
-    }
+    let mut menu = MenuModel::new(
+        store,
+        if shot.touch {
+            Modality::Touch
+        } else {
+            Modality::Keys
+        },
+    );
+    menu.set_context(m.context(&lay));
     if let Some(t) = shot.settings {
-        focus.activate(Item::Settings, &m);
-        focus.tab = t;
+        menu.open_settings(t);
     }
     if let Some(a) = shot.ask {
-        focus.activate(
-            match a {
-                ShotAsk::Retry => Item::Retry,
-                ShotAsk::Quit => Item::Quit,
-            },
-            &m,
-        );
+        menu.open_ask(match a {
+            ShotAsk::Retry => Ask::Retry,
+            ShotAsk::Quit => Ask::Quit,
+        });
     }
     for &n in &shot.navs {
-        focus.nav(n, &m, &mut model);
+        menu.apply(Input::Nav(n));
     }
     for i in 0..PASSES {
         let mut raw = egui::RawInput {
@@ -3993,13 +3454,13 @@ fn shot_passes(
                 _ => Vec::new(),
             };
         }
-        focus.moved = i == 0;
+        menu.set_moved(i == 0);
         let out = ctx.run_pass(raw, |ctx| {
-            menu_ui(ctx, &m, &mut model, &mut focus, &lay);
+            menu_ui(ctx, &m, &mut menu, &lay);
         });
         each(i + 1 == PASSES, out);
     }
-    focus.moved = false;
+    menu.set_moved(false);
     let mut k = 0;
     while let Some(events) = script(k, ctx) {
         let raw = egui::RawInput {
@@ -4013,11 +3474,11 @@ fn shot_passes(
             ..Default::default()
         };
         crate::uicheck::shapes(ctx.run_pass(raw, |ctx| {
-            menu_ui(ctx, &m, &mut model, &mut focus, &lay);
+            menu_ui(ctx, &m, &mut menu, &lay);
         }));
         k += 1;
     }
-    (model, focus)
+    menu
 }
 
 // Rows of a settings page (`shot.settings`) that no input reaches: touch drags (touch screens), the wheel and keys.
@@ -4139,7 +3600,7 @@ pub fn bench_egui(
         frame: gfx.frame_rect(w, h),
     };
     let ctx = new_ctx(s);
-    let mut model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
+    let store = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
     let m = MenuState {
         pad: None,
         touch: shot.touch,
@@ -4151,18 +3612,15 @@ pub fn bench_egui(
         quit: true,
         stage: None,
     };
-    let mut focus = Focus {
-        split: lay.shape == Shape::Split,
-        ..Focus::default()
-    };
-    focus.activate(Item::Settings, &m);
-    focus.tab = shot.settings.unwrap_or(0);
+    let mut menu = MenuModel::new(store, Modality::Keys);
+    menu.set_context(m.context(&lay));
+    menu.open_settings(shot.settings.unwrap_or(0));
     let (mut renderer, mut pending) = (None, egui::TexturesDelta::default());
     let mut times = Vec::with_capacity(300);
     for i in 0..340 {
         let start = web_time::Instant::now();
         if i >= 40 {
-            focus.nav(if i % 2 == 0 { Nav::Down } else { Nav::Up }, &m, &mut model);
+            menu.apply(Input::Nav(if i % 2 == 0 { Nav::Down } else { Nav::Up }));
         }
         let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -4178,7 +3636,7 @@ pub fn bench_egui(
             .or_default()
             .native_pixels_per_point = Some(ppp);
         let out = ctx.run_pass(raw, |ctx| {
-            menu_ui(ctx, &m, &mut model, &mut focus, &lay);
+            menu_ui(ctx, &m, &mut menu, &lay);
         });
         pending.append(out.textures_delta);
         let jobs = ctx.tessellate(out.shapes, out.pixels_per_point);
@@ -4210,7 +3668,7 @@ pub fn slint_parts(
     safe: SafeArea,
     shot: &Shot,
 ) -> (
-    crate::settings_store::SettingsStore,
+    MenuModel,
     Lang,
     crate::slintui::settings_page::Words,
     crate::slintui::settings_page::Place,
@@ -4222,8 +3680,28 @@ pub fn slint_parts(
         shot.touch,
         s.blit.integer,
     );
-    let model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
-    let lang = model.lang();
+    let mut model = MenuModel::new(
+        crate::settings_store::SettingsStore::port_menu(s, shot.touch),
+        if shot.touch {
+            Modality::Touch
+        } else {
+            Modality::Keys
+        },
+    );
+    let m = MenuState {
+        pad: None,
+        touch: shot.touch,
+        cheats: &[],
+        hitboxes: s.hitboxes,
+        status: None,
+        speed: shot.speed,
+        no_saves: false,
+        quit: shot.quit,
+        stage: None,
+    };
+    model.set_context(m.context(&lay));
+    model.open_settings(shot.settings.unwrap_or(0));
+    let lang = model.store.lang();
     let words = page_words(lang, shot.pad.as_deref(), &lay);
     (
         model,
@@ -4237,13 +3715,12 @@ pub fn slint_parts(
 #[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
 pub struct CardRig {
     pub menu: crate::slintui::menu::Menu,
-    model: crate::settings_store::SettingsStore,
-    focus: Focus,
+    model: MenuModel,
     place: crate::slintui::settings_page::Place,
     shot: Shot,
     hitboxes: Hitboxes,
     // Everything the card asked for so far.
-    pub done: Vec<Do>,
+    pub done: Vec<Effect>,
 }
 
 #[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
@@ -4263,24 +3740,36 @@ impl CardRig {
             s.blit.integer,
         );
         let modality = if shot.touch {
-            theme::Modality::Touch
+            Modality::Touch
         } else {
-            theme::Modality::Keys
+            Modality::Keys
         };
-        let mut focus = Focus {
-            input: theme::Input::new(modality),
-            split: lay.shape == Shape::Split,
-            ..Focus::default()
+        let mut model = MenuModel::new(
+            crate::settings_store::SettingsStore::port_menu(s, shot.touch),
+            modality,
+        );
+        let m = MenuState {
+            pad: None,
+            touch: shot.touch,
+            cheats: &[],
+            hitboxes: s.hitboxes,
+            status: None,
+            speed: shot.speed,
+            no_saves: false,
+            quit: shot.quit,
+            stage: None,
         };
-        focus.ask = shot.ask.map(|a| match a {
-            ShotAsk::Retry => Ask::Retry,
-            ShotAsk::Quit => Ask::Quit,
-        });
+        model.set_context(m.context(&lay));
+        if let Some(a) = shot.ask {
+            model.open_ask(match a {
+                ShotAsk::Retry => Ask::Retry,
+                ShotAsk::Quit => Ask::Quit,
+            });
+        }
         menu.enter(crate::slintui::menu::View::Card);
         Self {
             menu,
-            model: crate::settings_store::SettingsStore::port_menu(s, shot.touch),
-            focus,
+            model,
             place: crate::slintui::settings_page::Place { lay, safe, size },
             shot: shot.clone(),
             hitboxes: s.hitboxes,
@@ -4308,48 +3797,37 @@ impl CardRig {
     }
 
     pub fn keys_focus(&self) -> bool {
-        self.focus.input.bar()
+        self.model.bar()
     }
 
     pub fn asking(&self) -> bool {
-        self.focus.ask.is_some()
+        self.model.ask().is_some()
     }
 
     // The safe answer holds the focus.
     pub fn on_safe_answer(&self) -> bool {
-        !self.focus.yes
+        !self.model.yes()
     }
 
     pub fn on_settings_page(&self) -> bool {
-        self.focus.page == Page::Settings
+        self.model.page() == Page::Settings
     }
 
     // The card's items in focus order.
     pub fn item_names(&self) -> Vec<String> {
-        let m = MenuState {
-            pad: None,
-            touch: self.shot.touch,
-            cheats: &[],
-            hitboxes: self.hitboxes,
-            status: None,
-            speed: self.shot.speed,
-            no_saves: false,
-            quit: self.shot.quit,
-            stage: None,
-        };
-        self.focus
-            .items(&m)
+        self.model
+            .items()
             .iter()
             .map(|i| format!("{i:?}"))
             .collect()
     }
 
     pub fn focused_name(&self) -> String {
-        format!("{:?}", self.focus.item)
+        format!("{:?}", self.model.item())
     }
 
     pub fn volume(&self) -> Option<String> {
-        self.model.value_text(VOLUME)
+        self.model.store.value_text(VOLUME)
     }
 
     // One pass with `navs`; the mode a Hitboxes request set shows on the next pass.
@@ -4365,19 +3843,15 @@ impl CardRig {
             quit: self.shot.quit,
             stage: self.shot.stage.as_ref(),
         };
-        let out = card_pass(
-            &mut self.menu.card,
-            &m,
-            &mut self.model,
-            &mut self.focus,
-            self.place,
-            navs,
-        );
+        let out = card_pass(&mut self.menu.card, &m, &mut self.model, self.place, navs);
         for d in out {
-            if let Do::Hitboxes(h) = d {
+            if let Effect::Hitboxes(h) = d {
                 self.hitboxes = h;
             }
-            if d != Do::Nothing {
+            if !matches!(
+                d,
+                Effect::SettingsChanged | Effect::ScrollMoved | Effect::HoverChanged
+            ) {
                 self.done.push(d);
             }
         }
@@ -4386,7 +3860,8 @@ impl CardRig {
     pub fn pointer(&mut self, ev: &WindowEvent) {
         if let Some(k) = self.menu.on_event(ev) {
             let touch = k == crate::slintui::input::Pointing::Touch || self.shot.touch;
-            self.focus.input.pointer(touch);
+            self.model.apply(Input::Pointer { touch });
+            self.menu.set_modality(self.model.modality());
         }
     }
 }
@@ -4402,33 +3877,6 @@ pub fn settings_tabs(s: &Settings, touch: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn state(quit: bool, touch: bool, speed: Option<(u32, u32)>) -> MenuState<'static> {
-        MenuState {
-            pad: None,
-            touch,
-            cheats: &[],
-            hitboxes: Hitboxes::Off,
-            status: None,
-            speed,
-            no_saves: false,
-            quit,
-            stage: None,
-        }
-    }
-
-    fn model(touch: bool) -> crate::settings_store::SettingsStore {
-        crate::settings_store::SettingsStore::port_menu(&Settings::default(), touch)
-    }
-
-    fn run(
-        f: &mut Focus,
-        m: &MenuState<'_>,
-        model: &mut crate::settings_store::SettingsStore,
-        navs: &[Nav],
-    ) -> Vec<Do> {
-        navs.iter().map(|&n| f.nav(n, m, model)).collect()
-    }
 
     const PHONES: [((u32, u32), f32, SafeArea); 2] = [
         (
@@ -4463,6 +3911,21 @@ mod tests {
         }
     }
 
+    fn model(touch: bool) -> crate::settings_store::SettingsStore {
+        crate::settings_store::SettingsStore::port_menu(&Settings::default(), touch)
+    }
+
+    fn live_values(m: &MenuModel) -> Vec<(&'static str, String)> {
+        m.live_values()
+    }
+
+    fn fresh_values(s: &Settings) -> Vec<(&'static str, String)> {
+        live_values(&MenuModel::new(
+            crate::settings_store::SettingsStore::port_menu(s, true),
+            Modality::Touch,
+        ))
+    }
+
     fn tabs() -> usize {
         settings_tabs(&Settings::default(), true)
     }
@@ -4474,7 +3937,7 @@ mod tests {
         shot: &Shot,
         x: f32,
         then: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
-    ) -> (bool, crate::settings_store::SettingsStore, Focus) {
+    ) -> (bool, MenuModel) {
         let s = Settings::default();
         let ctx = new_ctx(&s);
         let mut end = None;
@@ -4496,10 +3959,10 @@ mod tests {
             let from = egui::pos2(list.left() + list.width() * x, list.center().y);
             crate::uicheck::swipe(k % 41, from, list.height() * 0.7)
         };
-        let (model, focus) = shot_passes(&ctx, &s, size, safe, shot, &mut script, |_, o| {
+        let menu = shot_passes(&ctx, &s, size, safe, shot, &mut script, |_, o| {
             drop(crate::uicheck::shapes(o));
         });
-        (reached, model, focus)
+        (reached, menu)
     }
 
     #[test]
@@ -4517,14 +3980,11 @@ mod tests {
     fn a_drag_changes_no_value() {
         for (size, density, safe) in PHONES {
             for tab in 0..tabs() {
-                let start = live_values(&crate::settings_store::SettingsStore::port_menu(
-                    &Settings::default(),
-                    true,
-                ));
+                let start = fresh_values(&Settings::default());
                 // From a label, a stepper, a slider track and a right-hand cell.
                 for x in [0.1, 0.45, 0.62, 0.95] {
                     let shot = phone_shot(tab, density);
-                    let (ok, model, _) = swipe_to_end(size, safe, &shot, x, &mut |_, _| None);
+                    let (ok, model) = swipe_to_end(size, safe, &shot, x, &mut |_, _| None);
                     assert!(ok, "tab {tab} x {x}");
                     assert_eq!(live_values(&model), start, "tab {tab} x {x} at {size:?}");
                 }
@@ -4547,8 +4007,8 @@ mod tests {
                         _ => None,
                     }
                 };
-                let (ok, _, focus) = swipe_to_end(size, safe, &shot, 0.1, &mut then);
-                assert!(ok && focus.reset, "reset row at tab {tab}, {size:?}");
+                let (ok, menu) = swipe_to_end(size, safe, &shot, 0.1, &mut then);
+                assert!(ok && menu.armed(), "reset row at tab {tab}, {size:?}");
             }
         }
     }
@@ -4574,10 +4034,10 @@ mod tests {
                 _ => None,
             }
         };
-        let (model, _) = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
+        let model = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
             drop(crate::uicheck::shapes(o));
         });
-        let start = live_values(&crate::settings_store::SettingsStore::port_menu(&s, true));
+        let start = fresh_values(&s);
         assert_ne!(live_values(&model), start);
     }
 
@@ -4602,10 +4062,10 @@ mod tests {
                 _ => None,
             }
         };
-        let (_, focus) = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
+        let menu = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
             drop(crate::uicheck::shapes(o));
         });
-        assert!(focus.scroll > 0.0);
+        assert!(menu.scroll() > 0.0);
     }
 
     #[test]
@@ -4624,154 +4084,6 @@ mod tests {
         assert_eq!(Nav::of_axes([0, 0], [1000, 0]), [Nav::Right]);
         assert_eq!(Nav::of_axes([1000, 0], [1000, 0]), []);
         assert_eq!(Nav::of_axes([0, 0], [0, -800]), [Nav::Up]);
-    }
-
-    // Resume has the default focus; Z on it resumes, and X on the plain card closes the menu.
-    #[test]
-    fn resume() {
-        let (m, mut model) = (state(true, false, None), model(false));
-        let mut f = Focus::default();
-        assert_eq!(f.clamp(&f.items(&m)), Item::Resume);
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Resume]);
-        let mut f = Focus::default();
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
-    }
-
-    // Retry… and Quit… ask in place with "Keep playing" focused: Z there or X cancels back to the item; ↓ Z acts.
-    #[test]
-    fn run_confirms() {
-        let (m, mut model) = (state(true, false, None), model(false));
-        for (item, ask, act) in [
-            (Item::Retry, Ask::Retry, Do::Retry),
-            (Item::Quit, Ask::Quit, Do::Quit),
-        ] {
-            let mut f = Focus::default();
-            assert_eq!(f.activate(item, &m), Do::Nothing);
-            assert_eq!((f.ask, f.yes), (Some(ask), false));
-            assert_eq!(run(&mut f, &m, &mut model, &[Nav::Activate]), [Do::Nothing]);
-            assert_eq!((f.ask, f.item), (None, item));
-            f.activate(item, &m);
-            assert!(f.back());
-            assert_eq!((f.ask, f.item), (None, item));
-            f.activate(item, &m);
-            assert_eq!(
-                run(&mut f, &m, &mut model, &[Nav::Down, Nav::Activate]),
-                [Do::Nothing, act]
-            );
-            assert_eq!(f.ask, None);
-        }
-        let none = card_items(&state(false, false, None), false);
-        assert!(!none.contains(&Item::Quit) && !none.contains(&Item::Retry));
-    }
-
-    // The card's focus order on the column / pillar and on the phone; ← / → change values; Settings › / Back.
-    #[test]
-    fn focus_order_and_settings() {
-        let m = state(true, true, Some((1, 1)));
-        let mut model = model(true);
-        let items = card_items(&m, false);
-        assert_eq!(
-            items,
-            [
-                Item::Resume,
-                Item::Hitboxes,
-                Item::Volume,
-                Item::Speed,
-                Item::Screenshot,
-                Item::TouchLayout,
-                Item::Settings,
-                Item::Retry,
-                Item::Quit,
-            ]
-        );
-        assert_eq!(
-            card_items(&m, true),
-            [
-                Item::Resume,
-                Item::Settings,
-                Item::Retry,
-                Item::Quit,
-                Item::Volume,
-                Item::Hitboxes,
-                Item::Speed,
-                Item::Screenshot,
-                Item::TouchLayout,
-            ]
-        );
-        let mut f = Focus::default();
-        let mut seen = vec![f.clamp(&items)];
-        for _ in 0..9 {
-            f.nav(Nav::Down, &m, &mut model);
-            seen.push(f.item);
-        }
-        assert_eq!(&seen[..9], &items[..]);
-        assert_eq!(seen[9], Item::Quit);
-        f.item = Item::Hitboxes;
-        assert_eq!(
-            run(&mut f, &m, &mut model, &[Nav::Right]),
-            [Do::Hitboxes(Hitboxes::Player)]
-        );
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Left]), [Do::Nothing]);
-        assert_eq!(
-            run(&mut f, &m, &mut model, &[Nav::Activate]),
-            [Do::Hitboxes(Hitboxes::Player)]
-        );
-        f.item = Item::Speed;
-        assert_eq!(
-            run(&mut f, &m, &mut model, &[Nav::Right]),
-            [Do::Speed((3, 4))]
-        );
-        let v = model.value_text(VOLUME);
-        f.item = Item::Volume;
-        run(&mut f, &m, &mut model, &[Nav::Left]);
-        assert_ne!(model.value_text(VOLUME), v);
-        f.item = Item::TouchLayout;
-        assert_eq!(
-            run(&mut f, &m, &mut model, &[Nav::Activate]),
-            [Do::EditLayout]
-        );
-        f.item = Item::Settings;
-        run(&mut f, &m, &mut model, &[Nav::Activate]);
-        assert_eq!((f.page, f.tab, f.row), (Page::Settings, 0, 1));
-        let tabs = model.live_tabs();
-        assert_eq!(tabs[0], crate::settings::Group::Sound);
-        assert_eq!(model.live_rows(tabs[0])[0], VOLUME);
-        // Tabs wrap; the tab bar takes ← / →; a row takes ← / → and Z.
-        run(&mut f, &m, &mut model, &[Nav::PrevTab]);
-        assert_eq!(f.tab, tabs.len() - 1);
-        run(&mut f, &m, &mut model, &[Nav::NextTab, Nav::Up, Nav::Right]);
-        assert_eq!((f.tab, f.row), (1, 0));
-        run(&mut f, &m, &mut model, &[Nav::Left, Nav::Down]);
-        assert_eq!((f.tab, f.row), (0, 1));
-        let before = model.value_text(VOLUME);
-        run(&mut f, &m, &mut model, &[Nav::Left]);
-        assert_ne!(model.value_text(VOLUME), before);
-        let keys = model.live_rows(tabs[0]);
-        let b = keys.iter().position(|&k| k == "mute_unfocused").unwrap();
-        let mut g = Focus {
-            page: Page::Settings,
-            row: b + 1,
-            ..Focus::default()
-        };
-        let was = model.value_text("mute_unfocused");
-        run(&mut g, &m, &mut model, &[Nav::Activate]);
-        assert_ne!(model.value_text("mute_unfocused"), was);
-        // "Reset this page" asks once, then resets the tab's rows.
-        let mut r = Focus {
-            page: Page::Settings,
-            row: keys.len() + 1,
-            ..Focus::default()
-        };
-        run(&mut r, &m, &mut model, &[Nav::Activate]);
-        assert!(r.reset);
-        run(&mut r, &m, &mut model, &[Nav::Activate]);
-        assert!(!r.reset);
-        assert_eq!(model.value_text(VOLUME).as_deref(), Some("100"));
-        assert_eq!(model.value_text("mute_unfocused"), was);
-        // Back returns to the card with Settings focused; X there closes the menu.
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Nothing]);
-        assert_eq!((f.page, f.item), (Page::Card, Item::Settings));
-        assert_eq!(run(&mut f, &m, &mut model, &[Nav::Back]), [Do::Resume]);
     }
 
     // The value controls a row paints: a slider with its number and unit, Off / On words, the choice words.

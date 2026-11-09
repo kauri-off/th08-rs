@@ -3,9 +3,10 @@ use super::menu::{Menu, View};
 use super::text::plain;
 use super::{TextProbe, host};
 use crate::i18n::Lang;
-use crate::platform::portmenu::{self, CardRig, Do, Nav, Shot};
+use crate::menu_model::Effect as Do;
+use crate::menu_model::{Input, MenuModel as Model};
+use crate::platform::portmenu::{self, CardRig, Nav, Shot};
 use crate::settings::Settings;
-use crate::settings_store::SettingsStore as Model;
 use crate::uicheck::{Issue, Kind};
 use i_slint_backend_testing::{ElementHandle, ElementQuery, ElementRoot};
 use slint::ComponentHandle;
@@ -500,6 +501,7 @@ impl<'a> CardHarness<'a> {
 pub struct Harness<'a> {
     pub menu: Menu,
     pub model: Model,
+    navs: Vec<Nav>,
     gfx: &'a Gfx,
     lang: Lang,
     probe: TextProbe,
@@ -529,11 +531,13 @@ impl<'a> Harness<'a> {
         menu.page.open(shot.touch);
         menu.page.set_words(&words);
         menu.page.place(place);
-        menu.page.show_tab(shot.settings.unwrap_or(0), &model, lang);
+        menu.page
+            .show_tab(shot.settings.unwrap_or(0), &model.store, lang);
         let probe = TextProbe::new()?;
         let mut h = Self {
             menu,
             model,
+            navs: Vec::new(),
             gfx,
             lang,
             probe,
@@ -554,8 +558,10 @@ impl<'a> Harness<'a> {
 
     pub fn tick(&mut self, ms: u64) {
         host::advance_mock_time(Duration::from_millis(ms));
+        let navs = std::mem::take(&mut self.navs);
+        self.menu.page.apply(&mut self.model, navs, self.lang);
         self.menu.tick();
-        self.menu.page.apply(&mut self.model, self.lang);
+        self.menu.page.apply(&mut self.model, Vec::new(), self.lang);
     }
 
     // The first row's data and the tab strip, whose identity shows whether they were rebuilt.
@@ -574,16 +580,29 @@ impl<'a> Harness<'a> {
     // The tab shown is opened again from the same model.
     pub fn reshow_tab(&mut self) {
         let tab = self.menu.page.tab();
-        self.menu.page.show_tab(tab, &self.model, self.lang);
+        self.menu.page.show_tab(tab, &self.model.store, self.lang);
     }
 
     pub fn nav(&mut self, n: Nav) {
-        self.menu.page.nav(n);
+        self.navs.push(n);
         self.tick(16);
     }
 
+    // Back to the card and into the settings page again by pointer.
+    pub fn reopen(&mut self) {
+        self.model.back();
+        self.model.apply(Input::Pointer { touch: self.touch });
+        self.model.open_settings(0);
+        self.menu.page.open(self.touch);
+        self.menu.page.show_tab(0, &self.model.store, self.lang);
+    }
+
     fn event(&mut self, ev: &WindowEvent) {
-        self.menu.on_event(ev);
+        if let Some(k) = self.menu.on_event(ev) {
+            let touch = k == crate::slintui::input::Pointing::Touch || self.touch;
+            self.model.apply(Input::Pointer { touch });
+            self.menu.set_modality(self.model.modality());
+        }
     }
 
     fn touch_ev(&self, phase: TouchPhase, x: f32, y: f32) -> WindowEvent {
@@ -869,9 +888,7 @@ pub fn bench_page(
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let mut times = Vec::with_capacity(300);
     for i in 0..300 {
-        h.menu
-            .page
-            .nav(if i % 2 == 0 { Nav::Down } else { Nav::Up });
+        h.navs.push(if i % 2 == 0 { Nav::Down } else { Nav::Up });
         let start = web_time::Instant::now();
         h.tick(16);
         let t = OverlayTarget {

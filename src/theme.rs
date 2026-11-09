@@ -571,12 +571,35 @@ impl RoundPx for f32 {
     }
 }
 
-// The last kind of input: the keyboard focus bar shows only after a key or pad press.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Modality {
-    Pointer,
-    Keys,
-    Touch,
+pub use crate::menu_model::Modality;
+
+// Pointer input this pass: Some(true) a finger (or any pointer on a touch screen), Some(false) a mouse.
+pub fn pointer_seen(ctx: &egui::Context, touch_screen: bool) -> Option<bool> {
+    let (touch, pointer) = ctx.input(|i| {
+        (
+            i.any_touches()
+                || i.raw
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Touch { .. })),
+            i.pointer.is_moving() || i.pointer.any_pressed(),
+        )
+    });
+    if touch || (pointer && touch_screen) {
+        Some(true)
+    } else if pointer {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+// Records for this pass whether a finger is the input, for `touch_input`.
+pub fn note_finger(ctx: &egui::Context, finger: bool, touch_screen: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("theme touch input"), finger));
+    if touch_screen {
+        ctx.options_mut(|o| o.input_options.max_click_dist = TAP_DP);
+    }
 }
 
 // Hover and modality of a screen's rows, kept apart from its keyboard focus (focus-visible).
@@ -609,27 +632,15 @@ impl<T: Copy + PartialEq> Input<T> {
 
     // Start of a pass: a moving or pressing pointer makes it pointer input (touch on a touch screen).
     pub fn begin(&mut self, ctx: &egui::Context, touch_screen: bool) {
-        let (touch, pointer) = ctx.input(|i| {
-            (
-                i.any_touches()
-                    || i.raw
-                        .events
-                        .iter()
-                        .any(|e| matches!(e, egui::Event::Touch { .. })),
-                i.pointer.is_moving() || i.pointer.any_pressed(),
-            )
-        });
-        if touch || (pointer && touch_screen) {
-            self.pointer(true);
-        } else if pointer {
-            self.pointer(false);
+        if let Some(touch) = pointer_seen(ctx, touch_screen) {
+            self.pointer(touch);
         }
         self.next = None;
-        let finger = touch_screen || self.modality == Modality::Touch;
-        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("theme touch input"), finger));
-        if touch_screen {
-            ctx.options_mut(|o| o.input_options.max_click_dist = TAP_DP);
-        }
+        note_finger(
+            ctx,
+            touch_screen || self.modality == Modality::Touch,
+            touch_screen,
+        );
     }
 
     pub fn pointer(&mut self, touch: bool) {

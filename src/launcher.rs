@@ -1858,8 +1858,8 @@ pub fn check_frame(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use crate::settings::{Audience, ENTRIES, Group};
     use super::*;
+    use crate::settings::{Audience, ENTRIES, Group};
 
     fn game_dir(root: &Path, name: &str) -> PathBuf {
         let d = root.join(name);

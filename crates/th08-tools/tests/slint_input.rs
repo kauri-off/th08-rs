@@ -1,7 +1,7 @@
 //! Injected input per modality on the Slint settings page: every row reachable, a drag changes nothing, a tap activates.
 #![cfg(not(target_arch = "wasm32"))]
 
-use th08::platform::portmenu::Do;
+use th08::menu_model::Effect;
 use th08::platform::portmenu::{Nav, Shot};
 use th08::settings::{Origin, PlatformDirs, Settings};
 use th08::slintui::check::{CardHarness, Harness, R, Reach};
@@ -41,9 +41,10 @@ fn shot(tab: usize, touch: bool) -> Shot {
 
 fn values(h: &Harness<'_>) -> Vec<Option<String>> {
     h.model
+        .store
         .live_keys()
         .iter()
-        .map(|k| h.model.value_text(k))
+        .map(|k| h.model.store.value_text(k))
         .collect()
 }
 
@@ -203,7 +204,7 @@ fn keys_and_reset(gfx: &Gfx, s: &Settings) {
     h.tick(16);
     assert!(h.menu.enter(View::Settings));
     assert!(!h.menu.enter(View::Settings));
-    h.menu.page.open(true);
+    h.reopen();
     h.tick(16);
     h.nav(Nav::Down);
     h.nav(Nav::Down);
@@ -270,11 +271,11 @@ fn card_every_input(gfx: &Gfx, s: &Settings) {
                 let done = h.take_done();
                 let ctx = format!("{shape} {name}: {done:?}");
                 match name.as_str() {
-                    "Resume" => assert_eq!(done, [Do::Resume], "{ctx}"),
-                    "Screenshot" => assert_eq!(done, [Do::Screenshot], "{ctx}"),
+                    "Resume" => assert_eq!(done, [Effect::Resume], "{ctx}"),
+                    "Screenshot" => assert_eq!(done, [Effect::Screenshot], "{ctx}"),
                     "Settings" => assert!(h.rig.on_settings_page(), "{ctx}"),
-                    "TouchLayout" => assert_eq!(done, [Do::EditLayout], "{ctx}"),
-                    "Hitboxes" => assert!(matches!(done[..], [Do::Hitboxes(_)]), "{ctx}"),
+                    "TouchLayout" => assert_eq!(done, [Effect::EditLayout], "{ctx}"),
+                    "Hitboxes" => assert!(matches!(done[..], [Effect::Hitboxes(_)]), "{ctx}"),
                     "Volume" | "Speed" => assert!(done.is_empty(), "{ctx}"),
                     "Retry" | "Quit" => confirm(&mut h, how, name, &ctx),
                     other => panic!("{other}"),
@@ -316,7 +317,11 @@ fn confirm(h: &mut CardHarness<'_>, how: Press, name: &str, ctx: &str) {
         h.rig.on_safe_answer(),
         "{ctx}: the safe answer is the default"
     );
-    let want = if name == "Retry" { Do::Retry } else { Do::Quit };
+    let want = if name == "Retry" {
+        Effect::Retry
+    } else {
+        Effect::Quit
+    };
     if how == Press::Keys {
         h.nav(Nav::Activate);
         assert!(

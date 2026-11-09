@@ -1,8 +1,7 @@
-//! winit and gamepad input into a Slint window; records the last input modality.
+//! winit pointer input into a Slint window.
 use super::host::Adapter;
-use crate::platform::portmenu::Nav;
 use slint::LogicalPosition;
-use slint::platform::{Key, PointerEventButton, WindowEvent as S};
+use slint::platform::{PointerEventButton, WindowEvent as S};
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 
@@ -99,21 +98,4 @@ impl Pointer {
             _ => None,
         }
     }
-}
-
-// Keys, pad buttons and stick edges all reach the page as these keys.
-pub fn send_nav(a: &Adapter, n: Nav) {
-    let k = match n {
-        Nav::Up => Key::UpArrow,
-        Nav::Down => Key::DownArrow,
-        Nav::Left => Key::LeftArrow,
-        Nav::Right => Key::RightArrow,
-        Nav::Activate => Key::Return,
-        Nav::Back => Key::Escape,
-        Nav::PrevTab => Key::PageUp,
-        Nav::NextTab => Key::PageDown,
-    };
-    let text: slint::SharedString = k.into();
-    a.dispatch(S::KeyPressed { text: text.clone() });
-    a.dispatch(S::KeyReleased { text });
 }

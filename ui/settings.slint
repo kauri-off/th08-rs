@@ -1,5 +1,5 @@
 // The port menu's settings page (docs/UI_RULES.md).
-import { Tk, Ui, Modality } from "tokens.slint";
+import { Tk, Ui } from "tokens.slint";
 import { Label, Ringed, Arrow, FocusMark, Keycap, Heading, Target, BackLink, Tabs, SettingRow, RowData, Cap, Hint, HelpLine, HintLine, ScrollList } from "components.slint";
 
 // Panel geometry from `portmenu::layout`, points.
@@ -34,14 +34,16 @@ export global PageApi {
     in-out property <int> tab;
     in-out property <int> cursor: 0;
     in-out property <bool> armed;
+    in-out property <int> help-row: -1;
+    in-out property <int> hovered: -1;
     callback step(int, int);
     callback pick(int, int);
     callback set-frac(int, float);
     callback activate(int);
-    callback reset-page();
     callback back();
     callback tab-changed(int);
     in-out property <length> scroll;
+    in-out property <length> content-y;
     in-out property <length> scroll-max;
 }
 
@@ -67,7 +69,7 @@ export component SettingsPage inherits Rectangle {
     property <length> scroll-end: list.scroll-max;
     changed scroll-now => { PageApi.scroll = self.scroll-now; }
     changed scroll-end => { PageApi.scroll-max = self.scroll-end; }
-    property <int> hovered-v: -1;
+    property <int> hovered-v <=> PageApi.hovered;
 
     property <length> row-h: Ui.split ? 120px : max(70px, Ui.tap);
     property <length> row-size: Ui.split ? Ui.font(28, 11) : Ui.font(25, 14);
@@ -78,64 +80,8 @@ export component SettingsPage inherits Rectangle {
     property <length> phone-label: clamp(whole.preferred-width + 16px, geo.w * 0.3, geo.w * 0.36);
     property <length> base-label: Ui.split ? phone-label : geo.w < 720px ? geo.w * 0.42 : min(440px, geo.w * 0.5);
     property <length> label-w: min(geo.w * 0.5, max(base-label, pieces.preferred-width + 24px));
-    property <int> help-row: Ui.bar ? cursor : Ui.modality == Modality.touch ? max(cursor, 0) : hovered-v;
+    property <int> help-row <=> PageApi.help-row;
     property <string> help: help-row >= 0 && help-row < rows.length ? rows[help-row].help : "";
-
-    function go-tab(i: int) {
-        cursor = min(cursor, 0);
-        armed = false;
-        list.top();
-        PageApi.tab-changed(i);
-    }
-    function press(i: int) {
-        cursor = i;
-        if (rows[i].kind != 3) { armed = false; }
-    }
-    function act(i: int) {
-        press(i);
-        if (rows[i].kind == 3) {
-            if (armed) { armed = false; PageApi.reset-page(); } else { armed = true; }
-        } else {
-            PageApi.activate(i);
-        }
-    }
-    function move(i: int) {
-        armed = false;
-        cursor = clamp(i, -1, rows.length - 1);
-        if (cursor < 0) { list.top(); }
-    }
-    // First key after pointer or touch: the bar appears on the hovered row and moves nothing.
-    function wake(direction: bool) -> bool {
-        if (Ui.modality == Modality.keys) { return false; }
-        Ui.modality = Modality.keys;
-        if (hovered-v >= 0) { cursor = hovered-v; }
-        return direction;
-    }
-
-    keys := FocusScope {
-        key-pressed(e) => {
-            let dir = e.text == Key.UpArrow || e.text == Key.DownArrow || e.text == Key.LeftArrow || e.text == Key.RightArrow;
-            if (root.wake(dir)) { return accept; }
-            if (e.text == Key.UpArrow) { root.move(cursor - 1); return accept; }
-            if (e.text == Key.DownArrow) { root.move(cursor + 1); return accept; }
-            if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
-                let d = e.text == Key.LeftArrow ? -1 : 1;
-                armed = false;
-                if (cursor < 0) {
-                    let t = clamp(tab + d, 0, tabs.length - 1);
-                    if (t != tab) { root.go-tab(t); }
-                } else {
-                    PageApi.step(cursor, d);
-                }
-                return accept;
-            }
-            if (e.text == Key.Return) { if (cursor >= 0) { root.act(cursor); } return accept; }
-            if (e.text == Key.Escape) { PageApi.back(); return accept; }
-            if (e.text == Key.PageUp) { root.go-tab(tab == 0 ? tabs.length - 1 : tab - 1); return accept; }
-            if (e.text == Key.PageDown) { root.go-tab(tab == tabs.length - 1 ? 0 : tab + 1); return accept; }
-            reject
-        }
-    }
 
     Rectangle { background: Tk.wash; }
     Rectangle {
@@ -164,7 +110,7 @@ export component SettingsPage inherits Rectangle {
             Tabs {
                 tabs: root.tabs; current: root.tab; rail: true; size: root.tab-size;
                 bar: Ui.bar && root.cursor < 0; vertical-stretch: 1;
-                pick(i) => { root.go-tab(i); }
+                pick(i) => { PageApi.tab-changed(i); }
             }
             Label { text: root.device; serif: false; font-size: Ui.font(19, 8); color: Tk.help; horizontal-alignment: left; wrap: word-wrap; vertical-stretch: 0; }
         }
@@ -199,12 +145,13 @@ export component SettingsPage inherits Rectangle {
                 wide-tabs := Tabs {
                     tabs: root.tabs; current: root.tab; size: root.tab-size; prev-key: root.prev-key; next-key: root.next-key;
                     bar: Ui.bar && root.cursor < 0; height: self.tight ? 84px : 52px;
-                    pick(i) => { root.go-tab(i); }
+                    pick(i) => { PageApi.tab-changed(i); }
                 }
                 Rectangle { height: 1px; background: Tk.rule; }
             }
             if Ui.split: Rectangle { height: 24px; }
             list := ScrollList {
+                content-y <=> PageApi.content-y;
                 width: panel.width;
                 vertical-stretch: 1;
                 content-height: col.preferred-height;
@@ -227,11 +174,10 @@ export component SettingsPage inherits Rectangle {
                         changed hovering => {
                             if (self.hovering) { root.hovered-v = i; } else if (root.hovered-v == i) { root.hovered-v = -1; }
                         }
-                        press => { root.press(i); }
                         step(d) => { PageApi.step(i, d); }
                         pick(c) => { PageApi.pick(i, c); }
                         set(f) => { PageApi.set-frac(i, f); }
-                        activate => { root.act(i); }
+                        activate => { PageApi.activate(i); }
                     }
                 }
             }
@@ -261,5 +207,4 @@ export component SettingsPage inherits Rectangle {
             Arrow { x: panel.mark-x - parent.x; y: list.y + list.height - 22px - parent.y; dir: 3; tint: Tk.help; }
         }
     }
-    init => { keys.focus(); }
 }

@@ -2651,7 +2651,8 @@ mod tests {
     #[cfg(feature = "ui-check")]
     #[test]
     fn slint_card_retry_and_quit() {
-        use crate::platform::portmenu::{Do, Shot};
+        use crate::menu_model::Effect;
+        use crate::platform::portmenu::Shot;
         use crate::slintui::check::CardHarness;
         use th08_core::types::SceneId;
         use th08_render::gfx::{Gfx, SafeArea};
@@ -2664,8 +2665,8 @@ mod tests {
             return;
         };
         for (item, want, tag) in [
-            ("Retry", Do::Retry, "slint_retry"),
-            ("Quit", Do::Quit, "slint_quit"),
+            ("Retry", Effect::Retry, "slint_retry"),
+            ("Quit", Effect::Quit, "slint_quit"),
         ] {
             let (mut r, saves) = stage_one(dir.clone(), tag);
             r.settings
@@ -2708,7 +2709,7 @@ mod tests {
                 assert!(n < 1000, "{item} did not finish");
             }
             let g = &r.ctx.w.game;
-            if want == Do::Retry {
+            if want == Effect::Retry {
                 assert!(g.stages_started > started, "the stage never started again");
                 assert_eq!(g.scene, SceneId::Game);
             } else {
