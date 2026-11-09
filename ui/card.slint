@@ -295,10 +295,16 @@ export component PauseCard inherits Window {
     // Dimmed items above a question that does not fit go first.
     property <length> mids-need: mids.length * row-h + resume-h + 60px * gaps;
     property <length> foot-base: notes-m.preferred-height + hint-size * 3.4 + 24px;
-    property <bool> hide-mids: asking && !split && mids-need + confirm-measure.preferred-height + (column ? foot-base : 0) > (column ? geo.foot-limit : rows-bottom) - rows-top;
+    property <bool> hide-mids-column: asking && column && mids-need + confirm-measure.preferred-height + foot-base > geo.foot-limit - rows-top;
+    property <bool> hide-mids: column ? hide-mids-column : asking && pillar && mids-need + confirm-measure.preferred-height > rows-bottom - rows-top;
     // A short pillar gives the help and device lines' room to the rows.
     property <length> rows-least: resume-h + 60px * gaps + (asking ? confirm-measure.preferred-height : (mids.length + dangers.length) * least-h);
-    property <bool> foot-no-hints: pillar && rows-top + rows-least + foot-base + 36px > geo.bottom;
+    // The rows of a tight pillar share what is left, down to their least height.
+    property <length> row-fit: !pillar || asking ? row-h : clamp((rows-bottom - rows-top - resume-h - 60px * gaps) / max(1, mids.length + dangers.length), least-h, row-h);
+    property <length> column-rows: resume-h + 52px + (hide-mids-column ? 0 : mids.length * max(row-h, Ui.tap)) + (asking ? confirm-measure.preferred-height : dangers.length * max(row-h, Ui.tap));
+    property <bool> foot-no-hints: pillar ? rows-top + rows-least + foot-base + 36px > geo.bottom : column && rows-top + column-rows + foot-base > geo.foot-limit;
+    // Last step: the rows and the question always stay; the notes go when nothing else is left to give.
+    property <bool> foot-no-notes: pillar ? rows-top + rows-least + notes-m.preferred-height + 110px > geo.bottom : column && rows-top + column-rows + notes-m.preferred-height + 28px > geo.foot-limit;
     property <bool> foot-tight: pillar && rows-top + rows-least + foot-base + help-m.preferred-height + status-size * 1.6 + 36px > geo.bottom;
 
     function hover(i: int, on: bool) {
@@ -376,7 +382,7 @@ export component PauseCard inherits Window {
             opacity: root.asking ? 0.3 : 1;
             for r[i] in root.mids: CardRow {
                 data: r; index: i + 1; bar: root.focused == i + 1; dim: root.asking; over-game: root.column;
-                inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
+                inset: root.inset; content-w: geo.w; row-h: root.row-fit; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
                 changed hovering => { root.hover(i + 1, self.hovering); }
                 activate => { root.activate(i + 1); }
                 step(d) => { root.step(i + 1, d); }
@@ -390,7 +396,7 @@ export component PauseCard inherits Window {
         if !root.asking: VerticalLayout {
             for r[i] in root.dangers: CardRow {
                 data: r; index: root.mids.length + 1 + i; bar: root.focused == root.mids.length + 1 + i; over-game: root.column;
-                inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
+                inset: root.inset; content-w: geo.w; row-h: root.row-fit; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
                 changed hovering => { root.hover(root.mids.length + 1 + i, self.hovering); }
                 activate => { root.activate(root.mids.length + 1 + i); }
             }
@@ -402,13 +408,13 @@ export component PauseCard inherits Window {
             answer(y) => { root.answer(y); }
         }
         if root.column: CardFoot {
-            property <length> rows-h: root.resume-h + 52px + root.mids.length * max(root.row-h, Ui.tap) + (root.asking ? confirm-measure.preferred-height : root.dangers.length * max(root.row-h, Ui.tap));
+            property <length> rows-h: root.column-rows;
             padding-left: root.inset;
             padding-right: root.band-w - root.inset - geo.w;
             padding-top: 8px;
             show-device: root.rows-top + self.rows-h + self.base + dev-m.preferred-height + 8px <= geo.foot-limit;
-            notes: root.notes; device-line: root.device-line;
-            hints-first: root.hints-first; hints-rest: root.hints-rest; help-size: root.help-size; status-size: root.status-size; hint-size: root.hint-size;
+            notes: root.foot-no-notes ? root.none : root.notes; device-line: root.device-line;
+            hints-first: root.foot-no-hints ? root.no-hints : root.hints-first; hints-rest: root.foot-no-hints ? root.no-hints : root.hints-rest; help-size: root.help-size; status-size: root.status-size; hint-size: root.hint-size;
         }
     }
 
@@ -418,7 +424,7 @@ export component PauseCard inherits Window {
         visible: root.pillar;
         y: geo.bottom - (root.short ? 12px : 24px) - self.preferred-height;
         height: self.preferred-height;
-        pillar: true; short: root.short; help: root.foot-tight ? "" : root.help; notes: root.pillar ? root.notes : root.none;
+        pillar: true; short: root.short; help: root.foot-tight ? "" : root.help; notes: root.pillar && !root.foot-no-notes ? root.notes : root.none;
         device: root.pillar && !root.foot-tight ? root.device : ""; version: root.pillar && !root.foot-tight ? root.version : "";
         hints-first: root.pillar && !root.foot-no-hints ? root.hints-first : root.no-hints; hints-rest: root.pillar && !root.foot-no-hints ? root.hints-rest : root.no-hints; help-size: root.help-size; status-size: root.status-size; hint-size: root.hint-size;
     }
