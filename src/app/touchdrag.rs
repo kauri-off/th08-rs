@@ -186,6 +186,7 @@ fn stage(sens: f32) -> Option<Running> {
         stats: None,
         volume: None,
         quit: None,
+        slint_menu: None,
     };
     touch(&mut r).set_window(WIN.0, WIN.1, WIN.2, th08_render::gfx::SafeArea::default());
     for _ in 0..400 {

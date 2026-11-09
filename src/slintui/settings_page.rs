@@ -1,16 +1,15 @@
 //! The port menu's settings page on Slint: binds `launcher::Model` rows to `ui/settings.slint`.
-use super::host::{self, Gpu, Surface};
-use super::input::{self, Pointer, Pointing};
+use super::host::Adapter;
+use super::input;
 use super::text::breakable;
-use super::{Cap, Geometry, Hint, Modality, RowData, SettingsPage, Ui};
+use super::{Cap, Geometry, Hint, MenuRoot, Modality, PageApi, RowData, Ui};
 use crate::launcher::Model;
 use crate::platform::portmenu::{self, Nav, Shape};
 use crate::theme::{Ctl, CtlOut};
-use slint::{ComponentHandle, Global, Model as _, ModelRc, SharedString, VecModel};
+use slint::{Global, Model as _, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
-use th08_render::gfx::{OverlayTarget, SafeArea};
-use winit::event::WindowEvent;
+use th08_render::gfx::SafeArea;
 
 #[derive(Clone, Copy, Debug)]
 enum Cmd {
@@ -48,16 +47,15 @@ pub struct Place {
 }
 
 pub struct Page {
-    pub ui: SettingsPage,
-    surface: Surface,
+    ui: MenuRoot,
+    adapter: Rc<Adapter>,
     cmds: Rc<RefCell<Vec<Cmd>>>,
     rows: Rc<VecModel<RowData>>,
     keys: Vec<&'static str>,
     tab: usize,
-    pointer: Pointer,
-    place: Option<Place>,
-    words: Words,
-    generation: u32,
+    tabs: Vec<String>,
+    pieces: Vec<String>,
+    words: Option<Words>,
 }
 
 fn idx(i: i32) -> usize {
@@ -137,119 +135,143 @@ fn geometry(p: &Place) -> Geometry {
     }
 }
 
+fn same_row(a: &RowData, b: &RowData) -> bool {
+    a.kind == b.kind
+        && a.frac.to_bits() == b.frac.to_bits()
+        && a.sel == b.sel
+        && a.rule == b.rule
+        && a.number == b.number
+        && a.unit == b.unit
+        && a.value == b.value
+        && a.label == b.label
+        && a.caption == b.caption
+        && a.help == b.help
+        && a.words.iter().eq(b.words.iter())
+        && a.pieces.iter().eq(b.pieces.iter())
+}
+
 impl Page {
-    pub fn new(
-        gpu: Gpu,
-        generation: u32,
-        words: Words,
-        touch: bool,
-    ) -> Result<Self, slint::PlatformError> {
-        host::use_gpu(gpu.clone())?;
-        log::info!("slintui: settings page opened");
-        let ui = SettingsPage::new()?;
-        ui.show()?;
-        let adapter = host::take_adapter().ok_or(slint::PlatformError::NoPlatform)?;
+    pub fn new(ui: MenuRoot, adapter: Rc<Adapter>) -> Self {
         let cmds = Rc::new(RefCell::new(Vec::new()));
         let rows = Rc::new(VecModel::<RowData>::default());
-        ui.set_rows(ModelRc::from(rows.clone()));
+        let api = PageApi::get(&ui);
+        api.set_rows(ModelRc::from(rows.clone()));
         let c = cmds.clone();
-        ui.on_step(move |i, d| c.borrow_mut().push(Cmd::Step(idx(i), d)));
+        api.on_step(move |i, d| c.borrow_mut().push(Cmd::Step(idx(i), d)));
         let c = cmds.clone();
-        ui.on_pick(move |i, w| c.borrow_mut().push(Cmd::Pick(idx(i), idx(w))));
+        api.on_pick(move |i, w| c.borrow_mut().push(Cmd::Pick(idx(i), idx(w))));
         let c = cmds.clone();
-        ui.on_set_frac(move |i, f| c.borrow_mut().push(Cmd::Frac(idx(i), f)));
+        api.on_set_frac(move |i, f| c.borrow_mut().push(Cmd::Frac(idx(i), f)));
         let c = cmds.clone();
-        ui.on_activate(move |i| c.borrow_mut().push(Cmd::Activate(idx(i))));
+        api.on_activate(move |i| c.borrow_mut().push(Cmd::Activate(idx(i))));
         let c = cmds.clone();
-        ui.on_reset_page(move || c.borrow_mut().push(Cmd::Reset));
+        api.on_reset_page(move || c.borrow_mut().push(Cmd::Reset));
         let c = cmds.clone();
-        ui.on_back(move || c.borrow_mut().push(Cmd::Back));
+        api.on_back(move || c.borrow_mut().push(Cmd::Back));
         let c = cmds.clone();
-        ui.on_tab_changed(move |i| c.borrow_mut().push(Cmd::Tab(idx(i))));
-        ui.set_heading(s(&words.heading));
-        ui.set_caption(s(&words.caption));
-        ui.set_back_word(s(&words.back));
-        ui.set_back_key(s(&words.back_key));
-        ui.set_prev_key(s(&words.prev_key));
-        ui.set_next_key(s(&words.next_key));
-        ui.set_device(s(&words.device));
-        ui.set_ask(s(&breakable(&words.ask)));
-        let cut = words.hints.len().min(3);
-        ui.set_hints_first(hints(&words.hints[..cut]));
-        ui.set_hints_rest(hints(&words.hints[cut..]));
-        let g = Ui::get(&ui);
-        g.set_touch(touch);
-        g.set_modality(if touch {
-            Modality::Touch
-        } else {
-            Modality::Keys
-        });
-        Ok(Self {
-            surface: Surface::new(adapter, gpu),
+        api.on_tab_changed(move |i| c.borrow_mut().push(Cmd::Tab(idx(i))));
+        drop(api);
+        Self {
             ui,
+            adapter,
             cmds,
             rows,
             keys: Vec::new(),
             tab: 0,
-            pointer: Pointer::default(),
-            place: None,
-            words,
-            generation,
-        })
+            tabs: Vec::new(),
+            pieces: Vec::new(),
+            words: None,
+        }
     }
 
-    pub fn words(&self) -> &Words {
-        &self.words
+    pub fn api(&self) -> PageApi<'_> {
+        PageApi::get(&self.ui)
     }
 
-    pub fn generation(&self) -> u32 {
-        self.generation
+    // The view was just switched in: a fresh page, nothing from its last time on screen counts.
+    pub fn open(&self, touch: bool) {
+        self.cmds.borrow_mut().clear();
+        let api = self.api();
+        api.set_cursor(0);
+        api.set_armed(false);
+        api.set_scroll(0.0);
+        Ui::get(&self.ui).set_touch(touch);
+        Ui::get(&self.ui).set_modality(if touch {
+            Modality::Touch
+        } else {
+            Modality::Keys
+        });
     }
 
-    pub fn place(&mut self, p: Place) {
+    // The fixed strings; true when they changed.
+    pub fn set_words(&mut self, words: &Words) -> bool {
+        if self.words.as_ref() == Some(words) {
+            return false;
+        }
+        let api = self.api();
+        api.set_heading(s(&words.heading));
+        api.set_caption(s(&words.caption));
+        api.set_back_word(s(&words.back));
+        api.set_back_key(s(&words.back_key));
+        api.set_prev_key(s(&words.prev_key));
+        api.set_next_key(s(&words.next_key));
+        api.set_device(s(&words.device));
+        api.set_ask(s(&breakable(&words.ask)));
+        let cut = words.hints.len().min(3);
+        api.set_hints_first(hints(&words.hints[..cut]));
+        api.set_hints_rest(hints(&words.hints[cut..]));
+        self.words = Some(words.clone());
+        true
+    }
+
+    pub fn place(&self, p: Place) {
         let u = p.lay.ppp;
         let g = Ui::get(&self.ui);
         g.set_split(p.lay.shape == Shape::Split);
         g.set_pt_per_dp(p.lay.density / u);
-        self.ui.set_geo(geometry(&p));
-        self.surface.resize(p.size.0, p.size.1, u);
-        self.place = Some(p);
+        self.api().set_geo(geometry(&p));
+        self.adapter.resize(p.size.0, p.size.1, u);
     }
 
     pub fn tab(&self) -> usize {
         self.tab
     }
 
-    pub fn adapter(&self) -> &Rc<host::Adapter> {
-        self.surface.adapter()
-    }
-
-    // Opens tab `tab`, the rows from `model`.
+    // Opens tab `tab`: the strip and label measures only when they differ, rows in place so unchanged ones are kept.
     pub fn show_tab(&mut self, tab: usize, model: &Model, lang: crate::i18n::Lang) {
         Ui::get(&self.ui).set_ru(lang == crate::i18n::Lang::Ru);
         let tabs = model.live_tabs();
         self.tab = tab.min(tabs.len().saturating_sub(1));
-        self.ui.set_tab(i32::try_from(self.tab).unwrap_or(0));
-        self.ui.set_tabs(strings(
-            tabs.iter()
-                .map(|&g| breakable(crate::i18n::group_title(lang, g)))
-                .collect(),
-        ));
+        self.api().set_tab(i32::try_from(self.tab).unwrap_or(0));
+        let titles: Vec<String> = tabs
+            .iter()
+            .map(|&g| breakable(crate::i18n::group_title(lang, g)))
+            .collect();
+        if titles != self.tabs {
+            self.api().set_tabs(strings(titles.clone()));
+            self.tabs = titles;
+        }
         self.keys = tabs
             .get(self.tab)
             .map_or_else(Vec::new, |&g| model.live_rows(g));
-        self.rows.set_vec(self.row_data(model, lang));
-        let pieces = self
+        self.sync_rows(model, lang);
+        let pieces: Vec<String> = self
             .keys
             .iter()
             .flat_map(|k| crate::theme::unbreakable(model.row_text(k, lang).0))
             .map(str::to_string)
             .collect();
-        self.ui.set_label_pieces(strings(pieces));
-        self.ui.invoke_scroll_top();
+        if pieces != self.pieces {
+            self.api().set_label_pieces(strings(pieces.clone()));
+            self.pieces = pieces;
+        }
     }
 
     fn row_data(&self, model: &Model, lang: crate::i18n::Lang) -> Vec<RowData> {
+        let (reset, reset_help) = self
+            .words
+            .as_ref()
+            .map_or(("", ""), |w| (w.reset.as_str(), w.reset_help.as_str()));
         let mut v: Vec<RowData> = self
             .keys
             .iter()
@@ -294,8 +316,8 @@ impl Page {
             .collect();
         v.push(RowData {
             kind: 3,
-            label: s(&breakable(&self.words.reset)),
-            help: s(&breakable(&self.words.reset_help)),
+            label: s(&breakable(reset)),
+            help: s(&breakable(reset_help)),
             rule: true,
             sel: -1,
             ..RowData::default()
@@ -303,22 +325,19 @@ impl Page {
         v
     }
 
-    // Writes changed rows in place so the list keeps its scroll position and press state.
-    fn refresh(&self, model: &Model, lang: crate::i18n::Lang) {
+    // Writes changed rows in place; the list keeps its other rows, its scroll position and press state.
+    fn sync_rows(&self, model: &Model, lang: crate::i18n::Lang) {
         let new = self.row_data(model, lang);
+        let keep = new.len();
         for (i, r) in new.into_iter().enumerate() {
-            let same = self.rows.row_data(i).is_some_and(|o| {
-                o.frac.to_bits() == r.frac.to_bits()
-                    && o.sel == r.sel
-                    && o.number == r.number
-                    && o.value == r.value
-                    && o.label == r.label
-                    && o.help == r.help
-                    && o.words.iter().eq(r.words.iter())
-            });
-            if !same {
-                self.rows.set_row_data(i, r);
+            match self.rows.row_data(i) {
+                Some(o) if same_row(&o, &r) => {}
+                Some(_) => self.rows.set_row_data(i, r),
+                None => self.rows.push(r),
             }
+        }
+        while self.rows.row_count() > keep {
+            self.rows.remove(self.rows.row_count() - 1);
         }
     }
 
@@ -354,38 +373,11 @@ impl Page {
                 Cmd::Tab(t) => self.show_tab(t, model, lang),
             }
         }
-        self.refresh(model, lang);
+        self.sync_rows(model, lang);
         back
     }
 
     pub fn nav(&self, n: Nav) {
-        input::send_nav(self.surface.adapter(), n);
-    }
-
-    // Pointer input; true when the event was pointer input.
-    pub fn on_event(&mut self, ev: &WindowEvent) -> bool {
-        let Some(p) = self.place else {
-            return false;
-        };
-        let Some(kind) = self.pointer.event(self.surface.adapter(), ev, p.lay.ppp) else {
-            return false;
-        };
-        Ui::get(&self.ui).set_modality(match kind {
-            Pointing::Mouse => Modality::Mouse,
-            Pointing::Touch => Modality::Touch,
-        });
-        true
-    }
-
-    // Runs timers; returns how soon the next repaint is due.
-    pub fn tick(&self) -> Option<std::time::Duration> {
-        if host::tick(self.surface.adapter()) {
-            return Some(std::time::Duration::from_millis(16));
-        }
-        host::next_timer()
-    }
-
-    pub fn paint(&mut self, t: &OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder) {
-        self.surface.paint(t, enc);
+        input::send_nav(&self.adapter, n);
     }
 }

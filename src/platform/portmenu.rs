@@ -624,17 +624,25 @@ pub struct PortMenu {
     navs: Vec<Nav>,
     mods: winit::keyboard::ModifiersState,
     axes: [i32; 2],
-    // Developer setting `slint_ui`: the settings page on Slint; the page exists only while it is open.
+    // Developer setting `slint_ui`: the card and settings page on Slint, one window kept by the app between menus.
     use_slint: bool,
-    slint: Option<Box<crate::slintui::settings_page::Page>>,
-    // The pause card on Slint; kept while its settings page is open.
-    card: Option<Box<crate::slintui::card::Card>>,
+    slint: Option<Box<crate::slintui::menu::Menu>>,
+    // Nothing drawn yet: when the menu opened, for the log.
+    opened_at: Option<web_time::Instant>,
+    session_started: bool,
 }
 
 impl PortMenu {
     // `s`: the held game's settings; `touch`: the overlay's settings when it is on.
-    pub fn new(window: &Window, s: &Settings, touch: Option<TouchConfig>) -> Self {
+    pub fn new(
+        window: &Window,
+        s: &Settings,
+        touch: Option<TouchConfig>,
+        slint: Option<Box<crate::slintui::menu::Menu>>,
+    ) -> Self {
+        let began = web_time::Instant::now();
         let ctx = new_ctx(s);
+        let ctx_us = began.elapsed().as_micros();
         let state = egui_winit::State::new(
             ctx.clone(),
             egui::ViewportId::ROOT,
@@ -643,18 +651,24 @@ impl PortMenu {
             None,
             None,
         );
+        let state_us = began.elapsed().as_micros() - ctx_us;
         let modality = if touch.is_some() {
             theme::Modality::Touch
         } else {
             theme::Modality::Keys
         };
+        let model = launcher::Model::port_menu(s, touch.is_some());
+        log::info!(
+            "slintui open: egui ctx {ctx_us} us, egui state {state_us} us, model {} us",
+            began.elapsed().as_micros() - ctx_us - state_us,
+        );
         Self {
             ctx,
             state,
             renderer: None,
             pending: egui::TexturesDelta::default(),
             repaint_at: None,
-            model: launcher::Model::port_menu(s, touch.is_some()),
+            model,
             changed: false,
             quit_ok: false,
             opened: (i18n::resolve(s.language), s.now_playing),
@@ -676,9 +690,16 @@ impl PortMenu {
             mods: winit::keyboard::ModifiersState::empty(),
             axes: [0; 2],
             use_slint: s.slint_ui,
-            slint: None,
-            card: None,
+            slint,
+            opened_at: Some(began),
+            session_started: false,
         }
+    }
+
+    // Hands the Slint window back when the menu closes; logs the session's timings.
+    pub fn take_slint(&mut self) -> Option<Box<crate::slintui::menu::Menu>> {
+        crate::slintui::host::session_end();
+        self.slint.take()
     }
 
     // Esc / Android Back: closes the layout editor, the settings page or the Retry / Quit question; false when
@@ -756,15 +777,17 @@ impl PortMenu {
                 return false;
             }
         }
-        if let Some(p) = &mut self.slint {
-            return p.on_event(ev);
-        }
-        if let Some(c) = &mut self.card {
-            let Some(kind) = c.on_event(ev) else {
+        if self.use_slint
+            && self.edit.is_none()
+            && let Some(m) = &mut self.slint
+        {
+            let Some(kind) = m.on_event(ev) else {
                 return false;
             };
-            let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
-            self.focus.input.pointer(touch);
+            if self.focus.page != Page::Settings {
+                let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
+                self.focus.input.pointer(touch);
+            }
             return true;
         }
         self.state.on_window_event(window, ev).repaint
@@ -786,6 +809,15 @@ impl PortMenu {
         );
         if self.use_slint && self.edit.is_none() {
             let pass = crate::slintui::host::pass_begin();
+            if let Some(at) = self.opened_at.take() {
+                log::info!(
+                    "slintui open: first pass {} us after PortMenu::new began",
+                    at.elapsed().as_micros(),
+                );
+            }
+            if !self.ensure_slint(window, gfx) {
+                return None;
+            }
             if self.focus.page == Page::Settings {
                 self.redraw_slint(window, gfx, lay);
                 crate::slintui::host::pass_end("settings", pass);
@@ -795,8 +827,6 @@ impl PortMenu {
             crate::slintui::host::pass_end("card", pass);
             return act;
         }
-        self.slint = None;
-        self.card = None;
         let ppp = if self.edit.is_some() {
             lay.edit_ppp
         } else {
@@ -913,37 +943,50 @@ impl PortMenu {
         act
     }
 
-    // One pass of the Slint pause card; the shared `Focus` decides everything, so keys and confirms match the egui card.
-    fn redraw_card(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
-        use crate::slintui::card::Card;
-        use crate::slintui::settings_page::Place;
-        self.slint = None;
-        let safe = gfx.safe;
-        let size = gfx.surface_size();
+    // The Slint window for this GPU generation, built once; false when Slint failed and the menu fell back to egui.
+    fn ensure_slint(&mut self, window: &Window, gfx: &mut Gfx) -> bool {
+        use crate::slintui::menu::Menu;
         gfx.recover_if_lost();
+        let fresh = self.slint.is_none();
         if self
-            .card
+            .slint
             .as_ref()
-            .is_none_or(|c| c.generation() != gfx.generation())
+            .is_none_or(|m| m.generation() != gfx.generation())
         {
+            self.slint = None;
             let gpu = crate::slintui::host::Gpu {
                 instance: gfx.instance().clone(),
                 device: gfx.device.clone(),
                 queue: gfx.queue.clone(),
             };
             let built = web_time::Instant::now();
-            let made = Card::new(gpu, gfx.generation());
-            log::info!("slintui build: card {} us", built.elapsed().as_micros());
+            let made = Menu::new(gpu, gfx.generation());
+            log::info!("slintui build: menu {} us", built.elapsed().as_micros());
             match made {
-                Ok(c) => self.card = Some(Box::new(c)),
+                Ok(m) => self.slint = Some(Box::new(m)),
                 Err(e) => {
-                    log::error!("slintui: {e}; falling back to the egui card");
+                    log::error!("slintui: {e}; falling back to egui");
                     self.use_slint = false;
                     window.request_redraw();
-                    return None;
+                    return false;
                 }
             }
         }
+        if !std::mem::replace(&mut self.session_started, true)
+            && !fresh
+            && let Some(m) = &mut self.slint
+        {
+            m.session_begin();
+        }
+        true
+    }
+
+    // One pass of the Slint pause card; the shared `Focus` decides everything, so keys and confirms match the egui card.
+    fn redraw_card(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
+        use crate::slintui::menu::View;
+        use crate::slintui::settings_page::Place;
+        let safe = gfx.safe;
+        let size = gfx.surface_size();
         let hitboxes = super::hitbox::mode(gfx);
         let m = MenuState {
             pad: self.controller.as_deref(),
@@ -956,18 +999,35 @@ impl PortMenu {
             quit: self.quit_ok,
             stage: self.stage.as_ref(),
         };
-        let card = self.card.as_mut()?;
+        let menu = self.slint.as_mut()?;
+        if menu.enter(View::Card) {
+            menu.card.open();
+        }
         let before = live_values(&self.model);
         let navs = std::mem::take(&mut self.navs);
         let place = Place { lay, safe, size };
-        let todo = card_pass(card, &m, &mut self.model, &mut self.focus, place, navs);
+        let todo = card_pass(
+            &mut menu.card,
+            &m,
+            &mut self.model,
+            &mut self.focus,
+            place,
+            navs,
+        );
         if live_values(&self.model) != before {
             self.changed = true;
             window.request_redraw();
         }
-        self.repaint_at = card.tick().map(|d| web_time::Instant::now() + d);
+        self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
         gfx.safe = lay.picture;
-        let shown = gfx.present_last(|t, enc| card.paint(&t, enc));
+        let screen = if self.focus.ask.is_some() {
+            "confirm"
+        } else {
+            "card"
+        };
+        let began = web_time::Instant::now();
+        let shown = gfx.present_last(|t, enc| menu.paint(screen, None, &t, enc));
+        crate::slintui::host::note_present(began);
         gfx.safe = safe;
         if !shown {
             window.request_redraw();
@@ -977,62 +1037,45 @@ impl PortMenu {
 
     // One pass of the Slint settings page; texture work only when the page changed.
     fn redraw_slint(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) {
-        use crate::slintui::settings_page::{Page as SlintPage, Place};
+        use crate::slintui::menu::View;
+        use crate::slintui::settings_page::Place;
         let safe = gfx.safe;
         let size = gfx.surface_size();
-        gfx.recover_if_lost();
         let lang = self.model.lang();
         let words = page_words(lang, self.controller.as_deref(), &lay);
-        let stale = self
-            .slint
-            .as_ref()
-            .is_none_or(|p| p.generation() != gfx.generation() || *p.words() != words);
-        if stale {
-            let gpu = crate::slintui::host::Gpu {
-                instance: gfx.instance().clone(),
-                device: gfx.device.clone(),
-                queue: gfx.queue.clone(),
-            };
-            let built = web_time::Instant::now();
-            let made = SlintPage::new(gpu, gfx.generation(), words, lay.touch);
-            log::info!("slintui build: settings {} us", built.elapsed().as_micros());
-            match made {
-                Ok(mut p) => {
-                    p.place(Place { lay, safe, size });
-                    p.show_tab(self.focus.tab, &self.model, lang);
-                    self.slint = Some(Box::new(p));
-                }
-                Err(e) => {
-                    log::error!("slintui: {e}; falling back to the egui page");
-                    self.use_slint = false;
-                    window.request_redraw();
-                    return;
-                }
-            }
-        }
-        let Some(page) = &mut self.slint else {
+        let Some(menu) = &mut self.slint else {
             return;
         };
-        page.place(Place { lay, safe, size });
+        let entered = menu.enter(View::Settings);
+        if entered {
+            menu.page.open(lay.touch);
+        }
+        let reworded = menu.page.set_words(&words);
+        menu.page.place(Place { lay, safe, size });
+        if entered || reworded {
+            menu.page.show_tab(self.focus.tab, &self.model, lang);
+        }
         for n in self.navs.drain(..) {
-            page.nav(n);
+            menu.page.nav(n);
         }
         let before = live_values(&self.model);
-        let back = page.apply(&mut self.model, lang);
-        self.focus.tab = page.tab();
+        let back = menu.page.apply(&mut self.model, lang);
+        self.focus.tab = menu.page.tab();
         if live_values(&self.model) != before {
             self.changed = true;
             window.request_redraw();
         }
-        self.repaint_at = page.tick().map(|d| web_time::Instant::now() + d);
+        self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
         if back {
             self.focus.back();
-            self.slint = None;
             window.request_redraw();
             return;
         }
         gfx.safe = lay.picture;
-        let shown = gfx.present_last(|t, enc| page.paint(&t, enc));
+        let tab = Some(self.focus.tab);
+        let began = web_time::Instant::now();
+        let shown = gfx.present_last(|t, enc| menu.paint("settings", tab, &t, enc));
+        crate::slintui::host::note_present(began);
         gfx.safe = safe;
         if !shown {
             window.request_redraw();
@@ -4104,7 +4147,7 @@ pub fn slint_parts(
 // The Slint pause card with the menu's own state, for the layout check and the injected-input tests.
 #[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
 pub struct CardRig {
-    pub card: crate::slintui::card::Card,
+    pub menu: crate::slintui::menu::Menu,
     model: launcher::Model,
     focus: Focus,
     place: crate::slintui::settings_page::Place,
@@ -4117,7 +4160,7 @@ pub struct CardRig {
 #[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
 impl CardRig {
     pub fn new(
-        card: crate::slintui::card::Card,
+        mut menu: crate::slintui::menu::Menu,
         s: &Settings,
         size: (u32, u32),
         safe: SafeArea,
@@ -4144,8 +4187,9 @@ impl CardRig {
             ShotAsk::Retry => Ask::Retry,
             ShotAsk::Quit => Ask::Quit,
         });
+        menu.enter(crate::slintui::menu::View::Card);
         Self {
-            card,
+            menu,
             model: launcher::Model::port_menu(s, shot.touch),
             focus,
             place: crate::slintui::settings_page::Place { lay, safe, size },
@@ -4233,7 +4277,7 @@ impl CardRig {
             stage: self.shot.stage.as_ref(),
         };
         let out = card_pass(
-            &mut self.card,
+            &mut self.menu.card,
             &m,
             &mut self.model,
             &mut self.focus,
@@ -4251,7 +4295,7 @@ impl CardRig {
     }
 
     pub fn pointer(&mut self, ev: &WindowEvent) {
-        if let Some(k) = self.card.on_event(ev) {
+        if let Some(k) = self.menu.on_event(ev) {
             let touch = k == crate::slintui::input::Pointing::Touch || self.shot.touch;
             self.focus.input.pointer(touch);
         }

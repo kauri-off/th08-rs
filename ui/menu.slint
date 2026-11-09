@@ -1,0 +1,15 @@
+// The port menu's one window: the pause card with its confirms, or the settings page.
+import { Ui, Modality } from "tokens.slint";
+import { RowData, Cap, Hint } from "components.slint";
+import { PauseCard, CardGeo, CardApi } from "card.slint";
+import { SettingsPage, Geometry, PageApi, TextProbe } from "settings.slint";
+
+export { Ui, Modality, RowData, Cap, Hint, CardGeo, CardApi, Geometry, PageApi, TextProbe }
+
+export component MenuRoot inherits Window {
+    background: transparent;
+    // 0: the card, 1: the settings page.
+    in property <int> view;
+    if view == 0: PauseCard { width: root.width; height: root.height; }
+    if view == 1: SettingsPage { width: root.width; height: root.height; }
+}

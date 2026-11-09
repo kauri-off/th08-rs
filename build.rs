@@ -9,7 +9,7 @@ fn main() {
     let ui = slint_build::CompilerConfiguration::new()
         .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles)
         .with_debug_info(std::env::var_os("CARGO_FEATURE_UI_CHECK").is_some());
-    slint_build::compile_with_config("ui/settings.slint", ui).expect("compiling ui/*.slint");
+    slint_build::compile_with_config("ui/menu.slint", ui).expect("compiling ui/*.slint");
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let version = env("TH08_VERSION")
         .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").expect("cargo sets it"));

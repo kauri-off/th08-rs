@@ -4,6 +4,7 @@ slint::include_modules!();
 pub mod card;
 pub mod host;
 pub mod input;
+pub mod menu;
 pub mod settings_page;
 pub mod text;
 

@@ -228,42 +228,67 @@ component CardFoot inherits VerticalLayout {
     hint := HintLine { first: root.hints-first; rest: root.hints-rest; device: ""; size: root.hint-size; }
 }
 
-export component PauseCard inherits Window {
-    background: transparent;
-    in property <CardGeo> geo;
-    // Resume, the other items, the danger items; on the phone `quick` is the right bar.
-    in property <RowData> resume;
-    in property <[RowData]> mids;
-    in property <[RowData]> dangers;
-    in property <RowData> settings;
-    in property <[RowData]> quick;
-    in property <int> focused: -1;
-    in property <int> ask;
-    in property <bool> yes;
-    in property <string> heading;
-    in property <string> caption;
-    in property <string> quick-caption;
-    in property <string> help;
-    in property <[string]> notes;
-    in property <string> device;
-    in property <string> version;
-    in property <string> device-line;
-    in property <string> question;
-    in property <string> note;
-    in property <string> keep;
-    in property <string> act;
-    in property <[Hint]> hints-first;
-    in property <[Hint]> hints-rest;
-    // Item index hovered, -1 none; the answer hovered, -1 none, 0 keep, 1 act.
-    out property <int> hovered: hovered-v;
-    out property <int> hovered-answer: confirm-hover;
-    property <int> hovered-v: -1;
-    property <int> confirm-hover: -1;
+export global CardApi {
+    in-out property <CardGeo> geo;
+    in-out property <RowData> resume;
+    in-out property <[RowData]> mids;
+    in-out property <[RowData]> dangers;
+    in-out property <RowData> settings;
+    in-out property <[RowData]> quick;
+    in-out property <int> focused: -1;
+    in-out property <int> ask;
+    in-out property <bool> yes;
+    in-out property <string> heading;
+    in-out property <string> caption;
+    in-out property <string> quick-caption;
+    in-out property <string> help;
+    in-out property <[string]> notes;
+    in-out property <string> device;
+    in-out property <string> version;
+    in-out property <string> device-line;
+    in-out property <string> question;
+    in-out property <string> note;
+    in-out property <string> keep;
+    in-out property <string> act;
+    in-out property <[Hint]> hints-first;
+    in-out property <[Hint]> hints-rest;
     callback activate(int);
     callback step(int, int);
     callback pick(int, int);
     callback set-frac(int, float);
     callback answer(bool);
+    in-out property <int> hovered: -1;
+    in-out property <int> hovered-answer: -1;
+}
+
+export component PauseCard inherits Rectangle {
+    property <CardGeo> geo <=> CardApi.geo;
+    // Resume, the other items, the danger items; on the phone `quick` is the right bar.
+    property <RowData> resume <=> CardApi.resume;
+    property <[RowData]> mids <=> CardApi.mids;
+    property <[RowData]> dangers <=> CardApi.dangers;
+    property <RowData> settings <=> CardApi.settings;
+    property <[RowData]> quick <=> CardApi.quick;
+    property <int> focused <=> CardApi.focused;
+    property <int> ask <=> CardApi.ask;
+    property <bool> yes <=> CardApi.yes;
+    property <string> heading <=> CardApi.heading;
+    property <string> caption <=> CardApi.caption;
+    property <string> quick-caption <=> CardApi.quick-caption;
+    property <string> help <=> CardApi.help;
+    property <[string]> notes <=> CardApi.notes;
+    property <string> device <=> CardApi.device;
+    property <string> version <=> CardApi.version;
+    property <string> device-line <=> CardApi.device-line;
+    property <string> question <=> CardApi.question;
+    property <string> note <=> CardApi.note;
+    property <string> keep <=> CardApi.keep;
+    property <string> act <=> CardApi.act;
+    property <[Hint]> hints-first <=> CardApi.hints-first;
+    property <[Hint]> hints-rest <=> CardApi.hints-rest;
+    // Item index hovered, -1 none; the answer hovered, -1 none, 0 keep, 1 act.
+    property <int> hovered-v <=> CardApi.hovered;
+    property <int> confirm-hover <=> CardApi.hovered-answer;
 
     property <[string]> none;
     property <[Hint]> no-hints;
@@ -377,7 +402,7 @@ export component PauseCard inherits Window {
             over-game: root.column; inset: root.inset; content-w: geo.w; row-h: root.resume-h; least-h: root.resume-h; size: root.resume-size; caption-size: root.cap-size * 0.85;
             opacity: root.asking ? 0.3 : 1;
             changed hovering => { root.hover(0, self.hovering); }
-            activate => { root.activate(0); }
+            activate => { CardApi.activate(0); }
         }
         Rectangle { height: root.gaps * (root.pillar ? 14px : 10px); }
         Rectangle { height: 1px; Rectangle { x: root.inset; width: geo.w; background: Tk.rule; opacity: root.asking ? 0.3 : 1; } }
@@ -388,10 +413,10 @@ export component PauseCard inherits Window {
                 data: r; index: i + 1; bar: root.focused == i + 1; dim: root.asking; over-game: root.column;
                 inset: root.inset; content-w: geo.w; row-h: root.row-fit; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
                 changed hovering => { root.hover(i + 1, self.hovering); }
-                activate => { root.activate(i + 1); }
-                step(d) => { root.step(i + 1, d); }
-                pick(c) => { root.pick(i + 1, c); }
-                set(f) => { root.set-frac(i + 1, f); }
+                activate => { CardApi.activate(i + 1); }
+                step(d) => { CardApi.step(i + 1, d); }
+                pick(c) => { CardApi.pick(i + 1, c); }
+                set(f) => { CardApi.set-frac(i + 1, f); }
             }
         }
         if root.dangers.length > 0 && !root.hide-mids: Rectangle { height: root.gaps * (root.pillar ? 22px : 14px); }
@@ -402,14 +427,14 @@ export component PauseCard inherits Window {
                 data: r; index: root.mids.length + 1 + i; bar: root.focused == root.mids.length + 1 + i; over-game: root.column;
                 inset: root.inset; content-w: geo.w; row-h: root.row-fit; least-h: root.least-h; size: root.row-size; caption-size: root.cap-size * 0.85;
                 changed hovering => { root.hover(root.mids.length + 1 + i, self.hovering); }
-                activate => { root.activate(root.mids.length + 1 + i); }
+                activate => { CardApi.activate(root.mids.length + 1 + i); }
             }
         }
         if root.asking: ConfirmBlock {
             question: root.question; note: root.note; keep: root.keep; act: root.act; yes: root.yes; over-game: root.column;
             inset: root.inset; content-w: geo.w; row-h: root.row-h; size: root.row-size; note-size: root.help-size;
             changed hovered => { root.confirm-hover = self.hovered; }
-            answer(y) => { root.answer(y); }
+            answer(y) => { CardApi.answer(y); }
         }
         if root.column: CardFoot {
             property <length> rows-h: root.column-rows;
@@ -452,13 +477,13 @@ export component PauseCard inherits Window {
             data: root.resume; index: 0; bar: root.focused == 0; primary: Ui.touch && !Ui.bar;
             inset: root.inset; content-w: geo.w; row-h: root.resume-h; least-h: root.resume-h; size: root.resume-size; caption-size: root.cap-size * 0.85;
             changed hovering => { root.hover(0, self.hovering); }
-            activate => { root.activate(0); }
+            activate => { CardApi.activate(0); }
         }
         if !root.asking: CardRow {
             data: root.settings; index: 1; bar: root.focused == 1;
             inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.row-h; size: root.row-size; caption-size: root.cap-size * 0.85;
             changed hovering => { root.hover(1, self.hovering); }
-            activate => { root.activate(1); }
+            activate => { CardApi.activate(1); }
         }
         if !root.asking && root.dangers.length > 0: Rectangle { height: 24px; Rectangle { x: root.inset; y: 12px; width: geo.w; height: 1px; background: Tk.rule; } }
         if !root.asking: VerticalLayout {
@@ -466,14 +491,14 @@ export component PauseCard inherits Window {
                 data: r; index: 2 + i; bar: root.focused == 2 + i;
                 inset: root.inset; content-w: geo.w; row-h: root.row-h; least-h: root.row-h; size: root.row-size * 0.94; caption-size: root.cap-size * 0.85;
                 changed hovering => { root.hover(2 + i, self.hovering); }
-                activate => { root.activate(2 + i); }
+                activate => { CardApi.activate(2 + i); }
             }
         }
         if root.asking: ConfirmBlock {
             question: root.question; note: root.note; keep: root.keep; act: root.act; yes: root.yes;
             inset: root.inset; content-w: geo.w; row-h: root.row-h; size: root.row-size; note-size: Ui.font(24, 9.5);
             changed hovered => { root.confirm-hover = self.hovered; }
-            answer(y) => { root.answer(y); }
+            answer(y) => { CardApi.answer(y); }
         }
     }
 
@@ -495,10 +520,10 @@ export component PauseCard inherits Window {
             data: r; index: root.quick-first + i; bar: root.focused == root.quick-first + i && !root.asking; dim: root.asking; inset: root.quick-inset; content-w: geo.rw; label-size: root.row-size;
             last: i == root.quick.length - 1;
             changed hovering => { root.hover(root.quick-first + i, self.hovering); }
-            activate => { root.activate(root.quick-first + i); }
-            step(d) => { root.step(root.quick-first + i, d); }
-            pick(c) => { root.pick(root.quick-first + i, c); }
-            set(f) => { root.set-frac(root.quick-first + i, f); }
+            activate => { CardApi.activate(root.quick-first + i); }
+            step(d) => { CardApi.step(root.quick-first + i, d); }
+            pick(c) => { CardApi.pick(root.quick-first + i, c); }
+            set(f) => { CardApi.set-frac(root.quick-first + i, f); }
         }
     }
 }

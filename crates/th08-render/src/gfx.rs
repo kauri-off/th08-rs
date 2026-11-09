@@ -715,6 +715,7 @@ fn bind_group(
 async fn request_device(adapter: &wgpu::Adapter) -> anyhow::Result<(wgpu::Device, wgpu::Queue)> {
     Ok(adapter
         .request_device(&wgpu::DeviceDescriptor {
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: wgpu::Limits::downlevel_webgl2_defaults()
                 .using_resolution(adapter.limits()),
             ..Default::default()

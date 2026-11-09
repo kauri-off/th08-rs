@@ -40,6 +40,8 @@ struct Running {
     wake: Option<Instant>,
     // While held: the last picture must be presented again (hold, resize, transport input, port menu closed).
     held_dirty: bool,
+    // The Slint menu window; lives as long as the game, between port menus.
+    slint_menu: Option<Box<crate::slintui::menu::Menu>>,
     // Practice slow motion: index into `transport::SLOW`; 0 = 1×.
     slow: usize,
     // BGM starts seen by the sound device (`now_playing` on), titles by file stem, the toast and when it goes.
@@ -267,6 +269,7 @@ async fn load(source: Source, gfx: Gfx, s: Settings) -> anyhow::Result<Box<Runni
         stats,
         volume: Some(volume),
         quit: None,
+        slint_menu: None,
     }))
 }
 
@@ -1064,6 +1067,7 @@ impl App {
             return;
         };
         log::info!("port menu: open");
+        let open_began = Instant::now();
         r.pacer.suspend();
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.input.set_focus(false);
@@ -1077,14 +1081,23 @@ impl App {
         if let Some(h) = r.ctx.host_as::<crate::platform::AppHost>() {
             h.joystick.take_presses();
         }
-        let mut menu = crate::platform::portmenu::PortMenu::new(self.window(), &r.settings, touch);
+        let setup = open_began.elapsed().as_micros();
+        let kept = r.slint_menu.take();
+        let mut menu =
+            crate::platform::portmenu::PortMenu::new(self.window(), &r.settings, touch, kept);
         menu.quit_ok = r.quit.is_none() && crate::platform::quittitle::available(&r.ctx.w);
         menu.cheats = r.settings.active_cheats();
         menu.stage = crate::platform::portmenu::stage_line(&r.ctx.w);
         menu.speed = menu_speed(&r);
         menu.no_saves = no_score_saves(&mut r);
+        let built = open_began.elapsed().as_micros();
         self.shell = Shell::PortMenu(r, Box::new(menu));
         self.sync_audio();
+        log::info!(
+            "slintui open: input and pacer {setup} us, menu state {} us, audio {} us",
+            built - setup,
+            open_began.elapsed().as_micros() - built,
+        );
         self.window().request_redraw();
     }
 
@@ -1101,10 +1114,11 @@ impl App {
 
     // Resume: the menu's GPU objects go, the pacer deadline restarts at now (the time in the menu is not caught up).
     fn resume_game(&mut self, el: &ActiveEventLoop) {
-        let Shell::PortMenu(mut r, screen) = std::mem::replace(&mut self.shell, Shell::Loading)
+        let Shell::PortMenu(mut r, mut screen) = std::mem::replace(&mut self.shell, Shell::Loading)
         else {
             return;
         };
+        r.slint_menu = screen.take_slint();
         screen.save();
         refresh_overlays(&mut r, screen.opened_with());
         drop(screen);
@@ -2361,6 +2375,7 @@ mod tests {
             stats: None,
             volume: None,
             quit: None,
+            slint_menu: None,
         })
     }
 
@@ -2405,6 +2420,7 @@ mod tests {
             stats: None,
             volume: None,
             quit: None,
+            slint_menu: None,
         };
         for _ in 0..300 {
             r.ctx.calc();
@@ -2480,6 +2496,7 @@ mod tests {
             stats: None,
             volume: None,
             quit: None,
+            slint_menu: None,
         };
         (r, saves)
     }

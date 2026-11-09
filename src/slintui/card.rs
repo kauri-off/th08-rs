@@ -1,15 +1,12 @@
 //! The port menu's pause card on Slint: shows what `portmenu` decides and reports taps back to it.
-use super::host::{self, Gpu, Surface};
-use super::input::{Pointer, Pointing};
+use super::host::Adapter;
 use super::settings_page::{Place, hints, s, strings};
 use super::text::breakable;
-use super::{CardGeo, Modality, PauseCard, RowData, Ui};
+use super::{CardApi, CardGeo, MenuRoot, Modality, RowData, Ui};
 use crate::platform::portmenu::Shape;
-use slint::{ComponentHandle, Global, Model as _, ModelRc, VecModel};
+use slint::{Global, Model as _, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
-use th08_render::gfx::OverlayTarget;
-use winit::event::WindowEvent;
 
 // What a tap on the card asks for; an index is the item's place in the focus order.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -162,57 +159,55 @@ fn write_rows(model: &VecModel<RowData>, old: &[CardItem], new: &[CardItem]) {
 }
 
 pub struct Card {
-    pub ui: PauseCard,
-    surface: Surface,
+    ui: MenuRoot,
+    adapter: Rc<Adapter>,
     cmds: Rc<RefCell<Vec<Cmd>>>,
     mids: Rc<VecModel<RowData>>,
     dangers: Rc<VecModel<RowData>>,
     quick: Rc<VecModel<RowData>>,
-    pointer: Pointer,
-    place: Option<Place>,
     view: Option<CardView>,
-    generation: u32,
 }
 
 impl Card {
-    pub fn new(gpu: Gpu, generation: u32) -> Result<Self, slint::PlatformError> {
-        host::use_gpu(gpu.clone())?;
-        log::info!("slintui: pause card opened");
-        let ui = PauseCard::new()?;
-        ui.show()?;
-        let adapter = host::take_adapter().ok_or(slint::PlatformError::NoPlatform)?;
+    pub fn new(ui: MenuRoot, adapter: Rc<Adapter>) -> Self {
         let cmds = Rc::new(RefCell::new(Vec::new()));
         let model = || Rc::new(VecModel::<RowData>::default());
         let (mids, dangers, quick) = (model(), model(), model());
-        ui.set_mids(ModelRc::from(mids.clone()));
-        ui.set_dangers(ModelRc::from(dangers.clone()));
-        ui.set_quick(ModelRc::from(quick.clone()));
+        let api = CardApi::get(&ui);
+        api.set_mids(ModelRc::from(mids.clone()));
+        api.set_dangers(ModelRc::from(dangers.clone()));
+        api.set_quick(ModelRc::from(quick.clone()));
         let c = cmds.clone();
-        ui.on_activate(move |i| c.borrow_mut().push(Cmd::Activate(idx(i))));
+        api.on_activate(move |i| c.borrow_mut().push(Cmd::Activate(idx(i))));
         let c = cmds.clone();
-        ui.on_step(move |i, d| c.borrow_mut().push(Cmd::Step(idx(i), d)));
+        api.on_step(move |i, d| c.borrow_mut().push(Cmd::Step(idx(i), d)));
         let c = cmds.clone();
-        ui.on_pick(move |i, w| c.borrow_mut().push(Cmd::Pick(idx(i), idx(w))));
+        api.on_pick(move |i, w| c.borrow_mut().push(Cmd::Pick(idx(i), idx(w))));
         let c = cmds.clone();
-        ui.on_set_frac(move |i, f| c.borrow_mut().push(Cmd::Frac(idx(i), f)));
+        api.on_set_frac(move |i, f| c.borrow_mut().push(Cmd::Frac(idx(i), f)));
         let c = cmds.clone();
-        ui.on_answer(move |y| c.borrow_mut().push(Cmd::Answer(y)));
-        Ok(Self {
-            surface: Surface::new(adapter, gpu),
+        api.on_answer(move |y| c.borrow_mut().push(Cmd::Answer(y)));
+        drop(api);
+        Self {
             ui,
+            adapter,
             cmds,
             mids,
             dangers,
             quick,
-            pointer: Pointer::default(),
-            place: None,
             view: None,
-            generation,
-        })
+        }
     }
 
-    pub fn generation(&self) -> u32 {
-        self.generation
+    fn api(&self) -> CardApi<'_> {
+        CardApi::get(&self.ui)
+    }
+
+    // The view was just switched in: nothing from its last time on screen counts.
+    pub fn open(&self) {
+        self.cmds.borrow_mut().clear();
+        self.api().set_hovered(-1);
+        self.api().set_hovered_answer(-1);
     }
 
     pub fn take_cmds(&self) -> Vec<Cmd> {
@@ -220,11 +215,11 @@ impl Card {
     }
 
     pub fn hovered_item(&self) -> Option<usize> {
-        usize::try_from(self.ui.get_hovered()).ok()
+        usize::try_from(self.api().get_hovered()).ok()
     }
 
     pub fn hovered_answer(&self) -> Option<bool> {
-        match self.ui.get_hovered_answer() {
+        match self.api().get_hovered_answer() {
             0 => Some(false),
             1 => Some(true),
             _ => None,
@@ -246,9 +241,8 @@ impl Card {
         } else {
             Modality::Touch
         });
-        self.ui.set_geo(geometry(&p));
-        self.surface.resize(p.size.0, p.size.1, u);
-        self.place = Some(p);
+        self.api().set_geo(geometry(&p));
+        self.adapter.resize(p.size.0, p.size.1, u);
         if self.view.as_ref() == Some(&v) {
             return;
         }
@@ -258,55 +252,34 @@ impl Card {
         write_rows(&self.dangers, &old.dangers, &v.dangers);
         write_rows(&self.quick, &old.quick, &v.quick);
         if old.resume != v.resume {
-            self.ui.set_resume(v.resume.row());
+            self.api().set_resume(v.resume.row());
         }
         if old.settings != v.settings {
-            self.ui.set_settings(v.settings.row());
+            self.api().set_settings(v.settings.row());
         }
         if old.notes != v.notes {
-            self.ui
+            self.api()
                 .set_notes(strings(v.notes.iter().map(|n| breakable(n)).collect()));
         }
         if old.hints != v.hints {
             let cut = v.hints.len().min(3);
-            self.ui.set_hints_first(hints(&v.hints[..cut]));
-            self.ui.set_hints_rest(hints(&v.hints[cut..]));
+            self.api().set_hints_first(hints(&v.hints[..cut]));
+            self.api().set_hints_rest(hints(&v.hints[cut..]));
         }
-        self.ui.set_focused(v.focused);
-        self.ui.set_ask(v.ask);
-        self.ui.set_yes(v.yes);
-        self.ui.set_heading(s(&v.heading));
-        self.ui.set_caption(s(&v.caption));
-        self.ui.set_quick_caption(s(&v.quick_caption));
-        self.ui.set_help(s(&breakable(&v.help)));
-        self.ui.set_device(s(&v.device));
-        self.ui.set_version(s(&v.version));
-        self.ui.set_device_line(s(&v.device_line));
-        self.ui.set_question(s(&breakable(&v.question)));
-        self.ui.set_note(s(&breakable(&v.note)));
-        self.ui.set_keep(s(&v.keep));
-        self.ui.set_act(s(&v.act));
+        self.api().set_focused(v.focused);
+        self.api().set_ask(v.ask);
+        self.api().set_yes(v.yes);
+        self.api().set_heading(s(&v.heading));
+        self.api().set_caption(s(&v.caption));
+        self.api().set_quick_caption(s(&v.quick_caption));
+        self.api().set_help(s(&breakable(&v.help)));
+        self.api().set_device(s(&v.device));
+        self.api().set_version(s(&v.version));
+        self.api().set_device_line(s(&v.device_line));
+        self.api().set_question(s(&breakable(&v.question)));
+        self.api().set_note(s(&breakable(&v.note)));
+        self.api().set_keep(s(&v.keep));
+        self.api().set_act(s(&v.act));
         self.view = Some(v);
-    }
-
-    pub fn adapter(&self) -> &Rc<host::Adapter> {
-        self.surface.adapter()
-    }
-
-    // Pointer input; its kind, None when the event is not pointer input or the card has no place yet.
-    pub fn on_event(&mut self, ev: &WindowEvent) -> Option<Pointing> {
-        let p = self.place?;
-        self.pointer.event(self.surface.adapter(), ev, p.lay.ppp)
-    }
-
-    pub fn tick(&self) -> Option<std::time::Duration> {
-        if host::tick(self.surface.adapter()) {
-            return Some(std::time::Duration::from_millis(16));
-        }
-        host::next_timer()
-    }
-
-    pub fn paint(&mut self, t: &OverlayTarget<'_>, enc: &mut wgpu::CommandEncoder) {
-        self.surface.paint(t, enc);
     }
 }

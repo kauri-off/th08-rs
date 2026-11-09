@@ -5,6 +5,7 @@ use th08::platform::portmenu::Do;
 use th08::platform::portmenu::{Nav, Shot};
 use th08::settings::{Origin, PlatformDirs, Settings};
 use th08::slintui::check::{CardHarness, Harness, R, Reach};
+use th08::slintui::menu::View;
 use th08_render::gfx::{Gfx, SafeArea};
 
 const PHONE: (u32, u32) = (2400, 1080);
@@ -160,15 +161,15 @@ fn tap_activates(gfx: &Gfx, s: &Settings) {
 
 fn keys_and_reset(gfx: &Gfx, s: &Settings) {
     let mut h = Harness::new(gfx, s, PHONE, phone_safe(), &shot(0, true)).expect("page");
-    let cursor = h.page.ui.get_cursor();
+    let cursor = h.menu.page.api().get_cursor();
     h.nav(Nav::Down);
     assert_eq!(
-        h.page.ui.get_cursor(),
+        h.menu.page.api().get_cursor(),
         cursor,
         "the first key only shows the bar"
     );
     h.nav(Nav::Down);
-    assert_eq!(h.page.ui.get_cursor(), cursor + 1);
+    assert_eq!(h.menu.page.api().get_cursor(), cursor + 1);
     let before = values(&h);
     h.nav(Nav::Left);
     let changed = values(&h);
@@ -176,19 +177,41 @@ fn keys_and_reset(gfx: &Gfx, s: &Settings) {
     for _ in 0..30 {
         h.nav(Nav::Down);
     }
-    assert!(!h.page.ui.get_armed());
+    assert!(!h.menu.page.api().get_armed());
     h.nav(Nav::Activate);
-    assert!(h.page.ui.get_armed(), "first press asks");
+    assert!(h.menu.page.api().get_armed(), "first press asks");
     assert_eq!(values(&h), changed, "the question changes nothing");
     h.nav(Nav::Up);
-    assert!(!h.page.ui.get_armed(), "moving away cancels");
+    assert!(!h.menu.page.api().get_armed(), "moving away cancels");
     h.nav(Nav::Down);
     h.nav(Nav::Activate);
     h.nav(Nav::Activate);
     assert_ne!(values(&h), changed, "the second press resets");
     h.nav(Nav::NextTab);
-    assert_eq!(h.page.tab(), 1);
-    assert!(h.page.ui.get_scroll().abs() < 0.5);
+    assert_eq!(h.menu.page.tab(), 1);
+    assert!(h.menu.page.api().get_scroll().abs() < 0.5);
+
+    let kept = h.row_and_tabs();
+    h.reshow_tab();
+    assert!(
+        h.row_and_tabs() == kept,
+        "unchanged rows and tabs are not rebuilt"
+    );
+
+    // The window is kept: leaving the page and coming back gives a fresh page that takes keys.
+    assert!(h.menu.enter(View::Card));
+    h.tick(16);
+    assert!(h.menu.enter(View::Settings));
+    assert!(!h.menu.enter(View::Settings));
+    h.menu.page.open(true);
+    h.tick(16);
+    h.nav(Nav::Down);
+    h.nav(Nav::Down);
+    assert_eq!(
+        h.menu.page.api().get_cursor(),
+        1,
+        "keys reach the page again"
+    );
 }
 
 // Name, window size, safe area, touch, density.

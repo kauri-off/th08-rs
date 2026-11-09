@@ -2,9 +2,6 @@
 import { Tk, Ui, Modality } from "tokens.slint";
 import { Label, Ringed, Arrow, FocusMark, Keycap, Heading, Target, BackLink, Tabs, SettingRow, RowData, Cap, Hint, HelpLine, HintLine, ScrollList } from "components.slint";
 
-export { Ui, Modality, RowData, Cap, Hint }
-export { PauseCard, CardGeo } from "card.slint";
-
 // Panel geometry from `portmenu::layout`, points.
 export struct Geometry {
     panel-x: length, x: length, w: length, top: length, bottom: length, rail-w: length, rail-x: length, rail-text-w: length,
@@ -19,29 +16,24 @@ export component TextProbe inherits Window {
     t := Text { text: root.text; font-size: root.size; font-family: root.serif ? Tk.serif : Tk.sans; }
 }
 
-export component SettingsPage inherits Window {
-    background: transparent;
-    in property <Geometry> geo;
-    in property <[string]> tabs;
-    in property <[RowData]> rows;
-    in property <[string]> label-pieces;
-    in property <[Hint]> hints-first;
-    in property <[Hint]> hints-rest;
-    in property <string> heading;
-    in property <string> caption;
-    in property <string> back-word;
-    in property <string> back-key;
-    in property <string> prev-key;
-    in property <string> next-key;
-    in property <string> device;
-    in property <string> ask;
+export global PageApi {
+    in-out property <Geometry> geo;
+    in-out property <[string]> tabs;
+    in-out property <[RowData]> rows;
+    in-out property <[string]> label-pieces;
+    in-out property <[Hint]> hints-first;
+    in-out property <[Hint]> hints-rest;
+    in-out property <string> heading;
+    in-out property <string> caption;
+    in-out property <string> back-word;
+    in-out property <string> back-key;
+    in-out property <string> prev-key;
+    in-out property <string> next-key;
+    in-out property <string> device;
+    in-out property <string> ask;
     in-out property <int> tab;
     in-out property <int> cursor: 0;
     in-out property <bool> armed;
-    out property <int> hovered: hovered-v;
-    out property <length> scroll: list.scroll;
-    out property <length> scroll-max: list.scroll-max;
-    property <int> hovered-v: -1;
     callback step(int, int);
     callback pick(int, int);
     callback set-frac(int, float);
@@ -49,7 +41,33 @@ export component SettingsPage inherits Window {
     callback reset-page();
     callback back();
     callback tab-changed(int);
-    public function scroll-top() { list.top(); }
+    in-out property <length> scroll;
+    in-out property <length> scroll-max;
+}
+
+export component SettingsPage inherits Rectangle {
+    property <Geometry> geo <=> PageApi.geo;
+    property <[string]> tabs <=> PageApi.tabs;
+    property <[RowData]> rows <=> PageApi.rows;
+    property <[string]> label-pieces <=> PageApi.label-pieces;
+    property <[Hint]> hints-first <=> PageApi.hints-first;
+    property <[Hint]> hints-rest <=> PageApi.hints-rest;
+    property <string> heading <=> PageApi.heading;
+    property <string> caption <=> PageApi.caption;
+    property <string> back-word <=> PageApi.back-word;
+    property <string> back-key <=> PageApi.back-key;
+    property <string> prev-key <=> PageApi.prev-key;
+    property <string> next-key <=> PageApi.next-key;
+    property <string> device <=> PageApi.device;
+    property <string> ask <=> PageApi.ask;
+    property <int> tab <=> PageApi.tab;
+    property <int> cursor <=> PageApi.cursor;
+    property <bool> armed <=> PageApi.armed;
+    property <length> scroll-now: list.scroll;
+    property <length> scroll-end: list.scroll-max;
+    changed scroll-now => { PageApi.scroll = self.scroll-now; }
+    changed scroll-end => { PageApi.scroll-max = self.scroll-end; }
+    property <int> hovered-v: -1;
 
     property <length> row-h: Ui.split ? 120px : max(70px, Ui.tap);
     property <length> row-size: Ui.split ? Ui.font(28, 11) : Ui.font(25, 14);
@@ -67,7 +85,7 @@ export component SettingsPage inherits Window {
         cursor = min(cursor, 0);
         armed = false;
         list.top();
-        tab-changed(i);
+        PageApi.tab-changed(i);
     }
     function press(i: int) {
         cursor = i;
@@ -76,9 +94,9 @@ export component SettingsPage inherits Window {
     function act(i: int) {
         press(i);
         if (rows[i].kind == 3) {
-            if (armed) { armed = false; reset-page(); } else { armed = true; }
+            if (armed) { armed = false; PageApi.reset-page(); } else { armed = true; }
         } else {
-            activate(i);
+            PageApi.activate(i);
         }
     }
     function move(i: int) {
@@ -107,12 +125,12 @@ export component SettingsPage inherits Window {
                     let t = clamp(tab + d, 0, tabs.length - 1);
                     if (t != tab) { root.go-tab(t); }
                 } else {
-                    root.step(cursor, d);
+                    PageApi.step(cursor, d);
                 }
                 return accept;
             }
             if (e.text == Key.Return) { if (cursor >= 0) { root.act(cursor); } return accept; }
-            if (e.text == Key.Escape) { root.back(); return accept; }
+            if (e.text == Key.Escape) { PageApi.back(); return accept; }
             if (e.text == Key.PageUp) { root.go-tab(tab == 0 ? tabs.length - 1 : tab - 1); return accept; }
             if (e.text == Key.PageDown) { root.go-tab(tab == tabs.length - 1 ? 0 : tab + 1); return accept; }
             reject
@@ -141,7 +159,7 @@ export component SettingsPage inherits Window {
             width: geo.rail-text-w;
             height: geo.bottom - geo.top - 24px;
             spacing: 12px;
-            BackLink { text: root.back-word; size: root.row-size * 1.14; rail: true; clicked => { root.back(); } }
+            BackLink { text: root.back-word; size: root.row-size * 1.14; rail: true; clicked => { PageApi.back(); } }
             Rectangle { height: 1px; background: Tk.rule; }
             Tabs {
                 tabs: root.tabs; current: root.tab; rail: true; size: root.tab-size;
@@ -175,7 +193,7 @@ export component SettingsPage inherits Window {
                     VerticalLayout {
                         alignment: start;
                         horizontal-stretch: 0;
-                        BackLink { text: root.back-word; key: root.back-key; size: Ui.font(17, 11); clicked => { root.back(); } }
+                        BackLink { text: root.back-word; key: root.back-key; size: Ui.font(17, 11); clicked => { PageApi.back(); } }
                     }
                 }
                 wide-tabs := Tabs {
@@ -210,9 +228,9 @@ export component SettingsPage inherits Window {
                             if (self.hovering) { root.hovered-v = i; } else if (root.hovered-v == i) { root.hovered-v = -1; }
                         }
                         press => { root.press(i); }
-                        step(d) => { root.step(i, d); }
-                        pick(c) => { root.pick(i, c); }
-                        set(f) => { root.set-frac(i, f); }
+                        step(d) => { PageApi.step(i, d); }
+                        pick(c) => { PageApi.pick(i, c); }
+                        set(f) => { PageApi.set-frac(i, f); }
                         activate => { root.act(i); }
                     }
                 }

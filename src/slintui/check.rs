@@ -1,6 +1,5 @@
 //! Layout check and scripted input for the Slint pages, from element queries and the mock clock.
-use super::card::Card;
-use super::settings_page::Page;
+use super::menu::{Menu, View};
 use super::text::plain;
 use super::{TextProbe, host};
 use crate::i18n::Lang;
@@ -388,8 +387,8 @@ impl<'a> CardHarness<'a> {
             device: gfx.device.clone(),
             queue: gfx.queue.clone(),
         };
-        let card = Card::new(gpu, 0)?;
-        let rig = CardRig::new(card, s, size, safe, shot);
+        let menu = Menu::new(gpu, 0)?;
+        let rig = CardRig::new(menu, s, size, safe, shot);
         let mut h = Self {
             rig,
             gfx,
@@ -407,7 +406,7 @@ impl<'a> CardHarness<'a> {
 
     pub fn tick(&mut self, ms: u64) {
         host::advance_mock_time(Duration::from_millis(ms));
-        self.rig.card.tick();
+        self.rig.menu.tick();
         self.rig.pass(Vec::new());
     }
 
@@ -417,7 +416,7 @@ impl<'a> CardHarness<'a> {
     }
 
     pub fn targets(&self, prefix: &str) -> Vec<(String, R)> {
-        ids(&self.rig.card.ui, prefix)
+        ids(&self.rig.menu.ui, prefix)
     }
 
     // The target whose name starts with `prefix`.
@@ -462,7 +461,7 @@ impl<'a> CardHarness<'a> {
     pub fn issues(&mut self) -> Vec<Issue> {
         let keys = self.rig.keys_focus();
         let mut out = common_issues(
-            &self.rig.card.ui,
+            &self.rig.menu.ui,
             &mut self.probe,
             &mut self.widths,
             &Frame {
@@ -478,7 +477,7 @@ impl<'a> CardHarness<'a> {
             // 4:3: the card stays on the playfield and ends above the player, clear of the HUD.
             let (fx, fy, gs) = self.rig.frame();
             let (right, bottom) = (fx + 416.0 * gs, fy + 360.0 * gs);
-            for t in texts(&self.rig.card.ui) {
+            for t in texts(&self.rig.menu.ui) {
                 if t.r.right() > right + 1.0 || t.r.bottom() > bottom + 1.0 {
                     out.push(issue(
                         Kind::Clipped,
@@ -492,14 +491,14 @@ impl<'a> CardHarness<'a> {
     }
 
     pub fn image(&mut self, frame: &image::RgbaImage) -> image::RgbaImage {
-        let card = &mut self.rig.card;
-        render(self.gfx, frame, |t, enc| card.paint(t, enc))
+        let menu = &mut self.rig.menu;
+        render(self.gfx, frame, |t, enc| menu.paint("card", None, t, enc))
     }
 }
 
 // A live Slint settings page on a headless device, driven by a mock clock.
 pub struct Harness<'a> {
-    pub page: Page,
+    pub menu: Menu,
     pub model: Model,
     gfx: &'a Gfx,
     lang: Lang,
@@ -525,12 +524,15 @@ impl<'a> Harness<'a> {
             device: gfx.device.clone(),
             queue: gfx.queue.clone(),
         };
-        let mut page = Page::new(gpu, 0, words, shot.touch)?;
-        page.place(place);
-        page.show_tab(shot.settings.unwrap_or(0), &model, lang);
+        let mut menu = Menu::new(gpu, 0)?;
+        menu.enter(View::Settings);
+        menu.page.open(shot.touch);
+        menu.page.set_words(&words);
+        menu.page.place(place);
+        menu.page.show_tab(shot.settings.unwrap_or(0), &model, lang);
         let probe = TextProbe::new()?;
         let mut h = Self {
-            page,
+            menu,
             model,
             gfx,
             lang,
@@ -540,6 +542,8 @@ impl<'a> Harness<'a> {
             density: place.lay.density,
             touch: shot.touch,
         };
+        // The query instantiates the view; its scroll range reaches `PageApi` on the next tick.
+        h.list_rect();
         h.tick(16);
         for &n in &shot.navs {
             h.nav(n);
@@ -550,17 +554,36 @@ impl<'a> Harness<'a> {
 
     pub fn tick(&mut self, ms: u64) {
         host::advance_mock_time(Duration::from_millis(ms));
-        self.page.tick();
-        self.page.apply(&mut self.model, self.lang);
+        self.menu.tick();
+        self.menu.page.apply(&mut self.model, self.lang);
+    }
+
+    // The first row's data and the tab strip, whose identity shows whether they were rebuilt.
+    pub fn row_and_tabs(
+        &self,
+    ) -> (
+        slint::ModelRc<slint::SharedString>,
+        slint::ModelRc<slint::SharedString>,
+    ) {
+        use slint::Model as _;
+        let api = self.menu.page.api();
+        let row = api.get_rows().row_data(0).expect("a row");
+        (row.pieces, api.get_tabs())
+    }
+
+    // The tab shown is opened again from the same model.
+    pub fn reshow_tab(&mut self) {
+        let tab = self.menu.page.tab();
+        self.menu.page.show_tab(tab, &self.model, self.lang);
     }
 
     pub fn nav(&mut self, n: Nav) {
-        self.page.nav(n);
+        self.menu.page.nav(n);
         self.tick(16);
     }
 
     fn event(&mut self, ev: &WindowEvent) {
-        self.page.on_event(ev);
+        self.menu.on_event(ev);
     }
 
     fn touch_ev(&self, phase: TouchPhase, x: f32, y: f32) -> WindowEvent {
@@ -632,7 +655,7 @@ impl<'a> Harness<'a> {
     }
 
     fn ids(&self, prefix: &str) -> Vec<(String, R)> {
-        ids(&self.page.ui, prefix)
+        ids(&self.menu.ui, prefix)
     }
 
     pub fn list_rect(&self) -> R {
@@ -683,7 +706,7 @@ impl<'a> Harness<'a> {
         let rows: Vec<R> = self.ids("target|row|").into_iter().map(|x| x.1).collect();
         let keys = self.page_bar();
         let mut out = common_issues(
-            &self.page.ui,
+            &self.menu.ui,
             &mut self.probe,
             &mut self.widths,
             &Frame {
@@ -726,7 +749,7 @@ impl<'a> Harness<'a> {
     fn page_bar(&self) -> bool {
         use super::{Modality, Ui};
         use slint::Global;
-        Ui::get(&self.page.ui).get_modality() == Modality::Keys
+        Ui::get(&self.menu.ui).get_modality() == Modality::Keys
     }
 
     // Row names reached by repeated touch drags, wheel or keys.
@@ -737,7 +760,9 @@ impl<'a> Harness<'a> {
         match how {
             Reach::Touch => {
                 for _ in 0..40 {
-                    if self.page.ui.get_scroll() >= self.page.ui.get_scroll_max() - 0.5 {
+                    if self.menu.page.api().get_scroll()
+                        >= self.menu.page.api().get_scroll_max() - 0.5
+                    {
                         break;
                     }
                     self.drag(cx, cy + list.h * 0.35, cy - list.h * 0.35);
@@ -746,7 +771,9 @@ impl<'a> Harness<'a> {
             }
             Reach::Wheel => {
                 for _ in 0..60 {
-                    if self.page.ui.get_scroll() >= self.page.ui.get_scroll_max() - 0.5 {
+                    if self.menu.page.api().get_scroll()
+                        >= self.menu.page.api().get_scroll_max() - 0.5
+                    {
                         break;
                     }
                     self.wheel(cx, cy, -1.0);
@@ -766,8 +793,10 @@ impl<'a> Harness<'a> {
     }
 
     pub fn image(&mut self, frame: &image::RgbaImage) -> image::RgbaImage {
-        let page = &mut self.page;
-        render(self.gfx, frame, |t, enc| page.paint(t, enc))
+        let menu = &mut self.menu;
+        render(self.gfx, frame, |t, enc| {
+            menu.paint("settings", None, t, enc);
+        })
     }
 }
 
@@ -840,7 +869,9 @@ pub fn bench_page(
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     let mut times = Vec::with_capacity(300);
     for i in 0..300 {
-        h.page.nav(if i % 2 == 0 { Nav::Down } else { Nav::Up });
+        h.menu
+            .page
+            .nav(if i % 2 == 0 { Nav::Down } else { Nav::Up });
         let start = web_time::Instant::now();
         h.tick(16);
         let t = OverlayTarget {
@@ -854,7 +885,7 @@ pub fn bench_page(
         let mut enc = gfx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        h.page.paint(&t, &mut enc);
+        h.menu.paint("settings", None, &t, &mut enc);
         gfx.queue.submit([enc.finish()]);
         let _ = gfx.device.poll(wgpu::PollType::wait_indefinitely());
         times.push(start.elapsed().as_secs_f64() * 1000.0);
