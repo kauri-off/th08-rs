@@ -57,6 +57,10 @@ class Emulator:
                 self.proc.kill()
 
 
+class LeftApp(Exception):
+    pass
+
+
 class Node:
     def __init__(self, e, parent):
         self.a, self.parent = e.attrib, parent
@@ -128,6 +132,7 @@ class Ui:
         self.problems, self.shots, self.n = [], [], 0
         self.dpi = int(re.search(r"\d+$", emu.sh("wm density").splitlines()[-1]).group())
         self.seen_problem = set()
+        self.actions, self.foreign_ok = [], False
 
     @property
     def dp(self):
@@ -143,7 +148,11 @@ class Ui:
             i = out.find("<hierarchy")
             j = out.rfind("</hierarchy>")
             if i >= 0 and j > 0:
-                return Screen(out[i:j + 12])
+                s = Screen(out[i:j + 12])
+                pkg = s.nodes[0].a.get("package", "") if s.nodes else ""
+                if pkg != PKG and not self.foreign_ok:
+                    raise LeftApp(f"foreground is {pkg!r}; last actions: {self.actions[-8:]}")
+                return s
             time.sleep(1)
         raise RuntimeError("uiautomator dump failed")
 
@@ -204,13 +213,30 @@ class Ui:
         fn.write_bytes(self.emu.adb("exec-out", "screencap -p", timeout=60))
         self.shots.append(fn)
         self.lint(s or self.dump(), name)
+        self.text_audit(name)
         return fn
+
+    def text_audit(self, where):
+        self.emu.sh(f"am broadcast -n {PKG}/org.th08.port.TextAuditReceiver", timeout=30)
+        got = self.emu.sh(f"run-as {PKG} cat cache/text_audit.json", check=False)
+        try:
+            r = json.loads(got)
+        except ValueError:
+            self.problem("driver error", f"{where}: no text audit: {got[:80]}")
+            return
+        for t in r["broken"]:
+            if not re.search(r"[._/\\]", t):
+                self.problem("word broken", f"{where}: {t[:80]}")
+        for t in r["cut"]:
+            if ".rpy" not in t and "/" not in t:
+                self.problem("text cut", f"{where}: {t[:80]}")
 
     def wait(self, t=1.0):
         time.sleep(t)
 
     def tap(self, n):
         t = n.click_target() or n
+        self.actions.append(f"tap '{t.label[:30]}' {t.cx},{t.cy}")
         self.emu.sh(f"input tap {t.cx} {t.cy}")
         self.wait(1.2)
 
@@ -223,6 +249,7 @@ class Ui:
         return True
 
     def back(self):
+        self.actions.append("back")
         self.emu.sh("input keyevent 4")
         self.wait(1.0)
 
@@ -269,6 +296,7 @@ class Ui:
             i += 1
             self.swipe_up(frac_x, region)
             s = self.dump()
+            self.text_audit(name)
             seen |= set(s.texts())
             for n in s.nodes:
                 if n.checkable and n.label and n.w > 200 * self.dp:
@@ -501,6 +529,8 @@ def slider_drag(ui, st, rows, lang):
         ui.problem("no slider node", "volume_master")
         return
     b, before = bars[0], ui.cfg()
+    ui.actions.append(f"slider {b.x0}..{b.x1} y {b.cy}; nodes over its start: {[x.label[:20] for x in s.nodes if x.clickable and x is not b and x.x0 <= b.x0 + b.w * 9 // 10 <= x.x1 and x.y0 <= b.cy <= x.y1]}")
+    print(ui.actions[-1], flush=True)
     ui.emu.sh(f"input swipe {b.x0 + b.w * 9 // 10} {b.cy} {b.x0 + b.w // 2} {b.cy} 500")
     ui.wait()
     if ui.cfg() == before:
@@ -514,6 +544,7 @@ def picker(ui, st):
     if n is None:
         ui.problem("unreachable", "export")
         return
+    ui.foreign_ok = True
     ui.tap(n)
     ui.wait(3)
     ui.shot("picker_export")
@@ -537,6 +568,7 @@ def picker(ui, st):
         ui.wait(3)
         ui.shot("picker_import")
         ui.back()
+    ui.foreign_ok = False
 
 
 def walk(ui, emu, c, full_controls, sc):
@@ -696,6 +728,9 @@ def main():
                     walk_basic(ui, emu, c, sc)
                 else:
                     walk(ui, emu, c, c["full"], sc)
+            except LeftApp as e:
+                ui.problem("left the app", str(e))
+                print(emu.adb("logcat", "-d", "-t", "60", "-s", "ActivityTaskManager:I", "WindowManager:W", check=False).decode(errors="replace")[-3000:], flush=True)
             except Exception as e:
                 ui.problem("driver error", repr(e))
             sheet(ui.shots, out / f"{name}.jpg", name)
