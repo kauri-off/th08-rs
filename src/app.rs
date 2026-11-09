@@ -430,6 +430,9 @@ impl ApplicationHandler<UserEvent> for App {
             }
             return el.set_control_flow(flow);
         }
+        if let (Shell::PortMenu(_, m), Some(w)) = (&mut self.shell, &self.window) {
+            m.request_frames(w);
+        }
         let (waiting, repaint_at) = match &self.shell {
             Shell::Setup(ui) | Shell::Error(ui) => (
                 ui.screen.model().view == View::Waiting,

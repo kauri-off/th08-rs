@@ -136,7 +136,7 @@ pub enum Effect {
 }
 
 // The game state the card depends on, set by the app before each pass.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent facts about the game"
@@ -189,6 +189,25 @@ pub struct MenuModel {
     modality: Modality,
     hover: Option<Hit>,
     next: Option<Hit>,
+    // Counts every change a view can show; `asked` is the count the last requested frame covers.
+    revision: u64,
+    asked: u64,
+    view_key: u64,
+}
+
+// What a view draws from the model, apart from the setting values.
+#[derive(PartialEq)]
+struct Shown {
+    page: Page,
+    item: Item,
+    ask: Option<Ask>,
+    yes: bool,
+    tab: usize,
+    cursor: Cursor,
+    armed: bool,
+    scroll: u32,
+    modality: Modality,
+    hover: Option<Hit>,
 }
 
 fn hitbox_mode(i: usize) -> Hitboxes {
@@ -221,14 +240,58 @@ impl MenuModel {
             modality,
             hover: None,
             next: None,
+            revision: 0,
+            asked: 0,
+            view_key: 0,
         }
     }
 
+    fn shown(&self) -> Shown {
+        Shown {
+            page: self.page,
+            item: self.item,
+            ask: self.ask,
+            yes: self.yes,
+            tab: self.tab,
+            cursor: self.cursor,
+            armed: self.armed,
+            scroll: self.scroll.to_bits(),
+            modality: self.modality,
+            hover: self.hover,
+        }
+    }
+
+    fn bump_if(&mut self, changed: bool) {
+        if changed {
+            self.revision += 1;
+        }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    // True once per unasked revision and on every call while the list coasts: the caller then requests one frame.
+    pub fn take_frame(&mut self) -> bool {
+        let owed = self.revision != self.asked || self.animating();
+        self.asked = self.revision;
+        owed
+    }
+
+    // What the host draws besides the model (an open editor, the toolkit in use, the zoom); a change needs a frame.
+    pub fn set_view_key(&mut self, key: u64) {
+        self.bump_if(self.view_key != key);
+        self.view_key = key;
+    }
+
     pub fn set_context(&mut self, ctx: Context) {
+        let before = self.shown();
+        let changed = self.ctx != ctx;
         self.ctx = ctx;
         if !self.items().contains(&self.item) {
             self.item = Item::Resume;
         }
+        self.bump_if(changed || self.shown() != before);
     }
 
     pub fn context(&self) -> &Context {
@@ -382,6 +445,7 @@ impl MenuModel {
     pub fn apply(&mut self, input: Input) -> Vec<Effect> {
         let edits = matches!(input, Input::Nav(_) | Input::Tap(_) | Input::Control(..));
         let before = edits.then(|| self.live_values());
+        let shown = self.shown();
         let mut out = Vec::new();
         self.clamp_page();
         match input {
@@ -448,33 +512,39 @@ impl MenuModel {
         if before.is_some_and(|b| b != self.live_values()) {
             out.push(Effect::SettingsChanged);
         }
+        self.bump_if(!out.is_empty() || self.shown() != shown);
         out
     }
 
     // Esc / Android Back: closes the settings page or the question; false on the plain card.
     pub fn back(&mut self) -> bool {
-        if self.page == Page::Settings {
+        let shown = self.shown();
+        let handled = if self.page == Page::Settings {
             self.page = Page::Card;
             self.item = Item::Settings;
             self.armed = false;
-            return true;
-        }
-        if self.ask.is_some() {
+            true
+        } else if self.ask.is_some() {
             self.cancel();
-            return true;
-        }
-        false
+            true
+        } else {
+            false
+        };
+        self.bump_if(self.shown() != shown);
+        handled
     }
 
     // A menu opened straight on a page or a question (tools).
     pub fn open_settings(&mut self, tab: usize) {
         self.activate(Item::Settings);
         self.tab = tab;
+        self.revision += 1;
     }
 
     pub fn open_ask(&mut self, ask: Ask) {
         self.ask = Some(ask);
         self.yes = false;
+        self.revision += 1;
     }
 
     fn nearest(&self, v: f32) -> f32 {
@@ -1162,6 +1232,141 @@ mod tests {
             assert_eq!(nav(&mut m, Nav::Activate), [act]);
             assert_eq!(m.ask(), None);
         }
+    }
+
+    // Applies one input and nothing after it; true when it changed something a view shows.
+    fn asks_for_a_frame(m: &mut MenuModel, input: &Input) -> bool {
+        m.take_frame();
+        let before = (m.shown(), m.live_values());
+        let effects = m.apply(input.clone());
+        let changed = !effects.is_empty() || (m.shown(), m.live_values()) != before;
+        if changed {
+            assert!(m.take_frame(), "no frame after {input:?}");
+        }
+        if !m.animating() {
+            assert!(!m.take_frame(), "a second frame after {input:?}");
+        }
+        changed
+    }
+
+    fn on_tab(tab: usize) -> MenuModel {
+        let mut m = settings();
+        m.apply(Input::Tap(Target::Tab(tab)));
+        m.apply(Input::Geometry(list()));
+        m
+    }
+
+    #[test]
+    fn tapping_settings_alone_asks_for_the_frame_that_shows_it() {
+        let mut m = menu_with(full(), Modality::Touch);
+        m.take_frame();
+        assert_eq!(
+            m.apply(Input::Tap(Target::Item(Item::Settings))),
+            [Effect::ScrollMoved]
+        );
+        assert_eq!(m.page(), Page::Settings);
+        assert!(m.take_frame());
+        assert!(!m.take_frame());
+    }
+
+    #[test]
+    fn a_tap_alone_on_any_card_item_or_answer_asks_for_a_frame() {
+        let mut changes = 0;
+        for it in menu().items() {
+            let mut m = menu_with(full(), Modality::Touch);
+            changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Item(it))));
+            for yes in [false, true] {
+                let mut m = menu_with(full(), Modality::Touch);
+                m.apply(Input::Tap(Target::Item(it)));
+                if m.ask().is_some() {
+                    assert!(asks_for_a_frame(&mut m, &Input::Tap(Target::Answer(yes))));
+                }
+            }
+            let mut m = menu_with(full(), Modality::Touch);
+            for o in [CtlOut::Frac(0.25), CtlOut::Step(1), CtlOut::Pick(1)] {
+                asks_for_a_frame(&mut m, &Input::Control(Target::Item(it), o));
+            }
+        }
+        assert!(changes >= 6, "{changes}");
+    }
+
+    #[test]
+    fn a_tap_alone_on_any_settings_row_or_tab_asks_for_a_frame() {
+        let tabs = settings().tabs().len();
+        let mut changes = 0;
+        for tab in 0..tabs {
+            for r in 0..=on_tab(tab).keys().len() {
+                let mut m = on_tab(tab);
+                changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Row(r))));
+                changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Row(r))));
+            }
+            let other = (tab + 1) % tabs;
+            assert!(asks_for_a_frame(
+                &mut on_tab(tab),
+                &Input::Tap(Target::Tab(other))
+            ));
+            assert!(asks_for_a_frame(
+                &mut on_tab(tab),
+                &Input::Tap(Target::Back)
+            ));
+        }
+        assert!(changes > tabs);
+    }
+
+    #[test]
+    fn a_drag_alone_on_any_row_asks_for_a_frame_and_coasting_keeps_asking() {
+        let tabs = settings().tabs().len();
+        let mut changes = 0;
+        for tab in 0..tabs {
+            for r in 0..on_tab(tab).keys().len() {
+                let mut m = on_tab(tab);
+                for f in [0.1, 0.9] {
+                    let o = CtlOut::Frac(f);
+                    changes +=
+                        usize::from(asks_for_a_frame(&mut m, &Input::Control(Target::Row(r), o)));
+                }
+            }
+            let mut m = on_tab(tab);
+            let dt = 1.0 / 60.0;
+            assert!(asks_for_a_frame(&mut m, &Input::Drag { dy: -40.0, dt }));
+            for _ in 0..8 {
+                m.apply(Input::Drag { dy: -40.0, dt });
+            }
+            m.take_frame();
+            m.apply(Input::Release);
+            assert!(m.animating());
+            for _ in 0..3 {
+                assert!(m.take_frame(), "a coasting list asks with no input");
+            }
+            m.apply(Input::ScrollTo(0.0));
+            m.take_frame();
+            assert!(!m.take_frame());
+        }
+        assert!(changes > tabs);
+    }
+
+    #[test]
+    fn repeating_the_same_view_pass_asks_for_nothing() {
+        let mut m = settings();
+        let g = Input::Geometry(list());
+        let pass = |m: &mut MenuModel| {
+            m.set_context(full());
+            m.set_view_key(7);
+            m.apply(g.clone());
+            m.apply(Input::Settle);
+            m.apply(Input::Frame { dt: 1.0 / 60.0 });
+            m.apply(Input::Over(Hit::Row(1)));
+            m.apply(Input::HoverEnd);
+            m.set_moved(false);
+        };
+        pass(&mut m);
+        m.take_frame();
+        for _ in 0..3 {
+            pass(&mut m);
+            assert!(!m.take_frame());
+        }
+        m.set_view_key(8);
+        assert!(m.take_frame(), "the host's own state changed");
     }
 
     // The model's sources name no toolkit and no module that uses one.
