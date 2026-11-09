@@ -366,7 +366,12 @@ impl Focus {
         self.item
     }
 
-    fn nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+    fn nav(
+        &mut self,
+        n: Nav,
+        m: &MenuState<'_>,
+        model: &mut crate::settings_store::SettingsStore,
+    ) -> Do {
         self.moved = true;
         // The first key / pad press after pointer or touch input shows the bar (on the hovered row) and moves nothing.
         if let Some(hover) = self.input.key() {
@@ -391,7 +396,12 @@ impl Focus {
         }
     }
 
-    fn card_nav(&mut self, n: Nav, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+    fn card_nav(
+        &mut self,
+        n: Nav,
+        m: &MenuState<'_>,
+        model: &mut crate::settings_store::SettingsStore,
+    ) -> Do {
         if self.ask.is_some() {
             match n {
                 Nav::Up | Nav::Down => self.yes = !self.yes,
@@ -419,7 +429,13 @@ impl Focus {
     }
 
     // ← / → on a value item.
-    fn step(&self, it: Item, dir: i32, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+    fn step(
+        &self,
+        it: Item,
+        dir: i32,
+        m: &MenuState<'_>,
+        model: &mut crate::settings_store::SettingsStore,
+    ) -> Do {
         match it {
             Item::Volume if has_volume(model) => {
                 model.step(VOLUME, dir);
@@ -474,7 +490,7 @@ impl Focus {
         self.yes = false;
     }
 
-    fn settings_nav(&mut self, n: Nav, model: &mut launcher::Model) {
+    fn settings_nav(&mut self, n: Nav, model: &mut crate::settings_store::SettingsStore) {
         let tabs = model.live_tabs();
         if tabs.is_empty() {
             if n == Nav::Back {
@@ -580,7 +596,7 @@ fn hitbox_mode(i: usize) -> Hitboxes {
     }
 }
 
-fn has_volume(model: &launcher::Model) -> bool {
+fn has_volume(model: &crate::settings_store::SettingsStore) -> bool {
     model.live_keys().contains(&VOLUME)
 }
 
@@ -595,7 +611,7 @@ pub struct PortMenu {
     // When egui wants the next repaint.
     pub repaint_at: Option<web_time::Instant>,
     // The `live` settings rows; the language row sets the menu's language.
-    model: launcher::Model,
+    model: crate::settings_store::SettingsStore,
     // A row changed since the last `take_changed`.
     changed: bool,
     // "Give up and retry" / "Quit to title" are offered (`quittitle::available`).
@@ -679,7 +695,7 @@ impl PortMenu {
         } else {
             theme::Modality::Keys
         };
-        let model = launcher::Model::port_menu(s, touch.is_some());
+        let model = crate::settings_store::SettingsStore::port_menu(s, touch.is_some());
         log::info!(
             "slintui open: egui ctx {ctx_us} us, egui state {state_us} us, model {} us",
             began.elapsed().as_micros() - ctx_us - state_us,
@@ -1150,7 +1166,7 @@ impl PortMenu {
 fn card_item(
     it: Item,
     m: &MenuState<'_>,
-    model: &launcher::Model,
+    model: &crate::settings_store::SettingsStore,
     words: &Words,
 ) -> crate::slintui::card::CardItem {
     use crate::slintui::card::CardItem;
@@ -1190,7 +1206,7 @@ fn card_item(
 // What the Slint card shows this pass.
 fn card_view(
     m: &MenuState<'_>,
-    model: &launcher::Model,
+    model: &crate::settings_store::SettingsStore,
     focus: &Focus,
     lay: &Layout,
 ) -> crate::slintui::card::CardView {
@@ -1271,7 +1287,7 @@ fn card_view(
 fn card_pass(
     card: &mut crate::slintui::card::Card,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     place: crate::slintui::settings_page::Place,
     navs: Vec<Nav>,
@@ -1435,7 +1451,7 @@ fn insets(s: SafeArea, ppp: f32) -> egui::SafeAreaInsets {
     })
 }
 
-fn live_values(m: &launcher::Model) -> Vec<(&'static str, String)> {
+fn live_values(m: &crate::settings_store::SettingsStore) -> Vec<(&'static str, String)> {
     m.live_keys()
         .into_iter()
         .filter_map(|k| Some((k, m.value_text(k)?)))
@@ -1786,7 +1802,7 @@ fn sans_text(
 fn menu_ui(
     ctx: &egui::Context,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
 ) -> Vec<Do> {
@@ -1891,7 +1907,12 @@ fn card_metrics(lay: &Layout) -> CardMetrics {
 }
 
 // The control a card item shows on its row.
-fn item_ctl(it: Item, m: &MenuState<'_>, model: &launcher::Model, lang: Lang) -> Ctl {
+fn item_ctl(
+    it: Item,
+    m: &MenuState<'_>,
+    model: &crate::settings_store::SettingsStore,
+    lang: Lang,
+) -> Ctl {
     match it {
         Item::Hitboxes => Ctl::Choices {
             words: Hitboxes::IDS
@@ -1922,7 +1943,12 @@ fn item_ctl(it: Item, m: &MenuState<'_>, model: &launcher::Model, lang: Lang) ->
 }
 
 // A click / tap on an item's control.
-fn item_input(it: Item, o: CtlOut, m: &MenuState<'_>, model: &mut launcher::Model) -> Do {
+fn item_input(
+    it: Item,
+    o: CtlOut,
+    m: &MenuState<'_>,
+    model: &mut crate::settings_store::SettingsStore,
+) -> Do {
     match (it, o) {
         (Item::Volume, o) => {
             model.ctl_input(VOLUME, o);
@@ -1955,7 +1981,7 @@ fn item_ctl_h(
     size: f32,
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &launcher::Model,
+    model: &crate::settings_store::SettingsStore,
     words: &Words,
 ) -> f32 {
     let ctl = item_ctl(it, m, model, words.lang);
@@ -2044,7 +2070,7 @@ fn item_row(
     size: f32,
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
     words: &Words,
@@ -2254,7 +2280,7 @@ fn confirm_block(
 fn card_ui(
     ui: &mut Ui,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
     geo: &Geo,
@@ -2285,7 +2311,7 @@ fn list_card(
     items: &[Item],
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
     geo: &Geo,
@@ -2652,7 +2678,7 @@ fn split_card(
     items: &[Item],
     cm: &CardMetrics,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
     geo: &Geo,
@@ -3311,7 +3337,7 @@ fn wide_head(
 fn settings_ui(
     ui: &mut Ui,
     m: &MenuState<'_>,
-    model: &mut launcher::Model,
+    model: &mut crate::settings_store::SettingsStore,
     focus: &mut Focus,
     lay: &Layout,
     geo: &Geo,
@@ -3900,8 +3926,8 @@ fn shot_passes(
     shot: &Shot,
     script: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
     mut each: impl FnMut(bool, egui::FullOutput),
-) -> (launcher::Model, Focus) {
-    let mut model = launcher::Model::port_menu(s, shot.touch);
+) -> (crate::settings_store::SettingsStore, Focus) {
+    let mut model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
     let lay = layout(
         safe,
         (w, h),
@@ -4113,7 +4139,7 @@ pub fn bench_egui(
         frame: gfx.frame_rect(w, h),
     };
     let ctx = new_ctx(s);
-    let mut model = launcher::Model::port_menu(s, shot.touch);
+    let mut model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
     let m = MenuState {
         pad: None,
         touch: shot.touch,
@@ -4184,7 +4210,7 @@ pub fn slint_parts(
     safe: SafeArea,
     shot: &Shot,
 ) -> (
-    launcher::Model,
+    crate::settings_store::SettingsStore,
     Lang,
     crate::slintui::settings_page::Words,
     crate::slintui::settings_page::Place,
@@ -4196,7 +4222,7 @@ pub fn slint_parts(
         shot.touch,
         s.blit.integer,
     );
-    let model = launcher::Model::port_menu(s, shot.touch);
+    let model = crate::settings_store::SettingsStore::port_menu(s, shot.touch);
     let lang = model.lang();
     let words = page_words(lang, shot.pad.as_deref(), &lay);
     (
@@ -4211,7 +4237,7 @@ pub fn slint_parts(
 #[cfg(all(feature = "ui-check", not(target_arch = "wasm32")))]
 pub struct CardRig {
     pub menu: crate::slintui::menu::Menu,
-    model: launcher::Model,
+    model: crate::settings_store::SettingsStore,
     focus: Focus,
     place: crate::slintui::settings_page::Place,
     shot: Shot,
@@ -4253,7 +4279,7 @@ impl CardRig {
         menu.enter(crate::slintui::menu::View::Card);
         Self {
             menu,
-            model: launcher::Model::port_menu(s, shot.touch),
+            model: crate::settings_store::SettingsStore::port_menu(s, shot.touch),
             focus,
             place: crate::slintui::settings_page::Place { lay, safe, size },
             shot: shot.clone(),
@@ -4368,7 +4394,9 @@ impl CardRig {
 // The number of settings tabs the menu shows for `s`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn settings_tabs(s: &Settings, touch: bool) -> usize {
-    launcher::Model::port_menu(s, touch).live_tabs().len()
+    crate::settings_store::SettingsStore::port_menu(s, touch)
+        .live_tabs()
+        .len()
 }
 
 #[cfg(test)]
@@ -4389,11 +4417,16 @@ mod tests {
         }
     }
 
-    fn model(touch: bool) -> launcher::Model {
-        launcher::Model::port_menu(&Settings::default(), touch)
+    fn model(touch: bool) -> crate::settings_store::SettingsStore {
+        crate::settings_store::SettingsStore::port_menu(&Settings::default(), touch)
     }
 
-    fn run(f: &mut Focus, m: &MenuState<'_>, model: &mut launcher::Model, navs: &[Nav]) -> Vec<Do> {
+    fn run(
+        f: &mut Focus,
+        m: &MenuState<'_>,
+        model: &mut crate::settings_store::SettingsStore,
+        navs: &[Nav],
+    ) -> Vec<Do> {
         navs.iter().map(|&n| f.nav(n, m, model)).collect()
     }
 
@@ -4441,7 +4474,7 @@ mod tests {
         shot: &Shot,
         x: f32,
         then: &mut dyn FnMut(u32, &egui::Context) -> Option<Vec<egui::Event>>,
-    ) -> (bool, launcher::Model, Focus) {
+    ) -> (bool, crate::settings_store::SettingsStore, Focus) {
         let s = Settings::default();
         let ctx = new_ctx(&s);
         let mut end = None;
@@ -4484,7 +4517,10 @@ mod tests {
     fn a_drag_changes_no_value() {
         for (size, density, safe) in PHONES {
             for tab in 0..tabs() {
-                let start = live_values(&launcher::Model::port_menu(&Settings::default(), true));
+                let start = live_values(&crate::settings_store::SettingsStore::port_menu(
+                    &Settings::default(),
+                    true,
+                ));
                 // From a label, a stepper, a slider track and a right-hand cell.
                 for x in [0.1, 0.45, 0.62, 0.95] {
                     let shot = phone_shot(tab, density);
@@ -4541,7 +4577,7 @@ mod tests {
         let (model, _) = shot_passes(&ctx, &s, (w, h), safe, &shot, &mut script, |_, o| {
             drop(crate::uicheck::shapes(o));
         });
-        let start = live_values(&launcher::Model::port_menu(&s, true));
+        let start = live_values(&crate::settings_store::SettingsStore::port_menu(&s, true));
         assert_ne!(live_values(&model), start);
     }
 

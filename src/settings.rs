@@ -3,6 +3,41 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+// The `hitboxes` setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Hitboxes {
+    #[default]
+    Off,
+    Player,
+    All,
+}
+
+impl Hitboxes {
+    pub const IDS: [&'static str; 3] = ["off", "player", "all"];
+
+    pub fn id(self) -> &'static str {
+        Self::IDS[self as usize]
+    }
+
+    pub fn parse(v: &str) -> Option<Self> {
+        match v.trim() {
+            "off" => Some(Self::Off),
+            "player" => Some(Self::Player),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Player,
+            Self::Player => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+}
+
 pub use th08_core::coreconfig::Ending;
 
 // Where a value came from, highest priority last.
@@ -306,7 +341,7 @@ pub struct Settings {
     pub pause_unfocused: bool,
     pub blit: th08_render::gfx::BlitOptions,
     pub render_scale: th08_render::gfx::RenderScale,
-    pub hitboxes: crate::platform::hitbox::Hitboxes,
+    pub hitboxes: Hitboxes,
     // Port menu settings page on Slint (developer switch for the UI migration).
     pub slint_ui: bool,
     pub keys: crate::platform::keymap::KeyMap,
@@ -410,7 +445,7 @@ impl Settings {
                 ..Default::default()
             },
             render_scale: th08_render::gfx::RenderScale::default(),
-            hitboxes: crate::platform::hitbox::Hitboxes::Off,
+            hitboxes: Hitboxes::Off,
             slint_ui: false,
             keys: crate::platform::keymap::KeyMap::default(),
             pads: crate::platform::padmap::PadMap::default(),
@@ -1079,7 +1114,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         key: "hitboxes",
         env: "TH08_HITBOXES",
-        kind: Kind::Enum(&crate::platform::hitbox::Hitboxes::IDS),
+        kind: Kind::Enum(&Hitboxes::IDS),
         default: "off",
         group: Group::Accessibility,
         label: "Hitboxes",
@@ -1092,8 +1127,7 @@ pub const ENTRIES: &[Entry] = &[
         live: false,
         help: "hitbox viewer: off, player (the player's hit box and graze area) or all (plus bullets, lasers and enemies); F3 or the port menu switches it in the game",
         set: |s, v| {
-            s.hitboxes =
-                crate::platform::hitbox::Hitboxes::parse(v).ok_or("expected off, player or all")?;
+            s.hitboxes = Hitboxes::parse(v).ok_or("expected off, player or all")?;
             Ok(())
         },
     },

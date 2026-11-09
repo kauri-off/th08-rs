@@ -928,32 +928,7 @@ pub fn pad_disc(p: &Painter, c: Pos2, size: f32, label: &str) {
     );
 }
 
-// A settings row's value control as the menus paint it.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Ctl {
-    // Inline words, the selected one white (a value without a word in the list: none selected).
-    Choices {
-        words: Vec<String>,
-        sel: Option<usize>,
-    },
-    // ◀ track ▶ and the number; `frac` 0..1 along the track.
-    Slider {
-        frac: f32,
-        text: String,
-        unit: String,
-    },
-    // Read-only value text with a › (activating the row opens or cycles it).
-    Value(String),
-    None,
-}
-
-// What a click / tap / drag on a control asks for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CtlOut {
-    Pick(usize),
-    Step(i32),
-    Frac(f32),
-}
+pub use crate::settings_store::{Ctl, CtlOut};
 
 // How a control is laid out: `size` the serif word size, `num` the number size; `cells`: phone stepper cells and
 // 48 dp choice cells; `right`: aligned to the rect's right edge, else from `indent`; `track` the slider length.

@@ -2,7 +2,8 @@
 
 use crate::i18n::{self, Lang};
 use crate::platform::keymap;
-use crate::settings::{self, Audience, ENTRIES, Entry, Group, Kind, Origin, Settings};
+use crate::settings::{self, Kind, Origin, Settings};
+use crate::settings_store::{Row, SettingsStore, row_ctl, row_input};
 use crate::theme;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
@@ -10,6 +11,8 @@ use th08_render::gfx::{Gfx, SafeArea};
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::window::Window;
+
+pub use crate::settings_store::Value;
 
 mod gamepad;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
@@ -254,11 +257,6 @@ pub enum Folder {
     Bundled(Vec<String>),
 }
 
-#[derive(Clone, Copy)]
-struct LiveRows {
-    touch: bool,
-}
-
 // What a screen pass asks the app's Shell to do (app.rs).
 pub enum Action {
     Play,
@@ -291,64 +289,6 @@ pub enum View {
     Error(String),
 }
 
-// A row's value, typed by the entry's `Kind`; "" / None = unset. `text` is the port.cfg / `Settings` value text.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Value {
-    Bool(bool),
-    Int(Option<i64>),
-    Choice(String),
-    // Kind::Path and Kind::File.
-    Path(String),
-    Text(String),
-}
-
-impl Value {
-    // From value text (a `Settings` value or the table default); a bad number reads as unset.
-    pub fn parse(kind: Kind, v: &str) -> Self {
-        let v = v.trim();
-        match kind {
-            Kind::Bool => Value::Bool(settings::parse_bool(v).unwrap_or(false)),
-            Kind::Int { .. } => Value::Int(
-                v.parse::<i64>()
-                    .ok()
-                    .or_else(|| v.parse::<f64>().ok().map(|n| n.round() as i64)),
-            ),
-            Kind::Enum(_) => Value::Choice(v.into()),
-            Kind::Path | Kind::File => Value::Path(v.into()),
-            Kind::Text(_) => Value::Text(v.into()),
-        }
-    }
-
-    // Booleans "on"/"off", numbers in decimal (the port.cfg format).
-    pub fn text(&self) -> String {
-        match self {
-            Value::Bool(b) => if *b { "on" } else { "off" }.into(),
-            Value::Int(n) => n.map_or(String::new(), |n| n.to_string()),
-            Value::Choice(s) | Value::Path(s) | Value::Text(s) => s.clone(),
-        }
-    }
-
-    pub fn is_unset(&self) -> bool {
-        match self {
-            Value::Bool(_) => false,
-            Value::Int(n) => n.is_none(),
-            Value::Choice(s) | Value::Path(s) | Value::Text(s) => s.is_empty(),
-        }
-    }
-}
-
-// A row's port.cfg text: paths absolute, as port.cfg resolves relative ones against the config dir.
-fn saved_text(r: &Row) -> String {
-    let t = r.value.text();
-    #[cfg(not(target_arch = "wasm32"))]
-    if matches!(r.e.kind, Kind::Path | Kind::File)
-        && let Ok(p) = std::path::absolute(&t)
-    {
-        return p.to_string_lossy().into_owned();
-    }
-    t
-}
-
 // Translation packs on the settings screen: the job manager (None without a config folder) and the installed packs,
 // re-listed when (job generation, game folder) changes.
 struct Tr {
@@ -358,85 +298,11 @@ struct Tr {
     filter: String,
 }
 
-// One table entry as edited on screen; `dirty` = differs from the value the screen opened with.
-struct Row {
-    e: &'static Entry,
-    value: Value,
-    initial: Value,
-    dirty: bool,
-    origin: Origin,
-}
-
-impl Row {
-    fn new(e: &'static Entry, v: &str, origin: Origin) -> Self {
-        let value = Value::parse(e.kind, v);
-        Self {
-            e,
-            initial: value.clone(),
-            value,
-            dirty: false,
-            origin,
-        }
-    }
-
-    fn default_value(&self) -> Value {
-        Value::parse(self.e.kind, self.e.default)
-    }
-
-    fn set(&mut self, v: Value) {
-        self.dirty = v != self.initial;
-        self.value = v;
-    }
-
-    // The value after ← / → (`wrap`: Z / A, which cycles and leaves numbers alone); true when it changed.
-    fn apply(&mut self, dir: i32, wrap: bool) -> bool {
-        let v = match (&self.value, self.e.kind) {
-            (Value::Bool(b), _) => Value::Bool(if wrap { !b } else { dir > 0 }),
-            (Value::Int(Some(n)), Kind::Int { min, max }) if !wrap => {
-                let step = if max - min <= 16 { 1 } else { 5 };
-                Value::Int(Some((n + i64::from(dir) * step).clamp(min, max)))
-            }
-            (Value::Choice(c), Kind::Enum(choices)) => {
-                let all: Vec<&str> = (self.e.default.is_empty().then_some(""))
-                    .into_iter()
-                    .chain(choices.iter().copied())
-                    .collect();
-                let at = all.iter().position(|x| x == c).unwrap_or(0);
-                let n = all.len();
-                let to = match (dir > 0, wrap) {
-                    (true, true) => (at + 1) % n,
-                    (false, true) => (at + n - 1) % n,
-                    (true, false) => (at + 1).min(n - 1),
-                    (false, false) => at.saturating_sub(1),
-                };
-                Value::Choice(all[to].to_string())
-            }
-            _ => return false,
-        };
-        let changed = v != self.value;
-        if changed {
-            self.set(v);
-        }
-        changed
-    }
-
-    fn error(&self) -> Option<String> {
-        (!self.value.is_unset()).then(|| self.e.check(&self.value.text()).err())?
-    }
-}
-
-// The edited settings: one row per `ENTRIES` entry.
+// The launcher: the settings rows plus its saves UI, translation jobs and screens.
 pub struct Model {
-    rows: Vec<Row>,
+    store: SettingsStore,
     folder: Folder,
-    dirs: settings::PlatformDirs,
     tr: Tr,
-    // Developer view: Cheats and Tools rows and the origin tags are shown.
-    pub dev: bool,
-    // In-game port menu: only `live` rows (Touch rows only while the touch overlay is on).
-    live: Option<LiveRows>,
-    // The game folder row holds this build's bundled data: never saved to port.cfg.
-    bundled: bool,
     #[cfg(not(target_os = "android"))]
     saves: SavesUi,
     pub view: View,
@@ -490,16 +356,22 @@ struct SavesUi {
     picker: crate::saves::Picker,
 }
 
+impl std::ops::Deref for Model {
+    type Target = SettingsStore;
+
+    fn deref(&self) -> &SettingsStore {
+        &self.store
+    }
+}
+
+impl std::ops::DerefMut for Model {
+    fn deref_mut(&mut self) -> &mut SettingsStore {
+        &mut self.store
+    }
+}
+
 impl Model {
     pub fn new(s: &Settings, folder: Folder) -> Self {
-        let rows = ENTRIES
-            .iter()
-            .map(|e| Row::new(e, s.value(e.key).unwrap_or(e.default), s.origin(e.key)))
-            .collect::<Vec<Row>>();
-        // A developer switch given on the command line / env opens the developer view.
-        let dev = rows
-            .iter()
-            .any(|r| r.e.audience == Audience::Dev && r.origin > Origin::PortCfg);
         #[cfg(not(target_arch = "wasm32"))]
         let manager = s
             .dirs
@@ -517,18 +389,14 @@ impl Model {
         #[cfg(target_arch = "wasm32")]
         let last_error = None;
         let mut m = Self {
-            rows,
+            store: SettingsStore::new(s),
             folder,
-            dirs: s.dirs.clone(),
             tr: Tr {
                 manager,
                 installed: Vec::new(),
                 seen: None,
                 filter: String::new(),
             },
-            dev,
-            live: None,
-            bundled: s.origin("game_dir") == Origin::Bundled,
             #[cfg(not(target_os = "android"))]
             saves: SavesUi::default(),
             view: View::Settings,
@@ -552,109 +420,6 @@ impl Model {
         };
         m.refresh_installed();
         m
-    }
-
-    // The port menu's rows: the `live` entries of the held game's settings.
-    pub fn port_menu(s: &Settings, touch: bool) -> Self {
-        let mut m = Self::new(s, Folder::Native);
-        m.dev = false;
-        m.last_error = None;
-        m.live = Some(LiveRows { touch });
-        m
-    }
-
-    // The port menu's settings tabs: the groups with shown rows, Sound first.
-    pub fn live_tabs(&self) -> Vec<Group> {
-        const FIRST: [Group; 5] = [
-            Group::Sound,
-            Group::Display,
-            Group::Accessibility,
-            Group::Touch,
-            Group::Language,
-        ];
-        FIRST
-            .iter()
-            .chain(Group::ALL.iter().filter(|g| !FIRST.contains(g)))
-            .copied()
-            .filter(|&g| !self.live_rows(g).is_empty())
-            .collect()
-    }
-
-    // Keys of the shown rows of group `g`, in table order.
-    pub fn live_rows(&self, g: Group) -> Vec<&'static str> {
-        (0..self.rows.len())
-            .filter(|&i| self.rows[i].e.group == g && self.shown(i))
-            .map(|i| self.rows[i].e.key)
-            .collect()
-    }
-
-    // ← / → on a row (`dir` −1 / 1): true when the value changed.
-    pub fn step(&mut self, key: &str, dir: i32) -> bool {
-        self.row_mut(key).apply(dir, false)
-    }
-
-    // Z / A on a row: a box toggles, a choice moves to the next one (wrapping), a number stays.
-    pub fn activate(&mut self, key: &str) -> bool {
-        self.row_mut(key).apply(1, true)
-    }
-
-    // The painted control of a Bool / Int / Enum row (`Ctl::None` for text and path rows).
-    pub fn ctl(&self, key: &str, lang: Lang) -> theme::Ctl {
-        row_ctl(self.row(key), lang, &[])
-    }
-
-    // A click / tap / drag on a row's control; true when the value changed.
-    pub fn ctl_input(&mut self, key: &str, out: theme::CtlOut) -> bool {
-        row_input(self.row_mut(key), out, &[])
-    }
-
-    // The row's label and help text in `lang`.
-    pub fn row_text(&self, key: &str, lang: Lang) -> (&'static str, &'static str) {
-        let e = self.row(key).e;
-        (i18n::label(lang, e), i18n::help(lang, e))
-    }
-
-    // These rows back to their defaults (the port menu's "Reset this page").
-    pub fn reset_rows(&mut self, keys: &[&str]) {
-        for k in keys {
-            let r = self.row_mut(k);
-            r.set(r.default_value());
-        }
-    }
-
-    // Keys of the rows the port menu shows.
-    pub fn live_keys(&self) -> Vec<&'static str> {
-        (0..self.rows.len())
-            .filter(|&i| self.shown(i))
-            .map(|i| self.rows[i].e.key)
-            .collect()
-    }
-
-    // Writes the rows changed on screen to port.cfg (nothing when none changed).
-    pub fn save_changes(&self) {
-        let changes = self.changes();
-        if !changes.is_empty() {
-            let c: Vec<(&str, Option<&str>)> =
-                changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-            settings::write_port_cfg(&self.dirs, &c);
-        }
-    }
-
-    // The row's value text as edited (None: unset).
-    pub fn value_text(&self, key: &str) -> Option<String> {
-        let r = self.row(key);
-        (!r.value.is_unset()).then(|| r.value.text())
-    }
-
-    // Whether row `i` is on this screen.
-    fn shown(&self, i: usize) -> bool {
-        let e = self.rows[i].e;
-        e.key != "game_dir"
-            && e.shown_on_this_platform()
-            && (self.dev || e.audience == Audience::Player)
-            && self
-                .live
-                .is_none_or(|l| e.live && (l.touch || e.group != Group::Touch))
     }
 
     // The translation job manager (tools drive it directly for screenshots).
@@ -695,28 +460,6 @@ impl Model {
         v
     }
 
-    // The window's fullscreen state (F11 / Alt+Enter) mirrored into the box; saved with the other edits on Play.
-    pub fn set_fullscreen(&mut self, on: bool) {
-        self.row_mut("fullscreen").set(Value::Bool(on));
-    }
-
-    // The screen language: the `language` row as edited (a change applies at once), auto = the system locale.
-    pub fn lang(&self) -> Lang {
-        i18n::resolve(Lang::from_code(&self.row("language").value.text()))
-    }
-
-    fn row(&self, key: &str) -> &Row {
-        self.rows.iter().find(|r| r.e.key == key).unwrap()
-    }
-
-    fn row_mut(&mut self, key: &str) -> &mut Row {
-        self.rows.iter_mut().find(|r| r.e.key == key).unwrap()
-    }
-
-    fn game_dir(&self) -> String {
-        self.row("game_dir").value.text()
-    }
-
     fn folder_ok(&self) -> bool {
         match &self.folder {
             #[cfg(not(target_arch = "wasm32"))]
@@ -734,45 +477,10 @@ impl Model {
         self.folder_ok() && self.rows.iter().all(|r| r.error().is_none())
     }
 
-    // The final settings: unchanged rows keep their origin, edited ones come from the launcher.
-    pub fn settings(&self) -> Settings {
-        let values: Vec<(&'static Entry, String, Origin)> = self
-            .rows
-            .iter()
-            .filter(|r| !r.value.is_unset())
-            .map(|r| {
-                let o = if r.dirty { Origin::Launcher } else { r.origin };
-                (r.e, r.value.text(), o)
-            })
-            .collect();
-        Settings::from_values(
-            self.dirs.clone(),
-            values.iter().map(|(e, v, o)| (*e, v.as_str(), *o)),
-        )
-    }
-
-    // port.cfg / localStorage changes: every `persist` row edited on screen, removed when back at its default; the
-    // other rows (and the game folder of a build with bundled data) apply to this run only.
-    pub fn changes(&self) -> Vec<(&'static str, Option<String>)> {
-        self.rows
-            .iter()
-            .filter(|r| r.dirty && r.e.persist && !(self.bundled && r.e.key == "game_dir"))
-            .map(|r| {
-                let keep = !r.value.is_unset() && r.value != r.default_value();
-                (r.e.key, keep.then(|| saved_text(r)))
-            })
-            .collect()
-    }
-
     // Also drops the developer keys port.cfg holds (`write_port_cfg`), even with no row edited.
     pub fn save(&self) {
         self.dismiss_last_error_file();
-        let changes = self.changes();
-        if !changes.is_empty() || self.dirs.config.is_some() {
-            let c: Vec<(&str, Option<&str>)> =
-                changes.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-            settings::write_port_cfg(&self.dirs, &c);
-        }
+        self.store.write_all();
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -927,21 +635,6 @@ impl Model {
         });
         ui.add_space(6.0);
         act
-    }
-
-    // Active Cheats rows as edited on screen (keys).
-    fn active_cheats(&self) -> Vec<&'static str> {
-        self.rows
-            .iter()
-            .filter(|r| r.e.group == Group::Cheats && r.value != r.default_value())
-            .map(|r| r.e.key)
-            .collect()
-    }
-
-    fn reset(&mut self) {
-        for r in self.rows.iter_mut().filter(|r| r.e.key != "game_dir") {
-            r.set(r.default_value());
-        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) -> Option<Action> {
@@ -1522,85 +1215,6 @@ fn job_ui(ui: &mut egui::Ui, lang: Lang, st: &crate::translations::State) {
     }
 }
 
-// The values an Enum row offers: the unset value first when the entry has no default, then the table's
-// choices, then `extra` (value, shown name).
-fn enum_values(r: &Row, choices: &[&str], extra: &[(String, String)]) -> Vec<String> {
-    (r.e.default.is_empty().then(String::new))
-        .into_iter()
-        .chain(choices.iter().map(|c| (*c).to_string()))
-        .chain(extra.iter().map(|(v, _)| v.clone()))
-        .collect()
-}
-
-fn row_ctl(r: &Row, lang: Lang, extra: &[(String, String)]) -> theme::Ctl {
-    let shown = |v: &str| -> String {
-        if let Some((_, n)) = extra.iter().find(|(x, _)| x == v) {
-            return n.clone();
-        }
-        match i18n::word(lang, r.e, v) {
-            Some(w) => w.to_string(),
-            None if v.is_empty() => i18n::ui(lang, "not_set").to_string(),
-            None => v.to_string(),
-        }
-    };
-    match (&r.value, r.e.kind) {
-        (Value::Bool(b), _) => theme::Ctl::Choices {
-            words: vec![
-                i18n::ui(lang, "word_off").into(),
-                i18n::ui(lang, "word_on").into(),
-            ],
-            sel: Some(usize::from(*b)),
-        },
-        (Value::Int(n), Kind::Int { min, max }) => {
-            let v = n.unwrap_or(min);
-            let word = n.and_then(|n| i18n::word(lang, r.e, &n.to_string()));
-            theme::Ctl::Slider {
-                frac: (v - min) as f32 / (max - min).max(1) as f32,
-                text: match (n, word) {
-                    (None, _) => i18n::ui(lang, "not_set").into(),
-                    (_, Some(w)) => w.into(),
-                    (Some(n), None) => n.to_string(),
-                },
-                unit: if word.is_some() || n.is_none() {
-                    String::new()
-                } else {
-                    i18n::unit(lang, r.e).trim().to_string()
-                },
-            }
-        }
-        (Value::Choice(c), Kind::Enum(choices)) => {
-            let all = enum_values(r, choices, extra);
-            theme::Ctl::Choices {
-                sel: all.iter().position(|x| x == c),
-                words: all.iter().map(|v| shown(v)).collect(),
-            }
-        }
-        _ => theme::Ctl::None,
-    }
-}
-
-fn row_input(r: &mut Row, out: theme::CtlOut, extra: &[(String, String)]) -> bool {
-    let v = match (out, &r.value, r.e.kind) {
-        (theme::CtlOut::Step(d), ..) => return r.apply(d, false),
-        (theme::CtlOut::Pick(i), Value::Bool(_), _) => Value::Bool(i == 1),
-        (theme::CtlOut::Pick(i), Value::Choice(_), Kind::Enum(choices)) => {
-            match enum_values(r, choices, extra).get(i) {
-                Some(v) => Value::Choice(v.clone()),
-                None => return false,
-            }
-        }
-        (theme::CtlOut::Frac(f), Value::Int(_), Kind::Int { min, max }) => {
-            Value::Int(Some(min + ((max - min) as f32 * f).round() as i64))
-        }
-        _ => return false,
-    };
-    let changed = v != r.value;
-    if changed {
-        r.set(v);
-    }
-    changed
-}
-
 // Edits a copy of the value with egui widgets (text and path rows; the painted rows use `row_ctl`); the row is set
 // (and its dirty flag updated) only when a widget changed it. `extra` = choices after the table's (value, shown
 // name): the installed pack languages for `game_text`.
@@ -1699,7 +1313,7 @@ fn value_ui(ui: &mut egui::Ui, r: &mut Row, lang: Lang, extra: &[(String, String
 
 // The file / folder dialog of a path or file setting.
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
-fn pick_path(e: &Entry, lang: Lang) -> Option<String> {
+fn pick_path(e: &settings::Entry, lang: Lang) -> Option<String> {
     let d = rfd::FileDialog::new().set_title(i18n::help(lang, e));
     let picked = if e.key == "soundfont" {
         d.add_filter("SoundFont", &["sf2"]).pick_file()
@@ -2244,6 +1858,7 @@ pub fn check_frame(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use crate::settings::{Audience, ENTRIES, Group};
     use super::*;
 
     fn game_dir(root: &Path, name: &str) -> PathBuf {
@@ -2272,7 +1887,7 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    fn edit(m: &mut Model, key: &str, v: &str) {
+    fn edit(m: &mut SettingsStore, key: &str, v: &str) {
         let r = m.row_mut(key);
         r.set(Value::parse(r.e.kind, v));
     }
@@ -2490,7 +2105,7 @@ mod tests {
             ..Default::default()
         };
         let s = Settings::game_environment(dirs.clone());
-        let mut m = Model::port_menu(&s, true);
+        let mut m = SettingsStore::port_menu(&s, true);
         let shown = m.live_keys();
         for e in ENTRIES {
             if !e.live {
@@ -2533,7 +2148,7 @@ mod tests {
         ] {
             assert!(!shown.contains(&k), "{k} shown");
         }
-        let no_touch = Model::port_menu(&s, false).live_keys();
+        let no_touch = SettingsStore::port_menu(&s, false).live_keys();
         assert!(
             no_touch
                 .iter()
@@ -2541,7 +2156,7 @@ mod tests {
         );
         assert!(shown.contains(&"touch_opacity") && !no_touch.contains(&"touch_opacity"));
 
-        let other = |e: &Entry| -> String {
+        let other = |e: &settings::Entry| -> String {
             match e.kind {
                 Kind::Bool => if Value::parse(e.kind, e.default) == Value::Bool(true) {
                     "off"

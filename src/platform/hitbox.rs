@@ -14,40 +14,7 @@ use winit::keyboard::KeyCode;
 // Desktop key that cycles the mode in the game (never bindable, `keymap.rs`).
 pub const KEY: KeyCode = KeyCode::F3;
 
-// The `hitboxes` setting.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Hitboxes {
-    #[default]
-    Off,
-    Player,
-    All,
-}
-
-impl Hitboxes {
-    pub const IDS: [&'static str; 3] = ["off", "player", "all"];
-
-    pub fn id(self) -> &'static str {
-        Self::IDS[self as usize]
-    }
-
-    pub fn parse(v: &str) -> Option<Self> {
-        match v.trim() {
-            "off" => Some(Self::Off),
-            "player" => Some(Self::Player),
-            "all" => Some(Self::All),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub fn next(self) -> Self {
-        match self {
-            Self::Off => Self::Player,
-            Self::Player => Self::All,
-            Self::All => Self::Off,
-        }
-    }
-}
+pub use crate::settings::Hitboxes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
