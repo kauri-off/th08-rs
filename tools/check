@@ -4,7 +4,7 @@
 #   batch: the same lints, then arch_check; batch also marks the replay batch due; a `ui:` line: the uishots layout
 #   check too) and waits up to ~8 min; exit 75 =
 #   still running, continue with `tools/check --wait ID`. On PASS writes devdata/checks/<tree>.pass in the main checkout,
-#   which tools/land reads. Refuses uncommitted or untracked files. --block NAME waits until the job ends.
+#   which tools/land reads. Lints run first, outside the queue. Refuses uncommitted or untracked files. --block NAME waits until the job ends.
 set -u
 TOOLS=$(cd "$(dirname "$0")" && pwd)
 SELF=$TOOLS/check
@@ -87,6 +87,11 @@ echo "tools/check: $name at ${head:0:12}, level $level"
 if [[ -n ${TH08_CHECK_FAKE:-} ]]; then
   "$SELF" run "$level" "$head" "$name"; exit
 fi
+# Lint failures end here, without waiting for a queue slot.
+for lint in "cargo fmt --all --check" "cargo clippy -q --locked --workspace --all-targets -- -D warnings" \
+  "cargo clippy -q --locked --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings"; do
+  $lint || { echo "tools/check: FAIL before queueing: $lint"; exit 1; }
+done
 kind=full; [[ $level == light ]] && kind=check
 id=$("$Q" submit --kind "$kind" --label "check-$name" -C "$W" -- "$SELF" run "$level" "$head" "$name") || exit 2
 echo "tools/check: job $id"

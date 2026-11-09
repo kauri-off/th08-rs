@@ -53,6 +53,10 @@ way): `cargo fmt --check`, `cargo deny check`, `cargo clippy --workspace --all-t
 and pass. With `TH08_DIR=/path/to/game` they run; `TH08_REQUIRE_DATA=1` turns every such skip into a failure
 (arch_check sets it).
 
+**Writing tests.** Extend an existing table or test before adding a new one, and test each behaviour at one layer. No
+sleeps or wall-clock waits: use the frame counter or a mock clock. A test that asserts game behaviour cites its spec section;
+values copied from a trace or from the code under test prove nothing.
+
 **arch_check** (`tools/arch_check freeze DIR` on the commit before your change, then `tools/arch_check run DIR`)
 is a port-vs-port check: it builds, runs the CI set's lints and the tests with game data, then replays the six
 sessions in `specs/data/sessions/`, the four attract demos and the pilot replays (also with emits off) and compares
