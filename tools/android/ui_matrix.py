@@ -664,7 +664,7 @@ def main():
     try:
         if not a.no_boot:
             emu.boot(out / "emulator.log")
-        emu.adb("install", "-r", a.apk, timeout=300)
+        emu.adb("install", "-r", "-d", a.apk, timeout=300)
         sc = schema(tmp)
         for c in matrix(a.matrix):
             name = f"{'land' if c['land'] else 'port'}_{c['lang']}_f{c['font']}_{'cut' if c['cutout'] else 'nocut'}_{'dark' if c['dark'] else 'light'}_{'imported' if c['imported'] else 'missing'}"
