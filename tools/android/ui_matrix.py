@@ -105,7 +105,7 @@ class Screen:
     def find(self, *labels, clickable=False):
         hits = self.find_all(*labels)
         tappable = [n for n in hits if n.click_target()]
-        return (tappable or ([] if clickable else hits) or [None])[0]
+        return tappable[0] if tappable else (hits[-1] if hits and not clickable else None)
 
     def below(self, row, *labels):
         """The tappable match nearest under the row title, in its column: its segment, not a same-named value elsewhere."""
@@ -264,7 +264,7 @@ class Ui:
             self.shot(f"{name}_top", s)
         if region is None:
             return seen, True
-        prev, i = None, 0
+        prev, i, still = None, 0, 0
         while i < max_swipes:
             i += 1
             self.swipe_up(frac_x, region)
@@ -276,7 +276,8 @@ class Ui:
                         self.problem("scroll changed a toggle", f"{name}: {n.label}")
                     tog[n.label] = n.checked
             sig = tuple(s.texts())
-            if sig == prev:
+            still = still + 1 if sig == prev else 0
+            if still >= 2:
                 break
             prev = sig
             if shots and i % 3 == 0:
@@ -452,6 +453,14 @@ def exercise_row(ui, st, e, lang, n):
         before, other = ui.cfg(), next((l for v, l in words.items() if v != e["default"]), None)
         s = ui.dump()
         seg = s.below(n, other) if other else None
+        if seg is None and other:
+            region = ui.scroll_region(s)
+            if region:
+                ui.emu.sh(f"input swipe {region[0] + 40} {region[3] - 40} {region[0] + 40} {region[3] - int(170 * ui.dp)} 500")
+                ui.wait()
+                s = ui.dump()
+                n = s.find(label) or n
+                seg = s.below(n, other)
         if seg is None:
             ui.problem("segment not found", label)
             return
