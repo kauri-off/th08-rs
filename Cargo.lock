@@ -5232,6 +5232,7 @@ dependencies = [
  "image",
  "jni",
  "js-sys",
+ "libc",
  "log",
  "ndk-context",
  "open",

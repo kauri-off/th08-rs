@@ -153,3 +153,94 @@ fn abi_name(a: Abi) -> &'static str {
         Abi::X86_64 => "x86_64",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `configChanges` flags of attrs_manifest.xml, compileSdk 36.
+    const CONFIG_CHANGES: [&str; 20] = [
+        "mcc",
+        "mnc",
+        "locale",
+        "touchscreen",
+        "keyboard",
+        "keyboardHidden",
+        "navigation",
+        "orientation",
+        "screenLayout",
+        "uiMode",
+        "screenSize",
+        "smallestScreenSize",
+        "density",
+        "layoutDirection",
+        "colorMode",
+        "grammaticalGender",
+        "fontScale",
+        "fontWeightAdjustment",
+        "assetsPaths",
+        "resourcesUnused",
+    ];
+
+    fn repo_file(path: &str) -> String {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        fs::read_to_string(root.join(path)).unwrap()
+    }
+
+    fn after<'a>(text: &'a str, mark: &str) -> &'a str {
+        let at = text.find(mark).unwrap_or_else(|| panic!("no {mark}"));
+        &text[at + mark.len()..]
+    }
+
+    #[test]
+    fn game_activity_handles_every_config_change() {
+        let manifest = repo_file("android/app/src/main/AndroidManifest.xml");
+        let game = after(&manifest, "android:name=\".GameActivity\"");
+        let declared = after(game, "android:configChanges=\"");
+        let declared: Vec<_> = declared[..declared.find('"').unwrap()].split('|').collect();
+        let missing: Vec<_> = CONFIG_CHANGES
+            .iter()
+            .filter(|f| !declared.contains(f))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "GameActivity would relaunch on {missing:?}"
+        );
+    }
+
+    #[test]
+    fn config_change_list_matches_the_sdk() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let sdk = std::env::var("ANDROID_SDK")
+            .or_else(|_| std::env::var("ANDROID_HOME"))
+            .unwrap_or(format!("{home}/.local/share/android-sdk/Sdk"));
+        let Ok(attrs) = fs::read_to_string(format!(
+            "{sdk}/platforms/android-36/data/res/values/attrs_manifest.xml"
+        )) else {
+            eprintln!("skipped: config_change_list_matches_the_sdk: no android-36 platform");
+            return;
+        };
+        let block = after(&attrs, "<attr name=\"configChanges\">");
+        let block = &block[..block.find("</attr>").unwrap()];
+        let mut sdk_flags: Vec<_> = block
+            .split("<flag name=\"")
+            .skip(1)
+            .map(|f| &f[..f.find('"').unwrap()])
+            .collect();
+        let mut ours = CONFIG_CHANGES.to_vec();
+        sdk_flags.sort_unstable();
+        ours.sort_unstable();
+        assert_eq!(sdk_flags, ours);
+    }
+
+    #[test]
+    fn game_process_never_ends_through_libc_exit() {
+        let lib = repo_file("src/lib.rs");
+        let main = after(&lib, "fn android_main(");
+        let main = &main[..main.find("fn launch_once").unwrap()];
+        assert!(
+            !main.contains("process::exit"),
+            "exit() aborts in hwuiTask; use end_game_process"
+        );
+    }
+}
