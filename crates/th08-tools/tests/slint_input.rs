@@ -191,8 +191,11 @@ fn keys_and_reset(gfx: &Gfx, s: &Settings) {
     assert!(h.page.ui.get_scroll().abs() < 0.5);
 }
 
+// Name, window size, safe area, touch, density.
+type CardShape = (&'static str, (u32, u32), SafeArea, bool, f32);
+
 // Phone side bars, 16:9 pillar, 4:3 column.
-fn card_shapes() -> [(&'static str, (u32, u32), SafeArea, bool, f32); 3] {
+fn card_shapes() -> [CardShape; 3] {
     [
         ("phone", PHONE, phone_safe(), true, 2.75),
         ("pillar", (1920, 1080), SafeArea::default(), false, 1.0),
