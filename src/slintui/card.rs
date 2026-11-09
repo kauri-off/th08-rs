@@ -40,6 +40,12 @@ impl CardItem {
             label: s(&breakable(&self.label)),
             caption: s(&self.caption),
             words: strings(self.words.iter().map(|w| breakable(w)).collect()),
+            pieces: strings(
+                crate::theme::unbreakable(&self.label)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            ),
             sel: self.sel,
             frac: self.frac,
             number: s(&self.number),

@@ -35,7 +35,7 @@ component CardRow inherits Rectangle {
     property <bool> hot: bar || lit || primary;
     property <bool> has-value: data.kind == 0 || data.kind == 1;
     property <color> tint: hot ? Tk.text-hi : data.kind == 3 ? Tk.danger : Tk.text;
-    property <length> label-w: has-value ? min(label-m.preferred-width, content-w * 0.42) : content-w - size;
+    property <length> label-w: has-value ? min(label-m.preferred-width, max(content-w * 0.42, pieces-m.preferred-width)) : content-w - size;
     property <length> value-w: data.kind == 1 ? min(content-w * 0.58, content-w - label-w - size * 0.6) : content-w - label-w - size;
     property <bool> as-stepper: data.kind == 0 && inline-m.preferred-width > value-w;
     property <bool> show-caption: data.caption != "" && row-h >= size * 2.8;
@@ -46,6 +46,9 @@ component CardRow inherits Rectangle {
     Rectangle {
         visible: false;
         label-m := Text { text: data.label; font-family: Tk.serif; font-size: root.size; }
+        pieces-m := VerticalLayout {
+            for p in data.pieces: Text { text: p; font-family: Tk.serif; font-size: root.size; }
+        }
         inline-m := HorizontalLayout {
             spacing: root.size * 1.2;
             for w in data.words: Text { text: w; font-family: Tk.serif; font-size: root.size * 0.93; }
