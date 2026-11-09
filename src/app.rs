@@ -6,7 +6,7 @@ use crate::settings::Settings;
 use crate::transport::{Action as Transp, Transport};
 use std::sync::Arc;
 use th08_core::assets::Source;
-use th08_core::game::Ctx;
+use th08_core::game::{AudioState, Ctx};
 use th08_core::task::Flow;
 use th08_render::gfx::Gfx;
 use web_time::Instant;
@@ -86,7 +86,7 @@ enum Shell {
     // A start-up step runs: the window's device, then th08.dat / audio (its one "Loading" frame is already drawn).
     Loading,
     Running(Box<Running>),
-    // The port menu over the game's last frame; the game's pacer is suspended and its audio paused.
+    // The port menu over the game's last frame; the game's pacer is suspended and its audio held.
     PortMenu(Box<Running>, Box<crate::platform::portmenu::PortMenu>),
     Error(Box<Ui>),
 }
@@ -762,21 +762,16 @@ impl App {
         window.request_redraw();
     }
 
-    // Game audio is held while suspended, while the port menu is open, while a replay is paused and (opt-in) while
-    // the window is unfocused; `mute_unfocused` silences it without holding it.
+    // Applies `audio_state`; `mute_unfocused` silences the output without holding it.
     fn sync_audio(&mut self) {
-        let held = matches!(&self.shell, Shell::Running(r) if r.pacer.is_held());
-        self.replay_held = held;
-        let hold = self.suspended || self.focus.holds_audio() || held;
+        let replay = matches!(&self.shell, Shell::Running(r) if r.pacer.is_held());
+        self.replay_held = replay;
+        let menu = matches!(&self.shell, Shell::PortMenu(..));
+        let state = audio_state(self.suspended || self.focus.holds_audio(), menu || replay);
         let focused = self.focus.focused;
         if let Shell::Running(r) | Shell::PortMenu(r, _) = &mut self.shell {
-            let mute = r.settings.mute_unfocused && !focused;
-            r.ctx.audio.set_muted(mute);
-        }
-        match &mut self.shell {
-            Shell::Running(r) if !hold => r.ctx.audio.resume(),
-            Shell::Running(r) | Shell::PortMenu(r, _) => r.ctx.audio.pause(),
-            _ => {}
+            r.ctx.audio.set_muted(r.settings.mute_unfocused && !focused);
+            r.ctx.audio.set_state(state);
         }
     }
 
@@ -1060,7 +1055,7 @@ impl App {
         self.shell = Shell::Error(self.ui(gfx, View::Error(msg)));
     }
 
-    // F1 / MENU control / pad Select / resume from the background: the port menu over the game; its pacer stops, audio pauses and held
+    // F1 / MENU control / pad Select / resume from the background: the port menu over the game; its pacer stops, audio is held and held
     // keys are released (as on focus loss).
     fn open_port_menu(&mut self) {
         let Shell::Running(mut r) = std::mem::replace(&mut self.shell, Shell::Loading) else {
@@ -1512,6 +1507,17 @@ fn refresh_overlays(r: &mut Running, (lang, now_playing): (crate::i18n::Lang, bo
     }
     if r.hidden_overlay.is_some() {
         r.hidden_overlay = Some(touch());
+    }
+}
+
+// What the output does: closed in the background, else held at the mixer while the game is stopped.
+fn audio_state(background: bool, stopped: bool) -> AudioState {
+    if background {
+        AudioState::Closed
+    } else if stopped {
+        AudioState::Held
+    } else {
+        AudioState::Playing
     }
 }
 
@@ -2713,6 +2719,15 @@ mod tests {
             assert_eq!(state(&b), want[4 * k + 3], "4× batch {k}");
         }
         assert!(want[N - 1].2[0] > 600, "game frames {}", want[N - 1].2[0]);
+    }
+
+    // The menu and a paused replay hold the stream; only the background closes it.
+    #[test]
+    fn audio_state_closes_only_in_the_background() {
+        assert_eq!(audio_state(false, false), AudioState::Playing);
+        assert_eq!(audio_state(false, true), AudioState::Held);
+        assert_eq!(audio_state(true, false), AudioState::Closed);
+        assert_eq!(audio_state(true, true), AudioState::Closed);
     }
 
     #[test]

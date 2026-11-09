@@ -77,11 +77,8 @@ impl AudioOut for Watch {
     fn ensure_started(&mut self) {
         self.inner.ensure_started();
     }
-    fn pause(&mut self) {
-        self.inner.pause();
-    }
-    fn resume(&mut self) {
-        self.inner.resume();
+    fn set_state(&mut self, s: th08_core::game::AudioState) {
+        self.inner.set_state(s);
     }
     fn set_muted(&mut self, m: bool) {
         self.inner.set_muted(m);

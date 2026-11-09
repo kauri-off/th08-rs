@@ -41,6 +41,15 @@ pub struct View<'a> {
     pub core: &'a crate::coreconfig::CoreConfig,
 }
 
+// Port: `Held` feeds silence on a live stream (port menu, paused replay); `Closed` has no stream (app in the background).
+// Both freeze every BGM / SE position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioState {
+    Playing,
+    Held,
+    Closed,
+}
+
 // The sound device that executes the frame's `SoundCmd` stream (13 §1, 02 §3–§5); `audio::Audio` (cpal) in the
 // app and tools.
 pub trait AudioOut {
@@ -53,9 +62,8 @@ pub trait AudioOut {
     fn is_started(&self) -> bool;
     // Opens the output stream (on the web: from a user gesture).
     fn ensure_started(&mut self);
-    // Port: output held / restarted by the app (background, port menu); no logic effect.
-    fn pause(&mut self) {}
-    fn resume(&mut self) {}
+    // Port: what the output does while the app is in this state; no logic effect.
+    fn set_state(&mut self, _: AudioState) {}
     // Port: output silenced (unfocused window) while it keeps running; no logic effect.
     fn set_muted(&mut self, _: bool) {}
 }

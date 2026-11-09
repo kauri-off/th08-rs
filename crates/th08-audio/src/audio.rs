@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use th08_core::assets::Source;
+use th08_core::game::AudioState;
 
 use crate::bgm::{BgmSource, Pcm, PcmWriter};
 
@@ -171,6 +172,8 @@ struct Mixer {
     bgm_gain: f32,
     se_gain: f32,
     muted: bool,
+    // Port: the device callback gets silence and nothing advances (port menu, paused replay).
+    held: bool,
     // Streaming object +0x30 playing flag cleared by `Stop` with the position kept (command 6, mode-1 fade end).
     stopped: bool,
     // MIDI mode (02 §5): the sequencer + synth, driven by the output sample clock; not scaled by the BGM volume.
@@ -216,6 +219,10 @@ impl Mixer {
 
     #[expect(clippy::cast_sign_loss, reason = "voice positions are ≥ 0")]
     fn render(&mut self, out: &mut [f32], channels: usize) {
+        if self.held {
+            out.fill(0.0);
+            return;
+        }
         let step = BGM_RATE / self.out_rate;
         #[cfg(not(target_arch = "wasm32"))]
         let n = out.len() / channels;
@@ -323,8 +330,8 @@ pub struct Audio {
     // thbgm.dat or thbgm.pak, chosen on the first play command (needs async reads of the source).
     bgm: Arc<Mutex<Option<Arc<BgmSource>>>>,
     mixer: Arc<Mutex<Mixer>>,
-    stream: Option<cpal::Stream>,
-    // Port: output held by `pause`; `lost` is set by the error callback when the device or stream
+    stream: Option<Box<dyn OutputStream>>,
+    // Port: output closed by `pause`; `lost` is set by the error callback when the device or stream
     // is gone, so `resume` builds a new stream (the mixer keeps the BGM / voice positions).
     paused: bool,
     lost: Arc<AtomicBool>,
@@ -556,7 +563,7 @@ impl Audio {
 
     // Must be called from a user gesture on the web (AudioContext policy).
     pub fn ensure_started(&mut self) {
-        if !self.started && !self.paused {
+        if !self.started && !self.paused && !lock(&self.mixer).held {
             self.open();
         }
         // Web: a context opened outside a gesture the browser accepts stays suspended; each later gesture resumes it.
@@ -564,7 +571,7 @@ impl Audio {
         if !self.paused
             && let Some(s) = &self.stream
         {
-            let _ = s.play();
+            let _ = s.start();
         }
     }
 
@@ -603,10 +610,42 @@ impl Audio {
         }
     }
 
-    // Port: holds the output (app background, port menu) within one device callback. Native: the stream is closed,
-    // which discards the samples the device (AAudio / ALSA) still queues instead of letting them drain; web: the
-    // AudioContext is suspended (reopening it would need a user gesture). The mixer keeps every position. Idempotent.
-    pub fn pause(&mut self) {
+    // Port: the mixer goes silent and frozen within one device callback, with no stream call on the main thread while
+    // only held. A stream that died while held is rebuilt on release.
+    pub fn set_state(&mut self, state: AudioState) {
+        let held = state == AudioState::Held;
+        let was_held = std::mem::replace(&mut lock(&self.mixer).held, held);
+        if was_held != held {
+            log::info!(
+                "audio: {} (stream {})",
+                if held { "held" } else { "released" },
+                if self.stream.is_some() {
+                    "open"
+                } else {
+                    "none"
+                }
+            );
+        }
+        if state == AudioState::Closed {
+            return self.pause();
+        }
+        self.resume();
+        if was_held
+            && !held
+            && !self.offline
+            && self.started
+            && (self.stream.is_none() || self.lost.load(Ordering::Relaxed))
+        {
+            log::warn!("audio: stream lost while held; reopening");
+            self.stream = None;
+            self.open();
+        }
+    }
+
+    // Port: app in the background. Native: the stream is closed, which discards the samples the device (AAudio / ALSA)
+    // still queues instead of letting them drain; web: the AudioContext is suspended (reopening it would need a user
+    // gesture). The mixer keeps every position. Idempotent.
+    fn pause(&mut self) {
         if std::mem::replace(&mut self.paused, true) {
             return;
         }
@@ -616,7 +655,7 @@ impl Audio {
         }
         #[cfg(target_arch = "wasm32")]
         if let Some(s) = &self.stream
-            && let Err(e) = s.pause()
+            && let Err(e) = s.stop()
         {
             log::warn!("audio pause: {e}; the stream is closed");
             self.stream = None;
@@ -625,13 +664,13 @@ impl Audio {
     }
 
     // Port: output again; native (and a lost device / failed play) gets a new stream. Idempotent.
-    pub fn resume(&mut self) {
+    fn resume(&mut self) {
         if !std::mem::replace(&mut self.paused, false) {
             return;
         }
         let lost = self.lost.load(Ordering::Relaxed);
         if let Some(s) = &self.stream
-            && (lost || s.play().is_err())
+            && (lost || s.start().is_err())
         {
             log::warn!("audio resume: stream lost or not playing; reopening");
             self.stream = None;
@@ -808,11 +847,8 @@ impl th08_core::game::AudioOut for Audio {
     fn ensure_started(&mut self) {
         Audio::ensure_started(self);
     }
-    fn pause(&mut self) {
-        Audio::pause(self);
-    }
-    fn resume(&mut self) {
-        Audio::resume(self);
+    fn set_state(&mut self, s: AudioState) {
+        Audio::set_state(self, s);
     }
     fn set_muted(&mut self, on: bool) {
         Audio::set_muted(self, on);
@@ -891,8 +927,29 @@ impl Stats {
     }
 }
 
-type OpenStream =
-    fn(Arc<Mutex<Mixer>>, Arc<AtomicBool>, Arc<Stats>, Option<u32>) -> Result<cpal::Stream>;
+// An open output; dropping it closes the device stream.
+trait OutputStream {
+    fn start(&self) -> Result<()>;
+    #[cfg(target_arch = "wasm32")]
+    fn stop(&self) -> Result<()>;
+}
+
+impl OutputStream for cpal::Stream {
+    fn start(&self) -> Result<()> {
+        Ok(self.play()?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn stop(&self) -> Result<()> {
+        Ok(self.pause()?)
+    }
+}
+
+type OpenStream = fn(
+    Arc<Mutex<Mixer>>,
+    Arc<AtomicBool>,
+    Arc<Stats>,
+    Option<u32>,
+) -> Result<Box<dyn OutputStream>>;
 
 // Android: with cpal's `realtime` feature the AAudio stream asks for the LowLatency performance mode (fast mixer /
 // MMAP path, buffer ≈ 2 bursts, tuned up by cpal on underruns) instead of the default deep-buffer path.
@@ -905,7 +962,7 @@ fn open_stream(
     lost: Arc<AtomicBool>,
     stats: Arc<Stats>,
     buffer: Option<u32>,
-) -> Result<cpal::Stream> {
+) -> Result<Box<dyn OutputStream>> {
     let host = cpal::default_host();
     let pick = |want: &str| {
         host.output_devices().ok()?.find(|d| {
@@ -985,7 +1042,7 @@ fn open_stream(
         cfg.buffer_size,
         f64::from(burst) * 1000.0 / f64::from(cfg.sample_rate)
     );
-    Ok(stream)
+    Ok(Box::new(stream))
 }
 
 // th08.dat from TH08_DIR for the audio / MIDI tests (core's testdata.rs is test-only in core).
@@ -1149,7 +1206,7 @@ mod tests {
             _: Arc<AtomicBool>,
             _: Arc<Stats>,
             _: Option<u32>,
-        ) -> Result<cpal::Stream> {
+        ) -> Result<Box<dyn OutputStream>> {
             OPENS.with(|n| n.set(n.get() + 1));
             anyhow::bail!("no device")
         }
@@ -1172,6 +1229,101 @@ mod tests {
         assert_eq!(opens(), 1);
         a.reopen_if_lost(t + Duration::from_secs(1));
         assert_eq!(opens(), 2);
+    }
+
+    thread_local!(static STREAMS: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) });
+
+    struct CountingStream;
+    impl OutputStream for CountingStream {
+        fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        #[cfg(target_arch = "wasm32")]
+        fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+    impl Drop for CountingStream {
+        fn drop(&mut self) {
+            STREAMS.with(|c| c.set((c.get().0, c.get().1 + 1)));
+        }
+    }
+
+    fn counting_open(
+        _: Arc<Mutex<Mixer>>,
+        _: Arc<AtomicBool>,
+        _: Arc<Stats>,
+        _: Option<u32>,
+    ) -> Result<Box<dyn OutputStream>> {
+        STREAMS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+        Ok(Box::new(CountingStream))
+    }
+
+    // An `Audio` playing on a counting fake; `streams()` is (opens, closes) since it started.
+    fn counting_audio() -> Audio {
+        let mut a = Audio::new(Source::new(NoFiles), AudioConfig::default());
+        a.open_stream = counting_open;
+        a.ensure_started();
+        assert_eq!(streams(), (1, 0));
+        STREAMS.with(|c| c.set((0, 0)));
+        a
+    }
+
+    fn streams() -> (u32, u32) {
+        STREAMS.with(std::cell::Cell::get)
+    }
+
+    // Opening and closing the port menu never touches the stream; the held mixer is silent and frozen.
+    #[test]
+    fn menu_hold_keeps_the_stream() {
+        let mut a = counting_audio();
+        lock(&a.mixer).music = ring_mixer(1000, 0).music.take();
+        let mut out = [0.0f32; 20];
+        render_guarded(&a.mixer, &mut out, 2);
+        let cursor = |a: &Audio| lock(&a.mixer).music.as_ref().unwrap().cursor;
+        let at = cursor(&a);
+        a.set_state(AudioState::Held);
+        a.set_state(AudioState::Held);
+        a.set_state(AudioState::Playing);
+        assert_eq!(streams(), (0, 0));
+        a.set_state(AudioState::Held);
+        out.fill(1.0);
+        render_guarded(&a.mixer, &mut out, 2);
+        assert_eq!(out, [0.0; 20]);
+        assert_eq!(cursor(&a), at);
+        a.set_state(AudioState::Playing);
+        assert_eq!(streams(), (0, 0));
+        render_guarded(&a.mixer, &mut out, 2);
+        assert_eq!(cursor(&a), at + 10.0);
+    }
+
+    // Suspend closes the stream, from play or from the menu; foreground opens it again, still held in the menu.
+    #[test]
+    fn suspend_closes_the_stream() {
+        let mut a = counting_audio();
+        a.set_state(AudioState::Closed);
+        assert_eq!(streams(), (0, 1));
+        a.set_state(AudioState::Playing);
+        assert_eq!(streams(), (1, 1));
+        a.set_state(AudioState::Held);
+        a.set_state(AudioState::Closed);
+        assert_eq!(streams(), (1, 2));
+        a.set_state(AudioState::Held);
+        assert_eq!(streams(), (2, 2));
+        assert!(lock(&a.mixer).held);
+    }
+
+    // A stream that dies while held is rebuilt on release, not before.
+    #[test]
+    fn stream_lost_while_held_recovers() {
+        let mut a = counting_audio();
+        a.set_state(AudioState::Held);
+        a.lost.store(true, Ordering::Relaxed);
+        a.set_state(AudioState::Held);
+        assert_eq!(streams(), (0, 0));
+        a.set_state(AudioState::Playing);
+        assert_eq!(streams(), (1, 1));
+        assert!(!a.lost.load(Ordering::Relaxed));
     }
 
     // The offline mix yields exactly ⌊n × rate / 60⌋ sample frames after n game frames (735 per frame at 44.1 kHz),
