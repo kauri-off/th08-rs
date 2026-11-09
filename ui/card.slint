@@ -298,7 +298,7 @@ export component PauseCard inherits Window {
     property <bool> hide-mids-column: asking && column && mids-need + confirm-measure.preferred-height + foot-base > geo.foot-limit - rows-top;
     property <bool> hide-mids: column ? hide-mids-column : asking && pillar && mids-need + confirm-measure.preferred-height > rows-bottom - rows-top;
     // A short pillar gives the help and device lines' room to the rows.
-    property <length> rows-least: resume-h + 60px * gaps + (asking ? confirm-measure.preferred-height : (mids.length + dangers.length) * least-h);
+    property <length> rows-least: resume-h + 60px * gaps + (asking ? confirm-measure.preferred-height : mids.length * least-h + max(dangers.length * least-h, dangers-m.preferred-height));
     // The rows of a tight pillar share what is left, down to their least height.
     property <length> row-fit: !pillar || asking ? row-h : clamp((rows-bottom - rows-top - resume-h - 60px * gaps) / max(1, mids.length + dangers.length), least-h, row-h);
     property <length> column-rows: resume-h + 52px + (hide-mids-column ? 0 : mids.length * max(row-h, Ui.tap)) + (asking ? confirm-measure.preferred-height : dangers.length * max(row-h, Ui.tap));
@@ -356,6 +356,10 @@ export component PauseCard inherits Window {
             width: geo.w;
             spacing: 8px;
             for n in root.notes: Text { text: n; font-family: Tk.sans; font-size: root.status-size; wrap: word-wrap; }
+        }
+        dangers-m := VerticalLayout {
+            width: geo.w - root.row-size;
+            for r in root.dangers: Text { text: r.label; font-family: Tk.serif; font-size: root.row-size; wrap: word-wrap; }
         }
         help-m := Text { text: root.help; font-family: Tk.sans; font-size: root.help-size; width: geo.w; wrap: word-wrap; }
         dev-m := Text { text: root.device-line; font-family: Tk.sans; font-size: root.status-size; width: geo.w; wrap: word-wrap; }
