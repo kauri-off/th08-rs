@@ -47,7 +47,7 @@ class TextAuditReceiver : BroadcastReceiver() {
         val t = r.layoutInput.text.text
         if (t.isEmpty()) return
         val last = r.lineCount - 1
-        if (r.isLineEllipsized(last) || r.getLineRight(last) - r.getLineLeft(last) > shown + 1f) cut.put(t)
+        if (r.isLineEllipsized(last) || r.getLineRight(last) - r.getLineLeft(last) > shown + 4f) cut.put(t)
         val words = BreakIterator.getWordInstance(ULocale.ROOT).apply { setText(t) }
         for (l in 0 until r.lineCount - 1) {
             val k = r.getLineEnd(l)

@@ -159,7 +159,7 @@ private fun Loaded(o: JSONObject, w: Words, wide: Boolean) {
         when (tab) {
             Tab.Overview -> overview(o, st, w)
             Tab.Scores -> sd?.let { scores(o, it, w) }
-            Tab.Cards -> sd?.let { cards(o, it, w, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
+            Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
             Tab.History -> history(st, w)
         }
     }
@@ -218,8 +218,20 @@ private fun Section(t: String) = Text(t, style = MaterialTheme.typography.titleS
 
 // A list row: title and detail on the left, one right-aligned number column per `values`.
 @Composable
-private fun Entry(title: String, detail: String?, values: List<String>, head: Boolean = false) {
+private fun Entry(title: String, detail: String?, values: List<String>, head: Boolean = false, stacked: Boolean = false) {
     val c = MaterialTheme.colorScheme
+    if (stacked) {
+        Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 6.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge.cjk(title))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(detail.orEmpty(), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
+                values.forEach { v ->
+                    Text(v, Modifier.widthIn(min = 72.dp), style = MaterialTheme.typography.titleSmall.tnum(), textAlign = TextAlign.End, maxLines = 1, softWrap = false)
+                }
+            }
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth().heightIn(min = if (head) 32.dp else 48.dp).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
@@ -325,7 +337,7 @@ private fun LazyListScope.scores(o: JSONObject, sd: JSONObject, w: Words) {
     }
 }
 
-private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, shot: Int, setShot: (Int) -> Unit, all: Boolean, setAll: (Boolean) -> Unit) {
+private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, stacked: Boolean, shot: Int, setShot: (Int) -> Unit, all: Boolean, setAll: (Boolean) -> Unit) {
     val shotKeys = o.getJSONArray("shot_keys")
     item("cards_controls") {
         Section(str(R.string.stats_cards))
@@ -358,6 +370,6 @@ private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, shot: I
         val p = c.getJSONArray("practice").getJSONArray(shot)
         val id = c.getInt("id") + 1
         Entry(c.getString("name").ifEmpty { str(R.string.stats_card_no, id) }, "No. %03d".format(Locale.US, id),
-            listOf("${s.getInt(0)} / ${s.getInt(1)}", "${p.getInt(0)} / ${p.getInt(1)}"))
+            listOf("${s.getInt(0)} / ${s.getInt(1)}", "${p.getInt(0)} / ${p.getInt(1)}"), stacked = stacked)
     }
 }
