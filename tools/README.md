@@ -27,6 +27,7 @@ machine only (systemd user session, local replay sets in `packaging/local/local.
 | `batch_run SET OUT` | data + replay sets | one replay set (`$TH08_EXT_REPLAYS/SET`) against `batch/SET.identical` |
 | `android/cargo_android.sh` | all | `libth08.so` per ABI with the NDK (used by the Gradle build) |
 | `android/run_debug.sh` | all | debug APK on an emulator: build, install, run, screenshot |
+| `android/ui_matrix.py` | all | Android launcher on an emulator with real gestures across orientation, language, theme, font scale and cut-out; reachability, value-guard and layout checks, contact sheets (`--port`, default `$QEMU_PORT`) |
 | `android/build_apk.sh` | all | convenience wrapper; `cargo xtask dist --target android-apk` is the supported way |
 | `q` | maintainer | job queue for heavy runs on one machine (systemd user units, weighted slots); stall watchdog (`wait` exit 76, `kill ID`), two emulator slots (`QEMU_PORT`, own AVD per slot), emulator snapshot around emu jobs, scratch quota warning; `q selftest` |
 | `arch_job NAME` | maintainer | `arch_check run devdata/arch_ref` as a `q` job |
