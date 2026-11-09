@@ -7,6 +7,24 @@ export struct Geometry {
     panel-x: length, x: length, w: length, top: length, bottom: length, rail-w: length, rail-x: length, rail-text-w: length,
 }
 
+export struct SheetLine { text: string, x: length, cy: length, size: length, serif: bool, color: color }
+
+// Ringed text lines at given places, for the text comparison sheet.
+export component TextSheet inherits Window {
+    in property <[SheetLine]> lines;
+    background: transparent;
+    for l in lines: Ringed {
+        x: l.x;
+        y: l.cy - l.size;
+        height: l.size * 2;
+        text: l.text;
+        font-size: l.size;
+        serif: l.serif;
+        color: l.color;
+        horizontal-alignment: left;
+    }
+}
+
 // Measures one string for the layout check.
 export component TextProbe inherits Window {
     in property <string> text;

@@ -54,6 +54,7 @@ cross-target check plays.
 | `launchershot` | all | the launcher screen to a PNG, off-screen |
 | `portmenushot` | data + GPU | the in-game port menu over a game frame to a PNG |
 | `uishots` | all (+ GPU for PNGs) | every launcher view and port-menu page × size × OS scale × language over a fixture save / game folder; the layout check (clipped / overlapping text, mid-word breaks, glued words, stock egui visuals, old colours) exits 1 on any issue; with `OUT_DIR` also the PNGs, `index.html` and `sheet_*.png` contact sheets (`tools/offscreen`) |
+| `uitextsheet` | GPU | blind comparison sheets of the same UI strings from the Scene renderer, Slint and egui (`OUT_DIR`: `sheet_*.png`, `zoom_*.png`, `KEY.txt`) |
 | `anmview` | data | ANM textures to PNG with sprite rects; `--dis` prints the scripts |
 | `eclview` | data | disassembles an `.ecl` file |
 | `stdview` | data | prints an `.std` file |

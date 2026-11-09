@@ -365,6 +365,100 @@ fn render(
     gfx.read_texture(enc, &tex)
 }
 
+// One line of the text comparison sheet: `cy` is its vertical centre, points.
+pub struct SheetText {
+    pub text: String,
+    pub x: f32,
+    pub cy: f32,
+    pub size: f32,
+    pub serif: bool,
+    pub color: [u8; 3],
+}
+
+// `frame` with the lines drawn by Slint at `scale` px per point.
+pub fn sheet_slint(
+    gfx: &Gfx,
+    frame: &image::RgbaImage,
+    lines: &[SheetText],
+    scale: f32,
+) -> anyhow::Result<image::RgbaImage> {
+    let gpu = host::Gpu {
+        instance: gfx.instance().clone(),
+        device: gfx.device.clone(),
+        queue: gfx.queue.clone(),
+    };
+    host::use_gpu(gpu.clone())?;
+    let ui = super::TextSheet::new()?;
+    ui.show()?;
+    let adapter = host::take_adapter().ok_or(slint::PlatformError::NoPlatform)?;
+    let model: Vec<super::SheetLine> = lines
+        .iter()
+        .map(|l| super::SheetLine {
+            text: l.text.as_str().into(),
+            x: l.x,
+            cy: l.cy,
+            size: l.size,
+            serif: l.serif,
+            color: slint::Color::from_rgb_u8(l.color[0], l.color[1], l.color[2]),
+        })
+        .collect();
+    ui.set_lines(std::rc::Rc::new(slint::VecModel::from(model)).into());
+    let (w, h) = frame.dimensions();
+    adapter.resize(w, h, scale);
+    let mut surface = host::Surface::new(adapter, gpu);
+    Ok(render(gfx, frame, |t, enc| surface.paint(t, enc)))
+}
+
+// `frame` with the lines drawn by the egui path at `scale` px per point.
+pub fn sheet_egui(
+    gfx: &Gfx,
+    frame: &image::RgbaImage,
+    lines: &[SheetText],
+    scale: f32,
+) -> image::RgbaImage {
+    let ctx = egui::Context::default();
+    crate::i18n::install_fonts(&ctx, None);
+    let (w, h) = frame.dimensions();
+    let mut raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(w as f32 / scale, h as f32 / scale),
+        )),
+        ..Default::default()
+    };
+    raw.viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .native_pixels_per_point = Some(scale);
+    let mut pending = egui::TexturesDelta::default();
+    let mut last = None;
+    for _ in 0..3 {
+        let out = ctx.run_ui(raw.clone(), |ui| {
+            let p = ui.ctx().layer_painter(egui::LayerId::background());
+            for l in lines {
+                let font = if l.serif {
+                    crate::theme::serif(l.size)
+                } else {
+                    crate::theme::sans(l.size)
+                };
+                let [r, g, b] = l.color;
+                let color = egui::Color32::from_rgb(r, g, b);
+                let galley = p.layout_no_wrap(l.text.clone(), font, color);
+                let pos = egui::pos2(l.x, l.cy - galley.size().y / 2.0);
+                crate::theme::outlined(&p, pos, galley, color, false);
+            }
+        });
+        pending.append(out.textures_delta);
+        last = Some((out.shapes, out.pixels_per_point));
+    }
+    let (shapes, ppp) = last.expect("three passes");
+    let jobs = ctx.tessellate(shapes, ppp);
+    let mut renderer = None;
+    render(gfx, frame, |t, enc| {
+        portmenu::paint(&mut renderer, &mut pending, &jobs, ppp, t, enc);
+    })
+}
+
 // A live Slint pause card on a headless device, with the menu's own state, driven by a mock clock.
 pub struct CardHarness<'a> {
     pub rig: CardRig,

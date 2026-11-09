@@ -3174,7 +3174,7 @@ fn settings_ui(
     out
 }
 
-fn paint(
+pub(crate) fn paint(
     renderer: &mut Option<(wgpu::TextureFormat, egui_wgpu::Renderer)>,
     pending: &mut egui::TexturesDelta,
     jobs: &[egui::ClippedPrimitive],
