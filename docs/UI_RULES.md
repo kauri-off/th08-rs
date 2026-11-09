@@ -43,7 +43,7 @@ cancels. The pause card (`ConfirmBlock`): question, note, then the safe answer, 
 
 **Pause card.** Text ring only, no glow. Heading caption flush left; the team shows except on the phone. Retry and Quit
 exist only when the game's own pause path can take them. 16:9: right pillar; a short pillar drops help and device, then
-the hints. 4:3: on the playfield, ending above the player; the device line goes first. Phone: run items in the left bar,
+the hints, last the notes (rows and the question always stay). 4:3: on the playfield, ending above the player; the device line goes first, then hints, then notes. Phone: run items in the left bar,
 quick settings in the right; on touch Resume keeps its band and tick.
 
 | Input | Does |

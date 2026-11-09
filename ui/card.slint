@@ -304,7 +304,7 @@ export component PauseCard inherits Window {
     property <length> column-rows: resume-h + 52px + (hide-mids-column ? 0 : mids.length * max(row-h, Ui.tap)) + (asking ? confirm-measure.preferred-height : dangers.length * max(row-h, Ui.tap));
     property <bool> foot-no-hints: pillar ? rows-top + rows-least + foot-base + 36px > geo.bottom : column && rows-top + column-rows + foot-base > geo.foot-limit;
     // Last step: the rows and the question always stay; the notes go when nothing else is left to give.
-    property <bool> foot-no-notes: pillar ? rows-top + rows-least + notes-m.preferred-height + 110px > geo.bottom : column && rows-top + column-rows + notes-m.preferred-height + 28px > geo.foot-limit;
+    property <bool> foot-no-notes: pillar ? rows-top + rows-least + notes-m.preferred-height + 170px > geo.bottom : column && rows-top + column-rows + notes-m.preferred-height + 28px > geo.foot-limit;
     property <bool> foot-tight: pillar && rows-top + rows-least + foot-base + help-m.preferred-height + status-size * 1.6 + 36px > geo.bottom;
 
     function hover(i: int, on: bool) {
