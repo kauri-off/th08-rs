@@ -147,6 +147,25 @@ pub fn next_timer() -> Option<Duration> {
     slint::platform::duration_until_next_timer_update()
 }
 
+thread_local! {
+    static LAST_PASS: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+pub fn pass_begin() -> Instant {
+    Instant::now()
+}
+
+// Logs a menu pass that took long, or a late one during continuous redraws.
+pub fn pass_end(what: &str, begin: Instant) {
+    let took = begin.elapsed().as_micros();
+    let gap = LAST_PASS
+        .replace(Some(begin))
+        .map_or(0, |last| begin.duration_since(last).as_micros());
+    if took > 12_000 || (25_000..1_000_000).contains(&gap) {
+        log::info!("slintui pass: {what} took {took} us, gap {gap} us");
+    }
+}
+
 // CPU time of the texture redraws and composites since the last log line.
 #[derive(Default)]
 struct FrameLog {
@@ -320,6 +339,9 @@ impl Surface {
                 log::error!("slintui: render failed: {e}");
             }
             let us = start.elapsed().as_micros() as u64;
+            if us > 8_000 {
+                log::info!("slintui render: {us} us");
+            }
             self.log.renders += 1;
             self.log.render_us += us;
             self.log.max_render_us = self.log.max_render_us.max(us);

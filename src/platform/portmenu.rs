@@ -785,11 +785,15 @@ impl PortMenu {
             gfx.blit_options.integer,
         );
         if self.use_slint && self.edit.is_none() {
+            let pass = crate::slintui::host::pass_begin();
             if self.focus.page == Page::Settings {
                 self.redraw_slint(window, gfx, lay);
+                crate::slintui::host::pass_end("settings", pass);
                 return None;
             }
-            return self.redraw_card(window, gfx, lay);
+            let act = self.redraw_card(window, gfx, lay);
+            crate::slintui::host::pass_end("card", pass);
+            return act;
         }
         self.slint = None;
         self.card = None;
@@ -927,7 +931,10 @@ impl PortMenu {
                 device: gfx.device.clone(),
                 queue: gfx.queue.clone(),
             };
-            match Card::new(gpu, gfx.generation()) {
+            let built = web_time::Instant::now();
+            let made = Card::new(gpu, gfx.generation());
+            log::info!("slintui build: card {} us", built.elapsed().as_micros());
+            match made {
                 Ok(c) => self.card = Some(Box::new(c)),
                 Err(e) => {
                     log::error!("slintui: {e}; falling back to the egui card");
@@ -986,7 +993,10 @@ impl PortMenu {
                 device: gfx.device.clone(),
                 queue: gfx.queue.clone(),
             };
-            match SlintPage::new(gpu, gfx.generation(), words, lay.touch) {
+            let built = web_time::Instant::now();
+            let made = SlintPage::new(gpu, gfx.generation(), words, lay.touch);
+            log::info!("slintui build: settings {} us", built.elapsed().as_micros());
+            match made {
                 Ok(mut p) => {
                     p.place(Place { lay, safe, size });
                     p.show_tab(self.focus.tab, &self.model, lang);
