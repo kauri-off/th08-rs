@@ -80,6 +80,8 @@ ui-check = ["dep:i-slint-backend-testing"]
 gilrs = "0.11.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Slint's text stack loads fontconfig at run time, so no build machine needs its headers.
+fontique = { version = "0.11.1", features = ["fontconfig-dlopen"] }
 gilrs = { version = "0.11.2", optional = true }
 # The window's icon on Wayland (icon/wayland.rs): winit's own Wayland crates, libwayland dlopened as winit does.
 wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
