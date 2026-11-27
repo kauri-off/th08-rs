@@ -110,9 +110,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             if let Some(apk) = sources::ApkAssetSource::new(app.asset_manager()) {
                 log::info!("game files bundled in the APK: {:?}", apk.names_list());
                 app::run_android(app, Some(th08_core::assets::Source::new(apk)), s);
-                // Saves are written before the event loop exits; a second android_main in this process would make
-                // winit fail (RecreationAttempt), so the :game process ends here and the next Play starts a fresh one.
-                std::process::exit(0);
+                end_game_process();
             }
             legacy.filter(|d| launcher::is_game_dir(d)).or(imported)
         }
@@ -139,7 +137,13 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         None => log::error!("no internal files dir: game folder unavailable"),
     }
     app::run_android(app, None, s);
-    std::process::exit(0);
+    end_game_process();
+}
+
+#[cfg(target_os = "android")]
+fn end_game_process() -> ! {
+    log::logger().flush();
+    unsafe { libc::_exit(0) }
 }
 
 // The Compose launcher's settings for this start only (developer rows): `key = value` lines in

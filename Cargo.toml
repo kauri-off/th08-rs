@@ -127,6 +127,8 @@ jni = "0.22.4"
 ndk-context = "0.1.1"
 # Import of picked game files into <internal>/game (gameimport.rs).
 th08-repack = { path = "crates/th08-repack", features = ["device"] }
+# _exit for the end of the :game process (lib.rs).
+libc = "0.2"
 winit = { version = "0.30", features = ["android-native-activity"] }
 # slint compiles its public femtovg module out on Android; same pin as slint.
 i-slint-renderer-femtovg = { version = "=1.18.1", default-features = false, features = ["wgpu-30"] }
