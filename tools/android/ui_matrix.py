@@ -674,6 +674,9 @@ def picker(ui, st):
 def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
     secs = sections()
     where = {k: st[t] for t, keys in secs for k in keys}
+    for e in rows:
+        if e["key"] not in where:
+            ui.problem("no Settings section", e["key"])
     rows = [e for e in rows if e["key"] in where]
     seen = set()
     app = st["section_app"]
