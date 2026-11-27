@@ -140,9 +140,6 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     end_game_process();
 }
 
-// Saves are written before the event loop exits; a second android_main in this process would make winit fail
-// (RecreationAttempt), so the :game process ends here and the next Play starts a fresh one. `_exit`, not `exit`: exit
-// runs C++ static destructors under the framework's running hwuiTask threads, which then abort on a destroyed mutex.
 #[cfg(target_os = "android")]
 fn end_game_process() -> ! {
     log::logger().flush();

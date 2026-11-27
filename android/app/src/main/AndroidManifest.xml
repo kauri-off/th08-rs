@@ -27,7 +27,7 @@
          fresh. Back goes to the game only, through its OnBackInvokedCallback (API 33+) or KEYCODE_BACK.
          configChanges lists every flag: a relaunch would end the run (android_main cannot be re-entered). -->
     <activity android:name=".GameActivity" android:exported="false" android:process=":game"
-        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|mcc|mnc|touchscreen|grammaticalGender|assetsPaths|resourcesUnused"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|mcc|mnc|touchscreen|grammaticalGender|assetsPaths"
         android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
       <meta-data android:name="android.app.lib_name" android:value="th08"/>
     </activity>

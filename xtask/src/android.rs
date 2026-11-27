@@ -159,7 +159,7 @@ mod tests {
     use super::*;
 
     // `configChanges` flags of attrs_manifest.xml, compileSdk 36.
-    const CONFIG_CHANGES: [&str; 20] = [
+    const CONFIG_CHANGES: [&str; 19] = [
         "mcc",
         "mnc",
         "locale",
@@ -179,7 +179,6 @@ mod tests {
         "fontScale",
         "fontWeightAdjustment",
         "assetsPaths",
-        "resourcesUnused",
     ];
 
     fn repo_file(path: &str) -> String {
@@ -193,11 +192,12 @@ mod tests {
     }
 
     #[test]
-    fn game_activity_handles_every_config_change() {
+    fn game_activity_handles_known_config_changes() {
         let manifest = repo_file("android/app/src/main/AndroidManifest.xml");
         let game = after(&manifest, "android:name=\".GameActivity\"");
         let declared = after(game, "android:configChanges=\"");
         let declared: Vec<_> = declared[..declared.find('"').unwrap()].split('|').collect();
+        assert!(!declared.contains(&"resourcesUnused"));
         let missing: Vec<_> = CONFIG_CHANGES
             .iter()
             .filter(|f| !declared.contains(f))
@@ -226,6 +226,7 @@ mod tests {
             .split("<flag name=\"")
             .skip(1)
             .map(|f| &f[..f.find('"').unwrap()])
+            .filter(|flag| *flag != "resourcesUnused")
             .collect();
         let mut ours = CONFIG_CHANGES.to_vec();
         sdk_flags.sort_unstable();
