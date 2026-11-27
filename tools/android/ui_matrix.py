@@ -808,6 +808,8 @@ def walk_plain(ui, emu, c):
         p = s.find(st["play"])
         if p is None or p.h < DP_MIN * ui.dp - 2:
             ui.problem("Play not in the first screen", name)
+        if not s.find("Imperishable Night") or not s.find("東方永夜抄"):
+            ui.problem("Home title missing", name)
         has_summary = any(st["home_best"] in n.text.splitlines() for n in s.nodes)
         if has_summary != has_runs:
             ui.problem("incorrect Home summary", f"{name}: expected summary={has_runs}")

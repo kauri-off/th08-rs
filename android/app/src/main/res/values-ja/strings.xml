@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="title">東方永夜抄</string>
   <string name="subtitle">Imperishable Night 移植版</string>
   <string name="more">その他</string>
   <string name="reset_all">すべての設定を初期状態に戻す</string>

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Kotlin-only launcher strings (docs/arch/I18N.md §3.3); setting texts come from settings_schema.json. -->
 <resources>
-  <string name="title">Imperishable Night</string>
+  <string name="title" translatable="false">Imperishable Night</string>
   <string name="subtitle">Touhou 8 port</string>
   <string name="more">More</string>
   <string name="reset_all">Reset all settings</string>

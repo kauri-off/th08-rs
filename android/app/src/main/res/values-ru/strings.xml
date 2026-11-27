@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="title">Imperishable Night</string>
   <string name="subtitle">Порт Touhou 8</string>
   <string name="more">Ещё</string>
   <string name="reset_all">Сбросить все настройки</string>
