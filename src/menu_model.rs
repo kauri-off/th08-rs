@@ -521,6 +521,7 @@ impl MenuModel {
         let shown = self.shown();
         let handled = if self.page == Page::Settings {
             self.page = Page::Card;
+            self.set_scroll(self.scroll);
             self.item = Item::Settings;
             self.armed = false;
             true
@@ -1355,6 +1356,24 @@ mod tests {
             assert!(!m.take_frame());
         }
         assert!(changes > tabs);
+    }
+
+    #[test]
+    fn going_back_while_coasting_draws_the_card_once() {
+        let mut m = on_tab(0);
+        for _ in 0..8 {
+            m.apply(Input::Drag {
+                dy: -40.0,
+                dt: 1.0 / 60.0,
+            });
+        }
+        m.apply(Input::Release);
+        assert!(m.animating());
+        m.take_frame();
+        assert!(m.back());
+        assert_eq!(m.page(), Page::Card);
+        assert!(m.take_frame());
+        assert!(!m.take_frame());
     }
 
     #[test]

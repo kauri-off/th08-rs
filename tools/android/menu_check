@@ -11,7 +11,10 @@ if [[ -z $SRC || ! -e $SRC ]]; then
   exit 0
 fi
 : "${QEMU_PORT:?run as a q emu job}"
-D=${1:-target/android/menu_check}; mkdir -p "$D"
+D=${1:-target/android/menu_check}
+mkdir -p "$D" target/android || exit 1
+exec {lock}>target/android/menu_check.lock || exit 1
+flock -x "$lock" || exit 1
 # Screen points on the th08dbg AVD (2400x1080, landscape, split menu).
 SETTINGS="300 667" TAB="220 383" BACK="220 105" RETRY="300 826" KEEP="300 826" RESUME="300 525"
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}; A="$SDK/platform-tools/adb -s emulator-$QEMU_PORT"; PKG=org.th08.port.debug

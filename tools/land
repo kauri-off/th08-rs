@@ -17,13 +17,22 @@ setup() {
 
 # 0 when the tree of commit $1 has a pass stamp at the level it needs against master; else says why.
 stamp_ok() {
-  local tree need f lv
+  local tree need f lv rule=$M/tools/check_level requirements
   tree=$(git rev-parse "$1^{tree}")
-  need=$(tools/check_level master "$1" | head -1)
+  if [[ -n $2 ]]; then
+    rule=$2/tools/check_level
+  elif ! git diff --quiet master "$1" -- tools/check_level; then
+    echo "tools/land: $1 needs its worktree checker"; return 1
+  fi
+  requirements=$("$rule" master "$1") || return 1
+  need=$(head -1 <<< "$requirements")
   f=devdata/checks/$tree.pass
   [[ -f $f ]] || { echo "tools/land: no pass stamp for tree ${tree:0:12} (needs $need)"; return 1; }
   lv=$(sed -n 's/^level: //p' "$f")
   (( $(rank "$lv") >= $(rank "$need") )) || { echo "tools/land: stamp of tree ${tree:0:12} is $lv, needs $need"; return 1; }
+  if grep -q '^emu:' <<< "$requirements" && ! grep -qE '^emu: [0-9]{8}-[0-9]{6}-[a-f0-9]{4}$' "$f"; then
+    echo "tools/land: stamp of tree ${tree:0:12} has no emulator result"; return 1
+  fi
   LEVEL=$lv
 }
 
@@ -39,7 +48,7 @@ land() {
   wt=$(git worktree list --porcelain | awk -v b="branch refs/heads/$br" '/^worktree /{w=substr($0, 10)} $0 == b {print w}')
   old=$(git rev-parse master)
   for tries in 1 2 3; do
-    if git merge-base --is-ancestor master "$br" && stamp_ok "$br"; then
+    if git merge-base --is-ancestor master "$br" && stamp_ok "$br" "$wt"; then
       git merge --ff-only -q "$br" || die "fast-forward failed"
       echo "tools/land: $br landed ($LEVEL):"
       git log --oneline "$old..master"
@@ -69,9 +78,9 @@ land() {
         echo "tools/land: conflict rebasing $br onto master in:"; echo "$u" | sed 's/^/  /'
         die "stopped; nothing landed (resolve with git -C $wt rebase master)"
       fi
-      stamp_ok "$br" > /dev/null && continue
+      stamp_ok "$br" "$wt" > /dev/null && continue
     fi
-    (cd "$wt" && "$M/tools/check" --block "${br##*/}") || die "check failed; nothing landed"
+    (cd "$wt" && tools/check --block "${br##*/}") || die "check failed; nothing landed"
   done
   die "master kept moving; run tools/land $br again"
 }
