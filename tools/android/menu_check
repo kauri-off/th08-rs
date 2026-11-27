@@ -17,7 +17,9 @@ D=${1:-target/android/menu_check}; mkdir -p "$D"
 # Screen points on the th08dbg AVD (2400x1080, landscape, split menu).
 SETTINGS="300 667" TAB="220 383" BACK="220 105" RETRY="300 826" KEEP="300 826" RESUME="300 525"
 SDK=${ANDROID_SDK:-$HOME/.local/share/android-sdk/Sdk}; A="$SDK/platform-tools/adb -s emulator-$QEMU_PORT"; PKG=org.th08.port.debug
-export TARGETS=x86_64 PACKED=$SRC
+export TARGETS=x86_64
+unset DATA PACKED
+if [[ -f $SRC/th08.pak ]]; then export PACKED=$SRC; else export DATA=$SRC; fi
 tools/android/run_debug.sh build || exit 1
 env -u WAYLAND_DISPLAY "$SDK/emulator/emulator" -avd th08dbg -port "$QEMU_PORT" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$D/emu.log" 2>&1 &
 E=$!; LOGCAT=
