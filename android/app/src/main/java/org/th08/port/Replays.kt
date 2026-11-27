@@ -143,6 +143,7 @@ fun ReplaysActions(act: LauncherActions) {
 fun ReplaysScreen(rows: List<Setting>, act: LauncherActions) {
     val st = LocalReplays.current
     var confirm by remember { mutableStateOf<ReplayItem?>(null) }
+    var details by remember { mutableStateOf<String?>(null) }
     val items = st.items.orEmpty()
     if (st.items != null && items.isEmpty() && !st.busy && st.message == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -165,9 +166,19 @@ fun ReplaysScreen(rows: List<Setting>, act: LauncherActions) {
                             modifier = Modifier.fillMaxWidth())
                     }
                 }
-                items(items, key = { it.file }) { r -> ReplayCard(r, rows, act, inline) { confirm = r } }
+                items(items, key = { it.file }) { r ->
+                    ReplayCard(r, rows, act, inline, details = { details = r.file }, delete = { confirm = r })
+                }
             }
         }
+    }
+    details?.let { name ->
+        AlertDialog(
+            onDismissRequest = { details = null },
+            title = { Text(str(R.string.last_failed_details)) },
+            text = { Text(name) },
+            confirmButton = { TextButton(onClick = { details = null }) { Text(str(R.string.ok)) } },
+        )
     }
     confirm?.let { r ->
         AlertDialog(
@@ -184,11 +195,12 @@ fun ReplaysScreen(rows: List<Setting>, act: LauncherActions) {
 }
 
 @Composable
-private fun ReplayMenu(r: ReplayItem, act: LauncherActions, delete: () -> Unit) {
+private fun ReplayMenu(r: ReplayItem, act: LauncherActions, details: () -> Unit, delete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, str(R.string.more)) }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text(str(R.string.last_failed_details)) }, onClick = { menu = false; details() })
             if (r.error == null) {
                 DropdownMenuItem(text = { Text(str(R.string.replays_export)) }, onClick = { menu = false; act.replayExport(r) })
                 DropdownMenuItem(text = { Text(str(R.string.replays_share)) }, onClick = { menu = false; act.replayShare(r) })
@@ -200,7 +212,7 @@ private fun ReplayMenu(r: ReplayItem, act: LauncherActions, delete: () -> Unit) 
 
 // Title = team and difficulty, score on the right; narrow windows put Watch on its own row.
 @Composable
-private fun ReplayCard(r: ReplayItem, rows: List<Setting>, act: LauncherActions, inline: Boolean, delete: () -> Unit) {
+private fun ReplayCard(r: ReplayItem, rows: List<Setting>, act: LauncherActions, inline: Boolean, details: () -> Unit, delete: () -> Unit) {
     val lang = LocalLang.current
     val res = LocalStrings.current
     fun word(key: String, v: String) = rows.firstOrNull { it.e.key == key }?.e?.display(v, lang, res) ?: v
@@ -230,12 +242,12 @@ private fun ReplayCard(r: ReplayItem, rows: List<Setting>, act: LauncherActions,
                     modifier = Modifier.padding(end = 8.dp))
                 if (inline) watch()
             }
-            if (inline || r.error != null) ReplayMenu(r, act, delete)
+            if (inline || r.error != null) ReplayMenu(r, act, details, delete)
         }
         if (!inline && r.error == null) {
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                 watch()
-                ReplayMenu(r, act, delete)
+                ReplayMenu(r, act, details, delete)
             }
         }
     }
