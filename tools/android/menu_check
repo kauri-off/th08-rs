@@ -3,9 +3,7 @@
 # Needs the game files (TH08_DIR, else TH08_GAME_SRC in packaging/local/local.env); without them it skips (exit 0; TH08_REQUIRE_DATA=1: exit 1). PROBE=1: screenshots only.
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-MAIN=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
-env=$MAIN/packaging/local/local.env
-[[ -f $env ]] && . "$env"
+source re/tools/localenv.sh
 SRC=${TH08_DIR:-${TH08_GAME_SRC:-}}
 if [[ -z $SRC || ! -e $SRC ]]; then
   echo "menu_check skipped: no game files"

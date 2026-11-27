@@ -1295,11 +1295,20 @@ mod tests {
         let tabs = settings().tabs().len();
         let mut changes = 0;
         for tab in 0..tabs {
-            for r in 0..=on_tab(tab).keys().len() {
+            let keys = on_tab(tab).keys();
+            for (r, key) in keys.iter().enumerate() {
                 let mut m = on_tab(tab);
-                changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Row(r))));
-                changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Row(r))));
+                let mut expected = on_tab(tab);
+                for _ in 0..2 {
+                    expected.store.activate(key);
+                    changes += usize::from(asks_for_a_frame(&mut m, &Input::Tap(Target::Row(r))));
+                    assert_eq!(m.live_values(), expected.live_values(), "tap on {key}");
+                }
             }
+            let mut m = on_tab(tab);
+            let reset = Input::Tap(Target::Row(keys.len()));
+            assert!(asks_for_a_frame(&mut m, &reset));
+            assert!(asks_for_a_frame(&mut m, &reset));
             let other = (tab + 1) % tabs;
             assert!(asks_for_a_frame(
                 &mut on_tab(tab),
@@ -1318,12 +1327,15 @@ mod tests {
         let tabs = settings().tabs().len();
         let mut changes = 0;
         for tab in 0..tabs {
-            for r in 0..on_tab(tab).keys().len() {
+            for (r, key) in on_tab(tab).keys().iter().enumerate() {
                 let mut m = on_tab(tab);
+                let mut expected = on_tab(tab);
                 for f in [0.1, 0.9] {
                     let o = CtlOut::Frac(f);
+                    expected.store.ctl_input(key, o);
                     changes +=
                         usize::from(asks_for_a_frame(&mut m, &Input::Control(Target::Row(r), o)));
+                    assert_eq!(m.live_values(), expected.live_values(), "drag on {key}");
                 }
             }
             let mut m = on_tab(tab);
