@@ -17,9 +17,11 @@ setup() {
 
 # 0 when the tree of commit $1 has a pass stamp at the level it needs against master; else says why.
 stamp_ok() {
-  local tree need f lv rule=$M/tools/check_level requirements
+  local tree need f lv rule=$M/tools/check_level requirements status
   tree=$(git rev-parse "$1^{tree}")
   if [[ -n $2 ]]; then
+    status=$(git -C "$2" status --porcelain) || return 1
+    [[ -z $status ]] || { echo "tools/land: $2 has uncommitted or untracked files"; return 1; }
     rule=$2/tools/check_level
   elif ! git diff --quiet master "$1" -- tools/check_level; then
     echo "tools/land: $1 needs its worktree checker"; return 1
@@ -81,6 +83,8 @@ land() {
         echo "tools/land: conflict rebasing $br onto master in:"; echo "$u" | sed 's/^/  /'
         die "stopped; nothing landed (resolve with git -C $wt rebase master)"
       fi
+      status=$(git -C "$wt" status --porcelain) || die "cannot inspect $wt"
+      [[ -z $status ]] || die "$wt has uncommitted or untracked files after rebase"
       stamp_ok "$br" "$wt" > /dev/null && continue
     fi
     (cd "$wt" && tools/check --block "${br##*/}") || die "check failed; nothing landed"
@@ -119,11 +123,11 @@ selftest() {
   rm "$T/wt-a/junk"
   ok '(cd "$T/wt-a" && tools/check a > /dev/null) && ls "$R"/devdata/checks/*.pass > /dev/null' "check writes a stamp"
   local ah=$(g "$T/wt-a" rev-parse HEAD)
-  printf 'echo uncommitted-checker-executed\necho light\n' > "$T/wt-a/tools/check_level"
+  printf 'touch %q\necho light\n' "$T/dirty-checker-ran" > "$T/wt-a/tools/check_level"
   local before=$(g "$R" rev-parse master)
   local rejected=0
   out=$("$R/tools/land" a) || rejected=$?
-  ok '[[ $rejected != 0 && $out == *"uncommitted or untracked files"* && $(g "$R" rev-parse master) == "$before" ]]' \
+  ok '[[ $rejected != 0 && $out == *"uncommitted or untracked files"* && $(g "$R" rev-parse master) == "$before" && ! -e $T/dirty-checker-ran ]]' \
     "fast-forward refuses a dirty checker even with an existing stamp"
   g "$T/wt-a" restore tools/check_level
   out=$("$R/tools/land" a)
