@@ -1,7 +1,6 @@
 //! Stats screen: play statistics and the score.dat viewer from the Rust bridge (libth08, stats.rs `bridge`).
 package org.th08.port
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -109,7 +109,6 @@ private enum class Tab(val label: Int) {
     History(R.string.stats_tab_history),
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun StatsScreen(rows: List<Setting>, wide: Boolean) {
     val reply by rememberStats()
@@ -133,7 +132,6 @@ private fun Centered(title: String, line: String?) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Loaded(o: JSONObject, w: Words, wide: Boolean) {
     val st = o.getJSONObject("stats")
@@ -148,21 +146,25 @@ private fun Loaded(o: JSONObject, w: Words, wide: Boolean) {
     val tab = tabs.firstOrNull { it.name == tabName } ?: tabs.first()
     var shot by rememberSaveable { mutableStateOf(SHOTS) }
     var allCards by rememberSaveable { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-        item("tiles") { Tiles(st, sd, runs, wide, !o.getBoolean("on")) }
-        stickyHeader("tabs") {
-            ScrollableTabRow(selectedTabIndex = tabs.indexOf(tab), edgePadding = 16.dp) {
-                tabs.forEach { t ->
-                    Tab(selected = t == tab, onClick = { tabName = t.name },
-                        text = { Text(str(t.label), maxLines = 1) })
-                }
+    Column(Modifier.fillMaxSize()) {
+        ScrollableTabRow(selectedTabIndex = tabs.indexOf(tab), edgePadding = 16.dp) {
+            tabs.forEach { t ->
+                Tab(selected = t == tab, onClick = { tabName = t.name },
+                    text = { Text(str(t.label), maxLines = 1) })
             }
         }
-        when (tab) {
-            Tab.Overview -> overview(o, st, w, !wide)
-            Tab.Scores -> sd?.let { scores(o, it, w) }
-            Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
-            Tab.History -> history(st, w)
+        key(tab) {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                when (tab) {
+                    Tab.Overview -> {
+                        item("tiles") { Tiles(st, sd, runs, wide, !o.getBoolean("on")) }
+                        overview(o, st, w, !wide)
+                    }
+                    Tab.Scores -> sd?.let { scores(o, it, w) }
+                    Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
+                    Tab.History -> history(st, w)
+                }
+            }
         }
     }
 }
