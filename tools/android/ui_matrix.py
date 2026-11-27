@@ -742,8 +742,9 @@ def stats_tab(ui, label):
     s = ui.dump()
     for reverse in (False, True):
         for _ in range(4):
-            n = s.find(label, clickable=True)
-            target = n.click_target() if n else None
+            target = s.find(label)
+            while target and not target.clickable and target.a.get("selected") != "true":
+                target = target.parent
             if target and target.w >= DP_MIN * ui.dp - 2 and target.h >= DP_MIN * ui.dp - 2:
                 return target
             strip = next((n for n in s.nodes if n.scrollable and n.w > n.h * 3 and n.h < 90 * ui.dp), None)
@@ -773,7 +774,8 @@ def walk_stats(ui, c, full_controls, st):
         if tab is None:
             ui.problem("unreachable", f"stats tab {k}")
             continue
-        ui.tap(tab)
+        if tab.a.get("selected") != "true":
+            ui.tap(tab)
         ui.wait(.8)
         if k == "stats_tab_cards":
             n = ui.scroll_to(st["stats_cards_all"])

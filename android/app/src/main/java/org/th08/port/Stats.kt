@@ -226,7 +226,7 @@ private fun Entry(title: String, detail: String?, values: List<String>, head: Bo
     val c = MaterialTheme.colorScheme
     if (stacked) {
         Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 6.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge.cjk(title))
+            Text(japaneseWrap(title, gameText = true), style = MaterialTheme.typography.bodyLarge.cjk(title))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(detail.orEmpty(), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
                 values.forEach { v ->
@@ -239,7 +239,8 @@ private fun Entry(title: String, detail: String?, values: List<String>, head: Bo
     Row(Modifier.fillMaxWidth().heightIn(min = if (head) 32.dp else 48.dp).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = (if (head) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge).cjk(title),
+            Text(japaneseWrap(title, gameText = true),
+                style = (if (head) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge).cjk(title),
                 color = if (head) c.onSurfaceVariant else c.onSurface)
             if (detail != null) Text(detail, style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
         }

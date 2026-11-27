@@ -277,14 +277,16 @@ private fun Typography.forLang(lang: String): Typography {
 }
 
 @Composable
-private fun japaneseWrap(text: String): String {
+internal fun japaneseWrap(text: String, gameText: Boolean = false): String {
     val lang = LocalLang.current
-    return remember(lang, text) {
-        if (lang != "ja" || text.none { it in '\u3040'..'\u9fff' }) return@remember text
+    return remember(lang, text, gameText) {
+        if ((!gameText && lang != "ja") || text.none { it in '\u3040'..'\u9fff' }) return@remember text
         val words = BreakIterator.getWordInstance(ULocale.JAPANESE).apply { setText(text) }
         buildString {
             text.forEachIndexed { i, ch ->
-                if (i > 0 && ch.isLetter() && text[i - 1].isLetter()) {
+                if (i > 0 && gameText && ch == '「' && !text[i - 1].isWhitespace()) {
+                    append('\u200b')
+                } else if (i > 0 && ch.isLetter() && text[i - 1].isLetter()) {
                     append(if (words.isBoundary(i)) '\u200b' else '\u2060')
                 }
                 append(ch)
