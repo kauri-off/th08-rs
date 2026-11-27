@@ -37,7 +37,7 @@ stamp_ok() {
 }
 
 land() {
-  local br=$1 wt old tries u
+  local br=$1 wt old tries u status
   cd "$M" || exit 2
   [[ $(git rev-parse --path-format=absolute --git-dir) == "$(git rev-parse --path-format=absolute --git-common-dir)" ]] ||
     die "run it in the main checkout"
@@ -48,6 +48,10 @@ land() {
   wt=$(git worktree list --porcelain | awk -v b="branch refs/heads/$br" '/^worktree /{w=substr($0, 10)} $0 == b {print w}')
   old=$(git rev-parse master)
   for tries in 1 2 3; do
+    if [[ -n $wt ]]; then
+      status=$(git -C "$wt" status --porcelain) || die "cannot inspect $wt"
+      [[ -z $status ]] || die "$wt has uncommitted or untracked files"
+    fi
     if git merge-base --is-ancestor master "$br" && stamp_ok "$br" "$wt"; then
       git merge --ff-only -q "$br" || die "fast-forward failed"
       echo "tools/land: $br landed ($LEVEL):"
@@ -69,7 +73,6 @@ land() {
       return 0
     fi
     [[ -n $wt ]] || die "$br has no worktree to rebase and check in"
-    [[ -z $(git -C "$wt" status --porcelain) ]] || die "$wt has uncommitted or untracked files"
     if ! git merge-base --is-ancestor master "$br"; then
       echo "tools/land: rebasing $br onto master in $wt"
       if ! git -C "$wt" rebase -q master; then
@@ -116,6 +119,13 @@ selftest() {
   rm "$T/wt-a/junk"
   ok '(cd "$T/wt-a" && tools/check a > /dev/null) && ls "$R"/devdata/checks/*.pass > /dev/null' "check writes a stamp"
   local ah=$(g "$T/wt-a" rev-parse HEAD)
+  printf 'echo uncommitted-checker-executed\necho light\n' > "$T/wt-a/tools/check_level"
+  local before=$(g "$R" rev-parse master)
+  local rejected=0
+  out=$("$R/tools/land" a) || rejected=$?
+  ok '[[ $rejected != 0 && $out == *"uncommitted or untracked files"* && $(g "$R" rev-parse master) == "$before" ]]' \
+    "fast-forward refuses a dirty checker even with an existing stamp"
+  g "$T/wt-a" restore tools/check_level
   out=$("$R/tools/land" a)
   ok '[[ $(g "$R" rev-parse master) == "$ah" && ! -d $T/wt-a ]] && ! g "$R" rev-parse -q --verify a > /dev/null' \
     "ff path: landed, worktree and branch removed"
