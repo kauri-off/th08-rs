@@ -88,7 +88,7 @@ impl Rig {
     }
 
     fn event(&mut self, ev: &WindowEvent, scene: &Scene) -> Vec<Effect> {
-        self.pointer.event(ev, scene, &mut self.model)
+        self.pointer.event(ev, Some(scene), &mut self.model)
     }
 
     pub fn tap_item(&mut self, item: Item) -> Vec<Effect> {

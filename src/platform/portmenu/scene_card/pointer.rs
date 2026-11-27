@@ -50,15 +50,34 @@ impl Pointer {
     }
 
     pub(in crate::platform::portmenu) fn cancel(&mut self) {
+        self.finger = None;
         self.grab = None;
     }
 
     pub(in crate::platform::portmenu) fn event(
         &mut self,
         event: &WindowEvent,
-        scene: &Scene,
+        scene: Option<&Scene>,
         model: &mut MenuModel,
     ) -> Vec<Effect> {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse = Some([position.x as f32, position.y as f32]);
+            }
+            WindowEvent::CursorLeft { .. } => self.mouse = None,
+            WindowEvent::Focused(false) => {
+                *self = Self::default();
+                return if scene.is_some() {
+                    model.apply(Input::HoverEnd)
+                } else {
+                    Vec::new()
+                };
+            }
+            _ => {}
+        }
+        let Some(scene) = scene else {
+            return Vec::new();
+        };
         let (ev, touch) = match event {
             WindowEvent::Touch(t) => {
                 let at = [t.location.x as f32, t.location.y as f32];
@@ -80,16 +99,11 @@ impl Pointer {
                 };
                 (ev, true)
             }
-            WindowEvent::Focused(false) => {
-                *self = Self::default();
-                return model.apply(Input::HoverEnd);
-            }
             _ if self.finger.is_some() => return Vec::new(),
-            WindowEvent::CursorMoved { position, .. } => {
-                let at = [position.x as f32, position.y as f32];
-                self.mouse = Some(at);
-                (Event::Move(at), model.context().overlay)
-            }
+            WindowEvent::CursorMoved { .. } => (
+                Event::Move(self.mouse.expect("cursor moved")),
+                model.context().overlay,
+            ),
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -106,10 +120,7 @@ impl Pointer {
                     model.context().overlay,
                 )
             }
-            WindowEvent::CursorLeft { .. } => {
-                self.mouse = None;
-                (Event::Leave, model.context().overlay)
-            }
+            WindowEvent::CursorLeft { .. } => (Event::Leave, model.context().overlay),
             _ => return Vec::new(),
         };
         self.apply(ev, touch, scene, model)

@@ -50,12 +50,12 @@ impl Tracker {
         self.begin(format!("menu-open {kind}"), ui, now);
     }
 
-    fn presented(&mut self, now: Instant) -> Option<String> {
+    fn presented(&mut self, now: Instant, renderer: Option<&'static str>) -> Option<String> {
         let p = self.pending.take()?;
         Some(format!(
             "input→present: {} ui={} {:.1} ms origin={}",
             p.tag,
-            p.ui,
+            renderer.unwrap_or(p.ui),
             now.duration_since(p.start).as_secs_f64() * 1000.0,
             p.origin,
         ))
@@ -80,7 +80,15 @@ pub fn begin_menu_open(ui: &'static str) {
 
 // A frame reached the screen; ends the pending transition, if any.
 pub fn presented() {
-    if let Some(line) = TRACKER.with_borrow_mut(|t| t.presented(Instant::now())) {
+    log_present(None);
+}
+
+pub(super) fn presented_on(renderer: &'static str) {
+    log_present(Some(renderer));
+}
+
+fn log_present(renderer: Option<&'static str>) {
+    if let Some(line) = TRACKER.with_borrow_mut(|t| t.presented(Instant::now(), renderer)) {
         log::info!("{line}");
     }
 }
@@ -98,21 +106,21 @@ mod tests {
         let (mut t, t0) = (Tracker::default(), Instant::now());
         t.input = Some(t0);
         t.begin("card>confirm".into(), "slint", t0 + ms(5));
-        let line = t.presented(t0 + ms(30)).unwrap();
+        let line = t.presented(t0 + ms(30), Some("scene")).unwrap();
         assert_eq!(
             line,
-            "input→present: card>confirm ui=slint 30.0 ms origin=input"
+            "input→present: card>confirm ui=scene 30.0 ms origin=input"
         );
-        assert_eq!(t.presented(t0 + ms(46)), None);
+        assert_eq!(t.presented(t0 + ms(46), None), None);
     }
 
     #[test]
     fn first_menu_open_is_cold() {
         let (mut t, t0) = (Tracker::default(), Instant::now());
         t.begin_menu_open("egui", t0);
-        assert!(t.presented(t0).unwrap().contains("menu-open cold"));
+        assert!(t.presented(t0, None).unwrap().contains("menu-open cold"));
         t.begin_menu_open("egui", t0);
-        assert!(t.presented(t0).unwrap().contains("menu-open warm"));
+        assert!(t.presented(t0, None).unwrap().contains("menu-open warm"));
     }
 
     #[test]
@@ -121,11 +129,11 @@ mod tests {
         t.input = Some(t0);
         t.begin("menu-open cold".into(), "egui", t0 + ms(1));
         t.begin("background-resume to menu".into(), "egui", t0 + ms(2));
-        let line = t.presented(t0 + ms(10)).unwrap();
+        let line = t.presented(t0 + ms(10), None).unwrap();
         assert!(line.contains("background-resume to menu ui=egui 10.0 ms origin=input"));
         t.input = Some(t0);
         t.begin("menu-resume".into(), "egui", t0 + STALE + ms(1));
-        let line = t.presented(t0 + STALE + ms(4)).unwrap();
+        let line = t.presented(t0 + STALE + ms(4), None).unwrap();
         assert!(line.contains("3.0 ms origin=no-input"));
     }
 }
