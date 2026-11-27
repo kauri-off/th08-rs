@@ -927,6 +927,7 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
                                 SegmentedButton(
                                     selected = r.value == v,
                                     onClick = { act.change(r, v) },
+                                    modifier = Modifier.testTag("setting_${e.key}_$v").semantics { testTagsAsResourceId = true },
                                     shape = SegmentedButtonDefaults.itemShape(i, opts.size),
                                     icon = {},
                                     colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),

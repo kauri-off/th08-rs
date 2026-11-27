@@ -125,11 +125,6 @@ class Screen:
         tappable = [n for n in hits if n.click_target()]
         return tappable[0] if tappable else (hits[-1] if hits and not clickable else None)
 
-    def below(self, row, *labels):
-        """The tappable match nearest under the row title: its segment, not a same-named value elsewhere."""
-        hits = sorted((n for n in self.find_all(*labels) if n.click_target() and n.y0 >= row.y0), key=lambda n: n.y0)
-        return hits[0] if hits else None
-
     def texts(self):
         return [n.label for n in self.nodes if n.label]
 
@@ -303,6 +298,13 @@ class Ui:
 
     def cfg(self):
         return self.emu.sh(f"run-as {PKG} cat files/port.cfg", check=False)
+
+    def value(self, key, default=None):
+        for line in self.cfg().splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.strip() == key:
+                return value.strip()
+        return default
 
     def scroll_all(self, name, frac_x=.5, want=(), shots=True, max_swipes=60, restore=True):
         """Swipes to the end by real gestures; returns every label seen and checks no value changed."""
@@ -580,28 +582,30 @@ def check_play(ui, st, where):
 def exercise_row(ui, st, e, lang, n):
     label = text_of(e, lang)["label"]
     kind = e["kind"]["type"]
-    words = {w["value"]: w["label"] for w in text_of(e, lang).get("words", [])}
     if n.click_target() is None:
-        before, other = ui.cfg(), next((l for v, l in words.items() if v != e["default"]), None)
-        s = ui.dump()
-        seg = s.below(n, other) if other else None
-        if seg is None and other:
-            region = ui.scroll_region(s)
-            if region:
-                ui.emu.sh(f"input swipe {region[0] + 40} {region[3] - 40} {region[0] + 40} {region[3] - int(170 * ui.dp)} 500")
-                ui.wait()
-                s = ui.dump()
-                n = s.find(label) or n
-                seg = s.below(n, other)
+        key, default = e["key"], e["default"]
+        before = ui.value(key, default)
+        other = next((v for v in e["kind"].get("choices", []) if v != before), None)
+
+        def segment(value):
+            tag = f"setting_{key}_{value}"
+            return ui.scroll_to(match=lambda target: target.a.get("resource-id") == tag and
+                                target.clickable and target.h >= DP_MIN * ui.dp - 2)
+
+        seg = segment(other) if other is not None else None
         if seg is None:
             ui.problem("segment not found", label)
             return
         ui.tap(seg)
-        if ui.cfg() == before:
-            ui.problem("segment did not change the value", label)
-        back = s.below(n, words.get(e["default"], ""))
-        if back:
+        if ui.value(key, default) != other:
+            ui.problem("segment did not change the value", f"{key}: expected {other}")
+        back = segment(before)
+        if back is None:
+            ui.problem("segment not found", f"{key}: restore {before}")
+        else:
             ui.tap(back)
+            if ui.value(key, default) != before:
+                ui.problem("segment did not restore the value", key)
         return
     before = ui.cfg()
     x, y = n.x0 + min(n.w // 2, int(24 * ui.dp)), n.y0 + min(n.h // 2, int(24 * ui.dp))
@@ -631,17 +635,14 @@ def slider_drag(ui):
     if b is None:
         ui.problem("no fully visible slider", key)
         return
-    def volume():
-        return re.search(r"^volume_master\s*=\s*(.+)$", ui.cfg(), flags=re.M)
-    before = volume()
-    before = before[1] if before else None
+    before = ui.value(key)
     x0, x1 = b.x0 + b.w * 9 // 10, b.x0 + b.w // 2
     ui.actions.append(f"drag {key} {x0},{b.cy} to {x1},{b.cy}")
     ui.emu.sh(f"input swipe {x0} {b.cy} {x1} {b.cy} 500")
     for _ in range(16):
-        after = volume()
-        if after is not None and after[1] != before:
-            print(f"  {ui.actions[-1]}: {before or 'default'} -> {after[1]}", flush=True)
+        after = ui.value(key)
+        if after is not None and after != before:
+            print(f"  {ui.actions[-1]}: {before or 'default'} -> {after}", flush=True)
             break
         ui.wait(.5)
     else:
@@ -737,6 +738,30 @@ def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
     picker(ui, st)
 
 
+def stats_tab(ui, label):
+    s = ui.dump()
+    for reverse in (False, True):
+        for _ in range(4):
+            n = s.find(label, clickable=True)
+            target = n.click_target() if n else None
+            if target and target.w >= DP_MIN * ui.dp - 2 and target.h >= DP_MIN * ui.dp - 2:
+                return target
+            strip = next((n for n in s.nodes if n.scrollable and n.w > n.h * 3 and n.h < 90 * ui.dp), None)
+            if strip is None:
+                return None
+            inset = strip.w // 6
+            x0, x1 = strip.x1 - inset, strip.x0 + inset
+            if reverse:
+                x0, x1 = x1, x0
+            ui.emu.sh(f"input swipe {x0} {strip.cy} {x1} {strip.cy} 450")
+            ui.wait(.6)
+            prev = s.position()
+            s = ui.dump()
+            if s.position() == prev:
+                break
+    return None
+
+
 def walk_stats(ui, c, full_controls, st):
     ui.wait(1.5)
     labels = ["stats_tab_overview", "stats_scores", "stats_tab_cards", "stats_tab_history"]
@@ -744,30 +769,17 @@ def walk_stats(ui, c, full_controls, st):
         ui.shot("stats_empty")
         return
     for k in labels:
-        s = ui.dump()
-        tab = s.find(st[k])
-        for _ in range(4):
-            if tab is not None and tab.w >= DP_MIN * ui.dp - 2:
-                break
-            strip = next((n for n in s.nodes if n.scrollable and n.w > n.h * 3 and n.h < 90 * ui.dp), None)
-            if strip is None:
-                break
-            ui.emu.sh(f"input swipe {strip.x1 - 20} {strip.cy} {strip.x0 + 20} {strip.cy} 450")
-            ui.wait(.6)
-            s = ui.dump()
-            tab = s.find(st[k])
+        tab = stats_tab(ui, st[k])
         if tab is None:
             ui.problem("unreachable", f"stats tab {k}")
             continue
-        if tab.click_target():
-            ui.tap(tab)
+        ui.tap(tab)
         ui.wait(.8)
         if k == "stats_tab_cards":
             n = ui.scroll_to(st["stats_cards_all"])
             if n is None:
                 ui.problem("unreachable", "show cards never attempted")
             else:
-                before = len(ui.dump().nodes)
                 ui.tap(n)
                 ui.shot("stats_cards_all")
                 ui.tap(ui.scroll_to(st["stats_cards_all"]) or n)
