@@ -16,8 +16,13 @@ FULL = {(True, "en", "1.0", False), (True, "ru", "1.5", True), (False, "ja", "1.
 
 def run(*a, check=True, timeout=120, stdin=None):
     r = subprocess.run(a, capture_output=True, timeout=timeout, input=stdin)
-    if check and r.returncode:
-        raise RuntimeError(f"{' '.join(map(str, a))}: {r.stderr.decode(errors='replace')[:400]}")
+    if r.returncode:
+        err = r.stderr.decode(errors="replace")
+        detail = f"{' '.join(map(str, a))}: {err[:400]}"
+        if re.search(r"(device offline|device .* not found|no devices/emulators|error: closed)", err):
+            raise EmulatorGone(detail)
+        if check:
+            raise RuntimeError(detail)
     return r.stdout
 
 
@@ -33,7 +38,7 @@ class Emulator:
         return self.adb("shell", cmd, **k).decode(errors="replace").strip()
 
     def boot(self, log):
-        env = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
+        env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
         self.proc = subprocess.Popen(
             [str(SDK / "emulator/emulator"), "-avd", "th08dbg", "-port", str(self.port), "-no-window", "-no-audio",
              "-no-boot-anim", "-read-only", "-no-snapshot", "-gpu", "swiftshader_indirect"],
@@ -49,12 +54,16 @@ class Emulator:
                 "settings put secure show_ime_with_hard_keyboard 0; input keyevent 82")
 
     def kill(self):
-        if self.proc:
-            self.adb("emu", "kill", check=False)
+        if self.proc and self.proc.poll() is None:
             try:
-                self.proc.wait(60)
+                self.adb("emu", "kill", check=False, timeout=10)
+            except (EmulatorGone, subprocess.TimeoutExpired):
+                self.proc.terminate()
+            try:
+                self.proc.wait(10)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait()
 
 
 class LeftApp(Exception):
@@ -106,6 +115,7 @@ class Screen:
             if n is not None and not n.label:
                 n.label = next((x.label for x in self.nodes if x.parent is n and x.label), "")
         walk(ET.fromstring(xml_text), None)
+        self.package = self.nodes[0].a.get("package", "") if self.nodes else ""
 
     def find_all(self, *labels):
         return [n for n in self.nodes for l in labels if l and (n.text == l or n.desc == l or n.text.startswith(l + "\n"))]
@@ -151,9 +161,8 @@ class Ui:
             j = out.rfind("</hierarchy>")
             if i >= 0 and j > 0:
                 s = Screen(out[i:j + 12])
-                pkg = s.nodes[0].a.get("package", "") if s.nodes else ""
-                if pkg != PKG and not self.foreign_ok:
-                    raise LeftApp(f"foreground is {pkg!r}; last actions: {self.actions[-8:]}")
+                if s.package != PKG and not self.foreign_ok:
+                    raise LeftApp(f"foreground is {s.package!r}; last actions: {self.actions[-8:]}")
                 if self.xmin:
                     s.nodes = [n for n in s.nodes if n.x0 >= self.xmin]
                 return s
@@ -222,7 +231,7 @@ class Ui:
             raise RuntimeError(f"{name}: emulator returned no PNG")
         fn.write_bytes(data)
         self.shots.append(fn)
-        if s.nodes[0].a.get("package") == PKG:
+        if s.package == PKG:
             self.lint(s, name)
             self.text_audit(name)
         return fn
@@ -875,6 +884,30 @@ def matrix(mode):
     return out
 
 
+def run_combo(emu, tmp, d, c, sc):
+    configure(emu, c)
+    install_fx(emu, tmp, c, plain=True)
+    launch(emu)
+    ui = Ui(emu, d, c)
+    ensure_rotation(ui, emu, c)
+    try:
+        walk_plain(ui, emu, c)
+        emu.sh(f"am force-stop {PKG}")
+        install_fx(emu, tmp, c)
+        launch(emu)
+        ensure_rotation(ui, emu, c)
+        walk(ui, emu, c, c["full"], sc)
+    except LeftApp as e:
+        ui.problem("left the app", str(e))
+        log = emu.adb("logcat", "-d", "-t", "60", "-s", "ActivityTaskManager:I", "WindowManager:W", check=False)
+        print(log.decode(errors="replace")[-3000:], flush=True)
+    except EmulatorGone:
+        raise
+    except Exception as e:
+        ui.problem("driver error", f"{e!r}; last actions: {ui.actions[-8:]}")
+    return ui
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--apk", default=str(REPO / "target/android/th08-debug.apk"))
@@ -893,6 +926,7 @@ def main():
         if not a.no_boot:
             emu.boot(out / "emulator.log")
         emu.adb("install", "-r", "-d", a.apk, timeout=300)
+        print(f"{emu.serial}, Android API {emu.sh('getprop ro.build.version.sdk')}", flush=True)
         sc = schema(tmp)
         for c in matrix(a.matrix):
             name = f"{'land' if c['land'] else 'port'}_{c['lang']}_f{c['font']}_{'cut' if c['cutout'] else 'nocut'}_{'dark' if c['dark'] else 'light'}_{'imported' if c['imported'] else 'missing'}"
@@ -901,29 +935,22 @@ def main():
             selected += 1
             d = out / name
             d.mkdir(exist_ok=True)
-            configure(emu, c)
-            install_fx(emu, tmp, c, plain=True)
-            launch(emu)
-            ui = Ui(emu, d, c)
-            ensure_rotation(ui, emu, c)
             t = time.time()
-            try:
-                walk_plain(ui, emu, c)
-                emu.sh(f"am force-stop {PKG}")
-                install_fx(emu, tmp, c)
-                launch(emu)
-                ensure_rotation(ui, emu, c)
-                walk(ui, emu, c, c["full"], sc)
-            except EmulatorGone as e:
-                ui.problem("emulator gone", str(e))
-                results += ui.problems
-                print(f"{name}: {e}", flush=True)
+            ui = None
+            for attempt in range(2):
+                try:
+                    ui = run_combo(emu, tmp, d, c, sc)
+                    break
+                except EmulatorGone as e:
+                    print(f"{name}: emulator disconnected on attempt {attempt + 1}: {e}", flush=True)
+                    if a.no_boot or attempt == 1:
+                        results.append({"combo": c, "kind": "emulator gone", "detail": str(e)})
+                        break
+                    emu.kill()
+                    emu.boot(out / f"emulator_retry_{name}.log")
+                    emu.adb("install", "-r", "-d", a.apk, timeout=300)
+            if ui is None:
                 break
-            except LeftApp as e:
-                ui.problem("left the app", str(e))
-                print(emu.adb("logcat", "-d", "-t", "60", "-s", "ActivityTaskManager:I", "WindowManager:W", check=False).decode(errors="replace")[-3000:], flush=True)
-            except Exception as e:
-                ui.problem("driver error", repr(e))
             sheet(ui.shots, out / f"{name}.jpg", name)
             print(f"{name}: {len(ui.problems)} problems, {len(ui.shots)} shots, {time.time() - t:.0f}s", flush=True)
             for pr in ui.problems:
