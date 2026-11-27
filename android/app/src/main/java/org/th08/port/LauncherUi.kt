@@ -36,6 +36,8 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
@@ -945,7 +947,10 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
             val n = Math.round(v).toLong()
             ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
                 Slider(
-                    modifier = Modifier.semantics { contentDescription = t.label },
+                    modifier = Modifier.testTag(e.key).semantics {
+                        contentDescription = t.label
+                        testTagsAsResourceId = true
+                    },
                     value = v,
                     onValueChange = { v = it },
                     onValueChangeFinished = { act.change(r, Math.round(v).toLong().toString()) },

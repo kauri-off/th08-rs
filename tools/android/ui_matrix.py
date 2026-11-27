@@ -350,7 +350,7 @@ class Ui:
     def scroll_to(self, *labels, clickable=True, tries=40, match=None):
         def find(s):
             if match is not None:
-                return next((n for n in s.find_all(*labels) if match(n)), None)
+                return next((n for n in s.nodes if match(n)), None)
             return s.find(*labels, clickable=clickable)
 
         s = self.dump()
@@ -624,10 +624,9 @@ def exercise_row(ui, st, e, lang, n):
     wait_closed(ui, st)
 
 
-def slider_drag(ui, rows, lang):
+def slider_drag(ui):
     key = "volume_master"
-    label = text_of(next(e for e in rows if e["key"] == key), lang)["label"]
-    b = ui.scroll_to(label, match=lambda n: n.cls.endswith("SeekBar") and n.desc == label and n.h >= 40 * ui.dp)
+    b = ui.scroll_to(match=lambda n: n.cls.endswith("SeekBar") and n.a.get("resource-id") == key and n.h >= 40 * ui.dp)
     if b is None:
         ui.problem("no fully visible slider", key)
         return
@@ -721,7 +720,7 @@ def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
             continue
         exercise_row(ui, st, e, lang, n)
     open_page(ui, st, where["volume_master"])
-    slider_drag(ui, rows, lang)
+    slider_drag(ui)
     open_page(ui, st, where["language"])
     info = ui.dump().find(st["about_setting"], clickable=True)
     if info:
