@@ -79,7 +79,7 @@ class Node:
         self.a, self.parent = e.attrib, parent
         m = re.findall(r"\d+", self.a.get("bounds", "[0,0][0,0]"))
         self.x0, self.y0, self.x1, self.y1 = map(int, m)
-        self.text = self.a.get("text", "")
+        self.text = self.a.get("text", "").replace("\u200b", "").replace("\u2060", "")
         self.desc = self.a.get("content-desc", "")
         self.label = self.text or self.desc
         self.clickable = self.a.get("clickable") == "true"
@@ -347,15 +347,19 @@ class Ui:
             self.swipe_down(frac_x, region)
         return seen, not missing
 
-    def scroll_to(self, *labels, clickable=True, tries=40, room=4):
+    def scroll_to(self, *labels, clickable=True, tries=40, match=None):
+        def find(s):
+            if match is not None:
+                return next((n for n in s.find_all(*labels) if match(n)), None)
+            return s.find(*labels, clickable=clickable)
+
         s = self.dump()
         region = self.scroll_region(s)
         for down in (True, False):
             prev = s.position()
             for _ in range(tries):
-                n = s.find(*labels, clickable=clickable)
-                inset = room * self.dp if down else 4 * self.dp
-                if n is not None and (region is None or (n.y0 >= region[1] and n.y1 <= region[3] - inset)):
+                n = find(s)
+                if n is not None and (region is None or (n.y0 >= region[1] and n.y1 <= region[3] - 4 * self.dp)):
                     return n
                 if region is None:
                     return None
@@ -363,7 +367,7 @@ class Ui:
                 s = self.dump()
                 sig = s.position()
                 if sig == prev:
-                    n = s.find(*labels, clickable=clickable)
+                    n = find(s)
                     if n is not None and n.y0 >= region[1] and n.y1 <= region[3]:
                         return n
                     break
@@ -623,19 +627,8 @@ def exercise_row(ui, st, e, lang, n):
 def slider_drag(ui, rows, lang):
     key = "volume_master"
     label = text_of(next(e for e in rows if e["key"] == key), lang)["label"]
-    ui.scroll_to(label, clickable=False, room=150)
-    for _ in range(5):
-        s = ui.dump()
-        region = ui.scroll_region(s)
-        b = next((n for n in s.nodes if n.cls.endswith("SeekBar") and n.desc == label), None)
-        if b is not None and (not region or (region[1] + 2 < b.y0 and b.y1 < region[3] - 2)):
-            break
-        if region is None:
-            break
-        ui.swipe_up(.02, region)
-    else:
-        b = None
-    if b is None or (region and not (region[1] + 2 < b.y0 and b.y1 < region[3] - 2)):
+    b = ui.scroll_to(label, match=lambda n: n.cls.endswith("SeekBar") and n.desc == label and n.h >= 40 * ui.dp)
+    if b is None:
         ui.problem("no fully visible slider", key)
         return
     def volume():

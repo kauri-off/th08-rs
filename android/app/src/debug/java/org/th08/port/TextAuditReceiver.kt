@@ -51,11 +51,14 @@ class TextAuditReceiver : BroadcastReceiver() {
         if (t.isEmpty()) return
         val last = r.lineCount - 1
         if (!tab && (r.isLineEllipsized(last) || r.getLineRight(last) - r.getLineLeft(last) > shown + 4f)) cut.put(t)
-        val words = BreakIterator.getWordInstance(ULocale.ROOT).apply { setText(t) }
+        val raw = t.filterNot { it == '\u200b' || it == '\u2060' }
+        val locale = if (raw == t) ULocale.ROOT else ULocale.JAPANESE
+        val words = BreakIterator.getWordInstance(locale).apply { setText(raw) }
         for (l in 0 until r.lineCount - 1) {
-            val k = r.getLineEnd(l)
-            if (k in 1 until t.length && t[k - 1].isLetterOrDigit() && t[k].isLetterOrDigit() && !words.isBoundary(k) && !tooWideName(r, t, k, shown, words)) {
-                broken.put(t.substring(0, k) + "|" + t.substring(k))
+            val k = t.take(r.getLineEnd(l)).count { it != '\u200b' && it != '\u2060' }
+            if (k in 1 until raw.length && raw[k - 1].isLetterOrDigit() && raw[k].isLetterOrDigit() && !words.isBoundary(k) &&
+                (raw != t || !tooWideName(r, raw, k, shown, words))) {
+                broken.put(raw.substring(0, k) + "|" + raw.substring(k))
             }
         }
     }

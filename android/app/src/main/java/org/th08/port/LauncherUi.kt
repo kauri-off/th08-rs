@@ -4,6 +4,8 @@ package org.th08.port
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.icu.text.BreakIterator
+import android.icu.util.ULocale
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -270,6 +272,23 @@ private fun Typography.forLang(lang: String): Typography {
     )
     return copy(displayLarge.f(), displayMedium.f(), displaySmall.f(), headlineLarge.f(), headlineMedium.f(), headlineSmall.f(),
         titleLarge.f(), titleMedium.f(), titleSmall.f(), bodyLarge.f(), bodyMedium.f(), bodySmall.f(), labelLarge.f(), labelMedium.f(), labelSmall.f())
+}
+
+@Composable
+private fun japaneseWrap(text: String): String {
+    val lang = LocalLang.current
+    return remember(lang, text) {
+        if (lang != "ja" || text.none { it in '\u3040'..'\u9fff' }) return@remember text
+        val words = BreakIterator.getWordInstance(ULocale.JAPANESE).apply { setText(text) }
+        buildString {
+            text.forEachIndexed { i, ch ->
+                if (i > 0 && ch.isLetter() && text[i - 1].isLetter()) {
+                    append(if (words.isBoundary(i)) '\u200b' else '\u2060')
+                }
+                append(ch)
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -633,7 +652,7 @@ private fun CategoryList(cats: List<Category>, selected: String?, chevron: Boole
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(cat.title, style = MaterialTheme.typography.bodyLarge, color = if (on) c.onSecondaryContainer else c.onSurface)
-                    Text(cat.state, style = MaterialTheme.typography.bodyMedium, color = if (on) c.onSecondaryContainer else c.onSurfaceVariant)
+                    Text(japaneseWrap(cat.state), style = MaterialTheme.typography.bodyMedium, color = if (on) c.onSecondaryContainer else c.onSurfaceVariant)
                 }
                 if (chevron) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
             }
@@ -709,7 +728,7 @@ internal fun ShellRow(
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.bodyLarge)
                 if (!summary.isNullOrEmpty()) {
-                    Text(summary, style = MaterialTheme.typography.bodyMedium,
+                    Text(japaneseWrap(summary), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -963,7 +982,7 @@ private fun ChoiceDialog(title: String, values: List<String>, labels: List<Strin
                     ) {
                         RadioButton(selected = v == current, onClick = null)
                         Spacer(Modifier.width(16.dp))
-                        Text(labels[i], style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp))
+                        Text(japaneseWrap(labels[i]), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp))
                     }
                 }
             }
@@ -1143,7 +1162,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
         onDismissRequest = close,
         icon = { Icon(Icons.Outlined.Info, null) },
         title = { Text(title) },
-        text = { Text(text) },
+        text = { Text(japaneseWrap(text), Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = close) { Text(str(R.string.ok)) } },
     )
 }
