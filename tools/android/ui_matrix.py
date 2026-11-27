@@ -214,17 +214,23 @@ class Ui:
         return None
 
     def shot(self, name, s=None):
+        s = s or self.dump()
         self.n += 1
         fn = self.out / f"{self.n:03d}_{name}.png"
-        fn.write_bytes(self.emu.adb("exec-out", "screencap -p", timeout=60))
+        data = self.emu.adb("exec-out", "screencap -p", timeout=60)
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise RuntimeError(f"{name}: emulator returned no PNG")
+        fn.write_bytes(data)
         self.shots.append(fn)
-        self.lint(s or self.dump(), name)
-        self.text_audit(name)
+        if s.nodes[0].a.get("package") == PKG:
+            self.lint(s, name)
+            self.text_audit(name)
         return fn
 
     def text_audit(self, where):
-        self.emu.sh(f"am broadcast -n {PKG}/org.th08.port.TextAuditReceiver", timeout=30)
-        got = self.emu.sh(f"run-as {PKG} cat cache/text_audit.json", check=False)
+        got = self.emu.sh(f"run-as {PKG} rm -f cache/text_audit.json && "
+                          f"am broadcast -n {PKG}/org.th08.port.TextAuditReceiver >/dev/null && "
+                          f"run-as {PKG} cat cache/text_audit.json", check=False, timeout=30)
         try:
             r = json.loads(got)
         except ValueError:
@@ -448,16 +454,17 @@ def ensure_rotation(ui, emu, c):
     ui.problem("driver error", "could not set the orientation")
 
 
-def is_open(ui, st, labels=()):
-    s = ui.dump()
-    return s.find(st["cancel"], clickable=True) or s.find(st["ok"], clickable=True) or any(s.find(l) for l in labels)
-
-
-def close_overlay(ui, st):
-    for _ in range(3):
-        if not is_open(ui, st):
+def close_dialog(ui, label):
+    button = ui.dump().find(label, clickable=True)
+    if button is None:
+        ui.problem("dialog button missing", label)
+        return
+    ui.tap(button)
+    for _ in range(10):
+        if ui.dump().find(label, clickable=True) is None:
             return
-        ui.back()
+        ui.wait(.5)
+    ui.problem("dialog did not close", label)
 
 
 def go(ui, st, tab):
@@ -488,7 +495,8 @@ def open_page(ui, st, title):
             hit = [n for n in s.find_all(title) if n.click_target() and n.x1 < W * .6]
             if hit:
                 ui.tap(hit[0])
-                ui.page, ui.xmin = title, int(W * .4)
+                ui.page = title
+                ui.xmin = left[0].x1 if left else hit[0].x1
                 return True
         ui.problem("unreachable", f"page '{title}'")
         return False
@@ -524,9 +532,10 @@ def check_no_play(ui, st, where):
 def on_main(ui, st):
     """No overlay on top: another destination's navigation item is tappable (the selected one never is)."""
     xmin, ui.xmin = ui.xmin, 0
-    found = ui.dump().find(st["replays_title"], clickable=True) is not None
-    ui.xmin = xmin
-    return found
+    try:
+        return ui.dump().find(st["replays_title"], clickable=True) is not None
+    finally:
+        ui.xmin = xmin
 
 
 def wait_closed(ui, st):
@@ -571,7 +580,9 @@ def exercise_row(ui, st, e, lang, n):
             ui.tap(back)
         return
     before = ui.cfg()
-    ui.emu.sh(f"input tap {n.cx} {n.cy}")
+    x, y = n.x0 + min(n.w // 2, int(24 * ui.dp)), n.y0 + min(n.h // 2, int(24 * ui.dp))
+    ui.actions.append(f"tap {e['key']} {x},{y}")
+    ui.emu.sh(f"input tap {x} {y}")
     ui.wait(1.2)
     if kind == "bool":
         if ui.cfg() == before:
@@ -590,26 +601,39 @@ def exercise_row(ui, st, e, lang, n):
     wait_closed(ui, st)
 
 
-def slider_drag(ui, st, rows, lang):
-    e = next(e for e in rows if e["key"] == "volume_master")
-    n = ui.scroll_to(text_of(e, lang)["label"], clickable=False)
-    s = ui.dump()
-    bars = [b for b in s.nodes if "SeekBar" in b.cls and n is not None and b.y0 >= n.y0]
-    if not bars:
-        ui.problem("no slider node", "volume_master")
+def slider_drag(ui, rows, lang):
+    key = "volume_master"
+    label = text_of(next(e for e in rows if e["key"] == key), lang)["label"]
+    ui.scroll_to(label, clickable=False)
+    for _ in range(5):
+        s = ui.dump()
+        region = ui.scroll_region(s)
+        b = next((n for n in s.nodes if n.cls.endswith("SeekBar") and n.desc == label), None)
+        if b is not None and (not region or (region[1] + 2 < b.y0 and b.y1 < region[3] - 2)):
+            break
+        if region is None:
+            break
+        ui.swipe_up(.02, region)
+    else:
+        b = None
+    if b is None or (region and not (region[1] + 2 < b.y0 and b.y1 < region[3] - 2)):
+        ui.problem("no fully visible slider", key)
         return
-    region = ui.scroll_region(s)
-    b, before = bars[0], ui.cfg()
-    if region and b.y1 > region[3]:
-        ui.problem("driver error", "slider below the viewport")
-        return
-    ui.emu.sh(f"input swipe {b.x0 + b.w * 9 // 10} {b.cy} {b.x0 + b.w // 2} {b.cy} 500")
+    def volume():
+        return re.search(r"^volume_master\s*=\s*(.+)$", ui.cfg(), flags=re.M)
+    before = volume()
+    before = before[1] if before else None
+    x0, x1 = b.x0 + b.w * 9 // 10, b.x0 + b.w // 2
+    ui.actions.append(f"drag {key} {x0},{b.cy} to {x1},{b.cy}")
+    ui.emu.sh(f"input swipe {x0} {b.cy} {x1} {b.cy} 500")
     for _ in range(16):
-        if ui.cfg() != before:
+        after = volume()
+        if after is not None and after[1] != before:
+            print(f"  {ui.actions[-1]}: {before or 'default'} -> {after[1]}", flush=True)
             break
         ui.wait(.5)
     else:
-        ui.problem("slider drag did not change the value", "volume_master")
+        ui.problem("slider drag did not change the value", ui.actions[-1])
     ui.shot("slider_dragged")
 
 
@@ -663,7 +687,7 @@ def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
     for i, (t, _) in enumerate(secs):
         if open_page(ui, st, st[t]):
             got, _ = ui.scroll_all(f"settings_{t}", .5, restore=False)
-            seen |= got
+            seen.update(line for label in got for line in label.splitlines())
     for e in rows:
         if text_of(e, lang)["label"] not in seen:
             ui.problem("unreachable", f"control '{e['key']}'")
@@ -680,14 +704,14 @@ def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
             continue
         exercise_row(ui, st, e, lang, n)
     open_page(ui, st, where["volume_master"])
-    slider_drag(ui, st, rows, lang)
+    slider_drag(ui, rows, lang)
     open_page(ui, st, where["language"])
     info = ui.dump().find(st["about_setting"], clickable=True)
     if info:
         ui.tap(info)
         ui.shot("info")
         rotate(ui, emu, c, "info_dialog", st["ok"])
-        close_overlay(ui, st)
+        close_dialog(ui, st["ok"])
     if ui.tap_label(st["more"]):
         ui.tap_label(st["reset_all"])
         ui.shot("reset_confirm")
@@ -703,7 +727,18 @@ def walk_stats(ui, c, full_controls, st):
         ui.shot("stats_empty")
         return
     for k in labels:
-        tab = ui.dump().find(st[k])
+        s = ui.dump()
+        tab = s.find(st[k])
+        for _ in range(4):
+            if tab is not None and tab.w >= DP_MIN * ui.dp - 2:
+                break
+            strip = next((n for n in s.nodes if n.scrollable and n.w > n.h * 3 and n.h < 90 * ui.dp), None)
+            if strip is None:
+                break
+            ui.emu.sh(f"input swipe {strip.x1 - 20} {strip.cy} {strip.x0 + 20} {strip.cy} 450")
+            ui.wait(.6)
+            s = ui.dump()
+            tab = s.find(st[k])
         if tab is None:
             ui.problem("unreachable", f"stats tab {k}")
             continue
@@ -719,7 +754,7 @@ def walk_stats(ui, c, full_controls, st):
                 ui.tap(n)
                 ui.shot("stats_cards_all")
                 ui.tap(ui.scroll_to(st["stats_cards_all"]) or n)
-        ui.scroll_all(f"stats_{k[-5:]}", .5, max_swipes=40 if full_controls else 6)
+        ui.scroll_all(k, .5, max_swipes=40 if full_controls else 6, restore=False)
 
 
 def walk(ui, emu, c, full_controls, sc):
@@ -754,7 +789,7 @@ def walk(ui, emu, c, full_controls, sc):
             if ui.tap_label(st["replays_delete"]):
                 ui.shot("replay_delete")
                 rotate(ui, emu, c, "replay_delete", st["cancel"])
-                close_overlay(ui, st)
+                close_dialog(ui, st["cancel"])
         rotate(ui, emu, c, "replays", st["replays_sort_date"])
     go(ui, st, "stats_title")
     check_no_play(ui, st, "stats")
@@ -764,23 +799,25 @@ def walk(ui, emu, c, full_controls, sc):
 def walk_plain(ui, emu, c):
     """What a player sees: no error card, no update card; imported combos also with no runs recorded."""
     st = strings(c["lang"])
-    def plain_home(name):
+    def plain_home(name, has_runs):
         ui.shot(name)
         s = ui.dump()
-        check_play(ui, st, name)
         p = s.find(st["play"])
-        if p is not None and p.y1 > ui.size()[1]:
+        if p is None or p.h < DP_MIN * ui.dp - 2:
             ui.problem("Play not in the first screen", name)
+        has_summary = any(st["home_best"] in n.text.splitlines() for n in s.nodes)
+        if has_summary != has_runs:
+            ui.problem("incorrect Home summary", f"{name}: expected summary={has_runs}")
         for k in ("last_failed", "update_install", "update_notes"):
             if s.find(st[k]) is not None:
                 ui.problem("card in the no-fixture state", f"{name}: {k}")
-    plain_home("home_plain")
+    plain_home("home_plain", c["imported"])
     if c["imported"]:
         emu.sh(f"am force-stop {PKG}")
         emu.sh(f"run-as {PKG} rm -f files/stats.jsonl files/score.dat")
         launch(emu)
         ensure_rotation(ui, emu, c)
-        plain_home("home_fresh")
+        plain_home("home_fresh", False)
 
 
 def rotate(ui, emu, c, name, keep):
@@ -846,7 +883,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix="ui_matrix", dir=out))
     emu = Emulator(a.port)
-    results, code = [], 0
+    results, code, selected = [], 0, 0
     try:
         if not a.no_boot:
             emu.boot(out / "emulator.log")
@@ -856,6 +893,7 @@ def main():
             name = f"{'land' if c['land'] else 'port'}_{c['lang']}_f{c['font']}_{'cut' if c['cutout'] else 'nocut'}_{'dark' if c['dark'] else 'light'}_{'imported' if c['imported'] else 'missing'}"
             if a.only and a.only not in name:
                 continue
+            selected += 1
             d = out / name
             d.mkdir(exist_ok=True)
             configure(emu, c)
@@ -895,6 +933,8 @@ def main():
                 print("  CRASH\n" + logcat[-1500:], flush=True)
                 results.append({"combo": c, "kind": "crash", "detail": name})
                 emu.adb("logcat", "-c", "-b", "crash", check=False)
+        if selected == 0:
+            results.append({"kind": "driver error", "detail": f"no combinations matched {a.only!r}"})
         (out / "problems.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
         code = 1 if results else 0
         print(f"total problems: {len(results)}")

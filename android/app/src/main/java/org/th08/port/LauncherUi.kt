@@ -421,7 +421,7 @@ private fun HomeScreen(
     openBad: () -> Unit,
 ) {
     val reply by rememberStats()
-    val summary = reply?.getOrNull()?.let(::summaryOf)
+    val summary = reply?.getOrNull()?.let(::summaryOf).takeIf { data.ok() }
     val importing = LocalImport.current.let { it.busy || it.outcome != null }
     val card = !data.ok() || importing
     val update = LocalUpdate.current.takeIf { it.shown }
@@ -470,7 +470,7 @@ private fun Hero(canPlay: Boolean, blocked: Boolean, dataOk: Boolean, wide: Bool
     val label = str(R.string.play)
     Button(
         onClick = play,
-        modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp).heightIn(min = 64.dp).semantics { contentDescription = label },
+        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().heightIn(min = 64.dp).semantics { contentDescription = label },
         colors = if (canPlay) ButtonDefaults.buttonColors() else
             ButtonDefaults.buttonColors(containerColor = c.surfaceContainerHighest, contentColor = c.onSurface),
     ) {
@@ -492,7 +492,7 @@ private fun SummaryCard(s: Summary, rows: List<Setting>, open: () -> Unit) {
     fun word(key: String, v: String) = rows.firstOrNull { it.e.key == key }?.e?.display(v, lang, res) ?: v
     val c = MaterialTheme.colorScheme
     Column(
-        Modifier.fillMaxWidth().widthIn(max = 480.dp).clip(BLOCK).background(c.surfaceContainer).clickable(onClick = open).padding(16.dp),
+        Modifier.widthIn(max = 480.dp).fillMaxWidth().clip(BLOCK).background(c.surfaceContainer).clickable(onClick = open).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         SummaryLine(str(R.string.home_best), digits(s.best))
@@ -544,7 +544,7 @@ private fun DataCard(d: GameData, act: LauncherActions) {
     val c = MaterialTheme.colorScheme
     val st = LocalImport.current
     Column(
-        Modifier.fillMaxWidth().widthIn(max = 480.dp).clip(BLOCK).background(c.surfaceContainer).padding(16.dp),
+        Modifier.widthIn(max = 480.dp).fillMaxWidth().clip(BLOCK).background(c.surfaceContainer).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -926,6 +926,7 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
             val n = Math.round(v).toLong()
             ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
                 Slider(
+                    modifier = Modifier.semantics { contentDescription = t.label },
                     value = v,
                     onValueChange = { v = it },
                     onValueChangeFinished = { act.change(r, Math.round(v).toLong().toString()) },

@@ -288,7 +288,7 @@ private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words, stac
 
 private fun LazyListScope.history(st: JSONObject, w: Words) {
     item("last_h") { Section(str(R.string.stats_last)) }
-    items(st.getJSONArray("last").objects(), key = { "r" + it.getLong("t") }) { r ->
+    items(st.getJSONArray("last").objects()) { r ->
         val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US) }
         val mode = when (r.getString("mode")) {
             "practice" -> R.string.stats_mode_practice
