@@ -726,6 +726,11 @@ label = "Slint の設定画面"
 summary = "移植版メニューの設定を新しい UI で表示します"
 help = "移植版メニューの設定画面を Slint で描画します（開発者向け）"
 
+[entry.scene_ui]
+label = "Scene のポーズメニュー"
+summary = "ポーズメニューと確認画面を Scene で表示します"
+help = "ポーズメニューと確認画面を Scene で表示します"
+
 [entry.pack]
 label = "表示パック"
 summary = "翻訳パックのフォルダまたは zip"

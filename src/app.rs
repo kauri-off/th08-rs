@@ -1543,7 +1543,13 @@ fn audio_state(background: bool, stopped: bool) -> AudioState {
 }
 
 fn ui_name(r: &Running) -> &'static str {
-    if r.settings.slint_ui { "slint" } else { "egui" }
+    if r.settings.scene_ui {
+        "scene"
+    } else if r.settings.slint_ui {
+        "slint"
+    } else {
+        "egui"
+    }
 }
 
 // A discrete user action: the moment a transition's latency counts from.
@@ -2650,12 +2656,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&saves);
     }
 
-    // With `slint_ui` on: the Slint card's own confirm, tapped through, starts the game's pause path.
     #[cfg(feature = "ui-check")]
     #[test]
     fn slint_card_retry_and_quit() {
-        use crate::menu_model::Effect;
-        use crate::platform::portmenu::Shot;
+        card_retry_and_quit(false);
+    }
+
+    #[cfg(feature = "ui-check")]
+    #[test]
+    fn scene_card_retry_and_quit() {
+        card_retry_and_quit(true);
+    }
+
+    #[cfg(feature = "ui-check")]
+    fn card_retry_and_quit(scene: bool) {
+        use crate::menu_model::{Effect, Item};
+        use crate::platform::portmenu::{Shot, scene_check};
         use crate::slintui::check::CardHarness;
         use th08_core::types::SceneId;
         use th08_render::gfx::{Gfx, SafeArea};
@@ -2663,19 +2679,22 @@ mod tests {
         else {
             return;
         };
-        let Ok(gfx) = pollster::block_on(Gfx::headless()) else {
-            eprintln!("no GPU adapter: skipped");
-            return;
+        let gfx = if scene {
+            None
+        } else {
+            let Ok(gfx) = pollster::block_on(Gfx::headless()) else {
+                eprintln!("no GPU adapter: skipped");
+                return;
+            };
+            Some(gfx)
         };
-        for (item, want, tag) in [
-            ("Retry", Effect::Retry, "slint_retry"),
-            ("Quit", Effect::Quit, "slint_quit"),
-        ] {
-            let (mut r, saves) = stage_one(dir.clone(), tag);
+        for (item, want) in [(Item::Retry, Effect::Retry), (Item::Quit, Effect::Quit)] {
+            let ui = if scene { "scene_ui" } else { "slint_ui" };
+            let (mut r, saves) = stage_one(dir.clone(), &format!("{ui}_{item:?}"));
             r.settings
-                .set_from(crate::settings::Origin::Cli, "slint_ui", "on")
+                .set_from(crate::settings::Origin::Cli, ui, "on")
                 .unwrap();
-            assert!(r.settings.slint_ui);
+            assert_eq!(ui_name(&r), if scene { "scene" } else { "slint" });
             let step = |r: &mut Running| {
                 assert!(logic_frames(r, 1, false, false).is_none());
                 r.ctx.draw();
@@ -2691,16 +2710,22 @@ mod tests {
                 density: 2.75,
                 ..Shot::default()
             };
-            let mut h =
-                CardHarness::new(&gfx, &r.settings, (2400, 1080), SafeArea::default(), &shot)
-                    .unwrap();
-            let at = h.rig.item_names().iter().position(|n| n == item).unwrap();
-            let row = h.target(&format!("item|{at}"));
-            h.tap(row);
-            assert!(h.rig.asking());
-            let yes = h.target("answer|act");
-            h.tap(yes);
-            let done = h.take_done();
+            let size = (2400, 1080);
+            let safe = SafeArea::default();
+            let done = if let Some(gfx) = &gfx {
+                let mut h = CardHarness::new(gfx, &r.settings, size, safe, &shot).unwrap();
+                let label = format!("{item:?}");
+                let at = h.rig.item_names().iter().position(|n| *n == label).unwrap();
+                h.tap(h.target(&format!("item|{at}")));
+                assert!(h.rig.asking());
+                h.tap(h.target("answer|act"));
+                h.take_done()
+            } else {
+                let mut rig = scene_check::Rig::new(&r.settings, size, safe, &shot);
+                assert!(rig.tap_item(item).is_empty());
+                assert!(rig.asking());
+                rig.tap_answer(true)
+            };
             assert_eq!(done, [want]);
             let action = done[0].action().unwrap();
             let started = r.ctx.w.game.stages_started;
@@ -2709,7 +2734,7 @@ mod tests {
             while r.quit.is_some() || n < 120 {
                 step(&mut r);
                 n += 1;
-                assert!(n < 1000, "{item} did not finish");
+                assert!(n < 1000, "{item:?} did not finish");
             }
             let g = &r.ctx.w.game;
             if want == Effect::Retry {
