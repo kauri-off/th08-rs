@@ -133,6 +133,10 @@ class Screen:
     def texts(self):
         return [n.label for n in self.nodes if n.label]
 
+    def position(self, region=None):
+        return tuple((n.label, n.x0, n.y0, n.x1, n.y1) for n in self.nodes if n.label and
+                     (region is None or region[0] <= n.x0 and n.x1 <= region[2]))
+
     def toggles(self):
         return sorted((n.y0 > -1 and n.label, n.checked) for n in self.nodes if n.checkable)
 
@@ -176,6 +180,7 @@ class Ui:
         if key not in self.seen_problem:
             self.seen_problem.add(key)
             self.problems.append({"combo": self.combo, "kind": kind, "detail": detail, "shot": self.n})
+            print(f"  [{kind}] {detail}", flush=True)
 
     def lint(self, s, where):
         W, H = self.size()
@@ -312,25 +317,25 @@ class Ui:
             self.shot(f"{name}_top", s)
         if region is None:
             return seen, True
-        prev, i, still = None, 0, 0
+        prev, i = s.position(), 0
         while i < max_swipes:
             i += 1
             self.swipe_up(frac_x, region)
             s = self.dump()
-            self.text_audit(name)
             seen |= set(s.texts())
             for n in s.nodes:
                 if n.checkable and n.label and n.w > 200 * self.dp:
                     if n.label in tog and tog[n.label] != n.checked:
                         self.problem("scroll changed a toggle", f"{name}: {n.label}")
                     tog[n.label] = n.checked
-            sig = tuple(s.texts())
-            still = still + 1 if sig == prev else 0
-            if still >= 2:
+            sig = s.position()
+            if sig == prev:
                 break
             prev = sig
             if shots and i % 3 == 0:
                 self.shot(f"{name}_s{i}", s)
+            else:
+                self.text_audit(name)
         if shots:
             self.shot(f"{name}_end", s)
         if self.cfg() != before_cfg:
@@ -342,21 +347,21 @@ class Ui:
             self.swipe_down(frac_x, region)
         return seen, not missing
 
-    def scroll_to(self, *labels, clickable=True, tries=40):
+    def scroll_to(self, *labels, clickable=True, tries=40, room=4):
         s = self.dump()
         region = self.scroll_region(s)
         for down in (True, False):
-            prev = None
+            prev = s.position()
             for _ in range(tries):
                 n = s.find(*labels, clickable=clickable)
-                room = 150 * self.dp if down else 4 * self.dp
-                if n is not None and (region is None or (n.y0 >= region[1] and n.y1 <= region[3] - room)):
+                inset = room * self.dp if down else 4 * self.dp
+                if n is not None and (region is None or (n.y0 >= region[1] and n.y1 <= region[3] - inset)):
                     return n
                 if region is None:
                     return None
                 (self.swipe_up if down else self.swipe_down)(.25, region)
                 s = self.dump()
-                sig = tuple(s.texts())
+                sig = s.position()
                 if sig == prev:
                     n = s.find(*labels, clickable=clickable)
                     if n is not None and n.y0 >= region[1] and n.y1 <= region[3]:
@@ -497,16 +502,21 @@ def open_page(ui, st, title):
         W, _ = ui.size()
         left = [n for n in s.nodes if n.scrollable and n.x1 < W * .6]
         region = (left[0].x0, left[0].y0, left[0].x1, left[0].y1) if left else None
-        for swipe in [None] + [ui.swipe_down] * 6 + [ui.swipe_up] * 12:
-            if swipe and region:
+        for swipe in (ui.swipe_up, ui.swipe_down):
+            for _ in range(12):
+                hit = [n for n in s.find_all(title) if n.click_target() and n.x1 < W * .6]
+                if hit:
+                    ui.tap(hit[0])
+                    ui.page = title
+                    ui.xmin = left[0].x1 if left else hit[0].x1
+                    return True
+                if region is None:
+                    break
+                prev = s.position(region)
                 swipe(.5, region)
                 s = ui.dump()
-            hit = [n for n in s.find_all(title) if n.click_target() and n.x1 < W * .6]
-            if hit:
-                ui.tap(hit[0])
-                ui.page = title
-                ui.xmin = left[0].x1 if left else hit[0].x1
-                return True
+                if s.position(region) == prev:
+                    break
         ui.problem("unreachable", f"page '{title}'")
         return False
     s = ui.dump()
@@ -613,7 +623,7 @@ def exercise_row(ui, st, e, lang, n):
 def slider_drag(ui, rows, lang):
     key = "volume_master"
     label = text_of(next(e for e in rows if e["key"] == key), lang)["label"]
-    ui.scroll_to(label, clickable=False)
+    ui.scroll_to(label, clickable=False, room=150)
     for _ in range(5):
         s = ui.dump()
         region = ui.scroll_region(s)
@@ -705,8 +715,10 @@ def walk_settings(ui, emu, c, full_controls, sc, st, lang, rows):
             ui.problem("unreachable", f"control '{e['key']}'")
     if not full_controls:
         return
-    for e in rows:
-        if e["audience"] == "dev":
+    by_key = {e["key"]: e for e in rows}
+    for key in where:
+        e = by_key.get(key)
+        if e is None or e["audience"] == "dev":
             continue
         if not open_page(ui, st, where[e["key"]]):
             continue
@@ -791,7 +803,7 @@ def walk(ui, emu, c, full_controls, sc):
     walk_settings(ui, emu, c, full_controls, sc, st, lang, rows)
     go(ui, st, "replays_title")
     check_no_play(ui, st, "replays")
-    ui.scroll_all("replays", .5, want=["th8_damaged.rpy"])
+    ui.scroll_all("replays", .5, want=["th8_damaged.rpy"], restore=full_controls)
     if full_controls:
         s = ui.dump()
         more = sorted(s.find_all(st["more"]), key=lambda n: n.y0)
@@ -935,6 +947,7 @@ def main():
             selected += 1
             d = out / name
             d.mkdir(exist_ok=True)
+            print(f"running {name}", flush=True)
             t = time.time()
             ui = None
             for attempt in range(2):
@@ -953,8 +966,6 @@ def main():
                 break
             sheet(ui.shots, out / f"{name}.jpg", name)
             print(f"{name}: {len(ui.problems)} problems, {len(ui.shots)} shots, {time.time() - t:.0f}s", flush=True)
-            for pr in ui.problems:
-                print(f"  [{pr['kind']}] {pr['detail']}", flush=True)
             results += ui.problems
             try:
                 logcat = emu.adb("logcat", "-d", "-b", "crash", check=False).decode(errors="replace")
