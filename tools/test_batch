@@ -1,0 +1,79 @@
+#!/bin/bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+cd "$scratch"
+mkdir -p tools/batch re/tools bin
+cp "$root"/tools/{batch_job,batch_run,check_level,release_gate} tools/
+touch re/tools/localenv.sh
+export TH08_EXT_REPLAYS="$scratch/replays" TH08_DIR="$scratch" J=1
+export PATH="$scratch/bin:$PATH" CARGO_TARGET_DIR="$scratch/build"
+unset TH08_BATCH_LIMIT TH08_BATCH_PROFILE TH08_BATCH_NORECORD TH08_BATCH_REQUIRE_CLEAN
+cat > bin/cargo <<'EOF'
+#!/bin/bash
+set -eu
+case ${TEST_BUILD_CHANGE:-} in
+  restore) git restore tools/batch/ref500.identical ;;
+  commit) git commit -qm 'move HEAD' --allow-empty ;;
+esac
+mkdir -p "$CARGO_TARGET_DIR/release"
+cp bin/session "$CARGO_TARGET_DIR/release/"
+EOF
+cat > bin/session <<'EOF'
+#!/bin/bash
+set -eu
+[[ $4 == --no-drawlog ]]
+echo '1 rows (from the first main-menu row)'
+echo 'no differing row'
+[[ $1 != */extra && ${TEST_SESSION_FAIL:-} != "${1##*/}" ]]
+EOF
+chmod +x bin/{cargo,session}
+printf 'alpha\nbeta\n' > tools/batch/ref500.identical
+printf 'gamma\n' > tools/batch/ref_b2.identical
+for entry in ref500/alpha ref500/beta ref500/extra ref_b2/gamma; do
+  dir=$TH08_EXT_REPLAYS/$entry
+  mkdir -p "$dir/start/replay"
+  echo 'rpy_result: accepted' > "$dir/meta.txt"
+  for file in polls.txt events.txt trace.txt.xz start/th08.cfg start/score.dat start/replay/th8_ud0001.rpy; do
+    echo fixture > "$dir/$file"
+  done
+done
+git init -q -b master
+git config user.name 'Batch test'
+git config user.email 'batch@example.invalid'
+git config commit.gpgsign false
+git add tools re
+git commit -qm baseline
+head=$(git rev-parse HEAD)
+
+expect_exit() {
+  local expected=$1 rc=0
+  shift
+  "$@" || rc=$?
+  [[ $rc == "$expected" ]] || { echo "expected exit $expected, got $rc: $*" >&2; exit 1; }
+}
+
+TH08_BATCH_LIMIT=1 tools/batch_job run limited
+[[ ! -e devdata/batch_results ]]
+[[ $(cat target/batch_limited/ref500/expected.txt) == alpha ]]
+expect_exit 1 env TEST_SESSION_FAIL=alpha tools/batch_job run failed-replay
+[[ -s target/batch_failed-replay/ref500/regressions.txt ]]
+[[ -f target/batch_failed-replay/ref500/err/alpha.failed ]]
+mv replays/ref500/beta/trace.txt.xz replays/ref500/beta/trace.saved
+expect_exit 1 tools/batch_job run missing-replay
+mv replays/ref500/beta/trace.saved replays/ref500/beta/trace.txt.xz
+tools/batch_job run clean "$head"
+cmp tools/batch/ref500.identical target/batch_clean/ref500/expected.txt
+tools/release_gate
+cp devdata/batch_results saved-results
+printf '\n' >> tools/batch/ref500.identical
+TEST_BUILD_CHANGE=restore tools/batch_job run initially-dirty
+cmp saved-results devdata/batch_results
+[[ $(cat target/batch_clean/head.txt) == "$head" ]]
+expect_exit 2 env TEST_BUILD_CHANGE=commit tools/batch_job run moved-head "$head"
+expect_exit 2 tools/batch_job run stale-job "$head"
+cmp saved-results devdata/batch_results
+printf 'alpha\n' > tools/batch/ref500.identical
+[[ $(tools/check_level | head -1) == batch ]]
+echo 'batch tests passed'
