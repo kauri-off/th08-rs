@@ -252,6 +252,10 @@ pub struct PortMenu {
     session_started: bool,
     // What the last presented frame showed.
     shown: Option<Shown>,
+    // The zoom the last pass set; egui applies it on the pass after.
+    zoom: f32,
+    // The last pass could not get a surface image.
+    retry: bool,
 }
 
 // The screen one frame shows; a change between presented frames is a transition.
@@ -335,6 +339,22 @@ impl PortMenu {
             opened_at: Some(began),
             session_started: false,
             shown: None,
+            zoom: 0.0,
+            retry: false,
+        }
+    }
+
+    // The one place the menu asks for a frame; the event loop calls it after each batch of events and passes.
+    pub fn request_frames(&mut self, window: &Window) {
+        let slint = self.use_slint && self.edit.is_none();
+        self.menu.set_view_key(
+            u64::from(self.zoom.to_bits()) << 2
+                | u64::from(self.edit.is_some()) << 1
+                | u64::from(self.use_slint),
+        );
+        let view = slint && self.slint.as_ref().is_some_and(|m| m.adapter().is_dirty());
+        if self.menu.take_frame() | view | std::mem::take(&mut self.retry) {
+            window.request_redraw();
         }
     }
 
@@ -456,15 +476,15 @@ impl PortMenu {
                     at.elapsed().as_micros(),
                 );
             }
-            if !self.ensure_slint(window, gfx) {
+            if !self.ensure_slint(gfx) {
                 return None;
             }
             if self.menu.page() == Page::Settings {
-                let act = self.redraw_slint(window, gfx, lay);
+                let act = self.redraw_slint(gfx, lay);
                 crate::slintui::host::pass_end("settings", pass);
                 return act;
             }
-            let act = self.redraw_card(window, gfx, lay);
+            let act = self.redraw_card(gfx, lay);
             crate::slintui::host::pass_end("card", pass);
             return act;
         }
@@ -474,9 +494,7 @@ impl PortMenu {
             lay.ppp
         };
         let z = ppp / window.scale_factor() as f32;
-        if self.ctx.zoom_factor() != z {
-            window.request_redraw();
-        }
+        self.zoom = z;
         self.ctx.set_zoom_factor(z);
         let mut raw = self.state.take_egui_input(window);
         raw.safe_area_insets = Some(insets(s, ppp));
@@ -520,7 +538,7 @@ impl PortMenu {
             }
         });
         menu.set_moved(false);
-        let act = self.run_dos(todo, window, gfx);
+        let act = self.run_dos(todo, gfx);
         match done {
             Some(EditOut::Save(l)) => {
                 if let Some(t) = &mut self.touch {
@@ -528,12 +546,8 @@ impl PortMenu {
                 }
                 self.saved = Some(l);
                 self.edit = None;
-                window.request_redraw();
             }
-            Some(EditOut::Cancel) => {
-                self.edit = None;
-                window.request_redraw();
-            }
+            Some(EditOut::Cancel) => self.edit = None,
             None => {}
         }
         self.state
@@ -562,9 +576,8 @@ impl PortMenu {
         gfx.safe = s;
         if shown {
             self.note_shown(showing);
-        } else {
-            window.request_redraw();
         }
+        self.retry = !shown;
         act
     }
 
@@ -589,7 +602,7 @@ impl PortMenu {
     }
 
     // Carries out what the card asked for; the action for the app, if any.
-    fn run_dos(&mut self, todo: Vec<Effect>, window: &Window, gfx: &mut Gfx) -> Option<Action> {
+    fn run_dos(&mut self, todo: Vec<Effect>, gfx: &mut Gfx) -> Option<Action> {
         let mut act = None;
         for d in todo {
             if matches!(d, Effect::ScrollMoved | Effect::HoverChanged) {
@@ -606,13 +619,12 @@ impl PortMenu {
                 }
                 _ => {}
             }
-            window.request_redraw();
         }
         act
     }
 
     // The Slint window for this GPU generation, built once; false when Slint failed and the menu fell back to egui.
-    fn ensure_slint(&mut self, window: &Window, gfx: &mut Gfx) -> bool {
+    fn ensure_slint(&mut self, gfx: &mut Gfx) -> bool {
         use crate::slintui::menu::Menu;
         gfx.recover_if_lost();
         let fresh = self.slint.is_none();
@@ -635,7 +647,6 @@ impl PortMenu {
                 Err(e) => {
                     log::error!("slintui: {e}; falling back to egui");
                     self.use_slint = false;
-                    window.request_redraw();
                     return false;
                 }
             }
@@ -650,7 +661,7 @@ impl PortMenu {
     }
 
     // One pass of the Slint pause card; the shared model decides everything, so keys and confirms match the egui card.
-    fn redraw_card(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
+    fn redraw_card(&mut self, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
         use crate::slintui::menu::View;
         use crate::slintui::settings_page::Place;
         let safe = gfx.safe;
@@ -674,10 +685,6 @@ impl PortMenu {
         let navs = std::mem::take(&mut self.navs);
         let place = Place { lay, safe, size };
         let todo = card_pass(&mut menu.card, &m, &mut self.menu, place, navs);
-        // Settings draws on the next pass, and nothing else would ask for one until the next input.
-        if self.menu.page() == Page::Settings {
-            window.request_redraw();
-        }
         self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
         gfx.safe = lay.picture;
         let screen = if self.menu.ask().is_some() {
@@ -695,14 +702,13 @@ impl PortMenu {
             } else {
                 Shown::Card
             });
-        } else {
-            window.request_redraw();
         }
-        self.run_dos(todo, window, gfx)
+        self.retry = !shown;
+        self.run_dos(todo, gfx)
     }
 
     // One pass of the Slint settings page; texture work only when the page changed.
-    fn redraw_slint(&mut self, window: &Window, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
+    fn redraw_slint(&mut self, gfx: &mut Gfx, lay: Layout) -> Option<Action> {
         use crate::slintui::menu::View;
         use crate::slintui::settings_page::Place;
         let safe = gfx.safe;
@@ -723,8 +729,7 @@ impl PortMenu {
         let todo = menu.page.apply(&mut self.menu, navs, lang);
         self.repaint_at = menu.tick().map(|d| web_time::Instant::now() + d);
         if self.menu.page() != Page::Settings {
-            window.request_redraw();
-            return self.run_dos(todo, window, gfx);
+            return self.run_dos(todo, gfx);
         }
         gfx.safe = lay.picture;
         let tab = Some(self.menu.tab());
@@ -734,10 +739,9 @@ impl PortMenu {
         gfx.safe = safe;
         if shown {
             self.note_shown(Shown::Settings(self.menu.tab()));
-        } else {
-            window.request_redraw();
         }
-        self.run_dos(todo, window, gfx)
+        self.retry = !shown;
+        self.run_dos(todo, gfx)
     }
 }
 

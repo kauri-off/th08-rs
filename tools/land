@@ -17,18 +17,29 @@ setup() {
 
 # 0 when the tree of commit $1 has a pass stamp at the level it needs against master; else says why.
 stamp_ok() {
-  local tree need f lv
+  local tree need f lv rule=$M/tools/check_level requirements status
   tree=$(git rev-parse "$1^{tree}")
-  need=$(tools/check_level master "$1" | head -1)
+  if [[ -n $2 ]]; then
+    status=$(git -C "$2" status --porcelain) || return 1
+    [[ -z $status ]] || { echo "tools/land: $2 has uncommitted or untracked files"; return 1; }
+    rule=$2/tools/check_level
+  elif ! git diff --quiet master "$1" -- tools/check_level; then
+    echo "tools/land: $1 needs its worktree checker"; return 1
+  fi
+  requirements=$("$rule" master "$1") || return 1
+  need=$(head -1 <<< "$requirements")
   f=devdata/checks/$tree.pass
   [[ -f $f ]] || { echo "tools/land: no pass stamp for tree ${tree:0:12} (needs $need)"; return 1; }
   lv=$(sed -n 's/^level: //p' "$f")
   (( $(rank "$lv") >= $(rank "$need") )) || { echo "tools/land: stamp of tree ${tree:0:12} is $lv, needs $need"; return 1; }
+  if grep -q '^emu:' <<< "$requirements" && ! grep -qE '^emu: [0-9]{8}-[0-9]{6}-[a-f0-9]{4}$' "$f"; then
+    echo "tools/land: stamp of tree ${tree:0:12} has no emulator result"; return 1
+  fi
   LEVEL=$lv
 }
 
 land() {
-  local br=$1 wt old tries u
+  local br=$1 wt old tries u status
   cd "$M" || exit 2
   [[ $(git rev-parse --path-format=absolute --git-dir) == "$(git rev-parse --path-format=absolute --git-common-dir)" ]] ||
     die "run it in the main checkout"
@@ -39,7 +50,11 @@ land() {
   wt=$(git worktree list --porcelain | awk -v b="branch refs/heads/$br" '/^worktree /{w=substr($0, 10)} $0 == b {print w}')
   old=$(git rev-parse master)
   for tries in 1 2 3; do
-    if git merge-base --is-ancestor master "$br" && stamp_ok "$br"; then
+    if [[ -n $wt ]]; then
+      status=$(git -C "$wt" status --porcelain) || die "cannot inspect $wt"
+      [[ -z $status ]] || die "$wt has uncommitted or untracked files"
+    fi
+    if git merge-base --is-ancestor master "$br" && stamp_ok "$br" "$wt"; then
       git merge --ff-only -q "$br" || die "fast-forward failed"
       echo "tools/land: $br landed ($LEVEL):"
       git log --oneline "$old..master"
@@ -60,7 +75,6 @@ land() {
       return 0
     fi
     [[ -n $wt ]] || die "$br has no worktree to rebase and check in"
-    [[ -z $(git -C "$wt" status --porcelain) ]] || die "$wt has uncommitted or untracked files"
     if ! git merge-base --is-ancestor master "$br"; then
       echo "tools/land: rebasing $br onto master in $wt"
       if ! git -C "$wt" rebase -q master; then
@@ -69,9 +83,11 @@ land() {
         echo "tools/land: conflict rebasing $br onto master in:"; echo "$u" | sed 's/^/  /'
         die "stopped; nothing landed (resolve with git -C $wt rebase master)"
       fi
-      stamp_ok "$br" > /dev/null && continue
+      status=$(git -C "$wt" status --porcelain) || die "cannot inspect $wt"
+      [[ -z $status ]] || die "$wt has uncommitted or untracked files after rebase"
+      stamp_ok "$br" "$wt" > /dev/null && continue
     fi
-    (cd "$wt" && "$M/tools/check" --block "${br##*/}") || die "check failed; nothing landed"
+    (cd "$wt" && tools/check --block "${br##*/}") || die "check failed; nothing landed"
   done
   die "master kept moving; run tools/land $br again"
 }
@@ -107,6 +123,13 @@ selftest() {
   rm "$T/wt-a/junk"
   ok '(cd "$T/wt-a" && tools/check a > /dev/null) && ls "$R"/devdata/checks/*.pass > /dev/null' "check writes a stamp"
   local ah=$(g "$T/wt-a" rev-parse HEAD)
+  printf 'touch %q\necho light\n' "$T/dirty-checker-ran" > "$T/wt-a/tools/check_level"
+  local before=$(g "$R" rev-parse master)
+  local rejected=0
+  out=$("$R/tools/land" a) || rejected=$?
+  ok '[[ $rejected != 0 && $out == *"uncommitted or untracked files"* && $(g "$R" rev-parse master) == "$before" && ! -e $T/dirty-checker-ran ]]' \
+    "fast-forward refuses a dirty checker even with an existing stamp"
+  g "$T/wt-a" restore tools/check_level
   out=$("$R/tools/land" a)
   ok '[[ $(g "$R" rev-parse master) == "$ah" && ! -d $T/wt-a ]] && ! g "$R" rev-parse -q --verify a > /dev/null' \
     "ff path: landed, worktree and branch removed"
