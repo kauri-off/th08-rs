@@ -508,7 +508,8 @@ def open_page(ui, st, title):
         region = (left[0].x0, left[0].y0, left[0].x1, left[0].y1) if left else None
         for swipe in (ui.swipe_up, ui.swipe_down):
             for _ in range(12):
-                hit = [n for n in s.find_all(title) if n.click_target() and n.x1 < W * .6]
+                hit = [t for n in s.find_all(title) if (t := n.click_target()) and
+                       t.x1 < W * .6 and t.h >= DP_MIN * ui.dp - 2]
                 if hit:
                     ui.tap(hit[0])
                     ui.page = title
