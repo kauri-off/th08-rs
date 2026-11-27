@@ -31,7 +31,7 @@ batch_at() {
   git -C "$MAIN" worktree remove --force "$wt" 2> /dev/null
   git -C "$MAIN" worktree add -q --detach "$wt" "$sha" || return 2
   echo "== batch $name on $(git -C "$MAIN" log -1 --format='%h %s' "$sha")"
-  (cd "$wt" && TH08_BATCH_NORECORD=1 env -u CARGO_TARGET_DIR tools/batch_job run "$name"); rc=$?
+  (cd "$wt" && TH08_BATCH_NORECORD=1 TH08_BATCH_REQUIRE_CLEAN=1 env -u CARGO_TARGET_DIR tools/batch_job run "$name" "$sha"); rc=$?
   git -C "$MAIN" worktree remove --force "$wt"
   return $rc
 }
@@ -58,12 +58,13 @@ case ${1:-} in
     master=$(git rev-parse master) || exit 2
     echo "== train: master $(git log -1 --format='%h %s' master), $(grep -c . "$snap") due"
     if [[ $(git rev-parse HEAD) == "$master" && -z $(git status --porcelain --untracked-files=no) ]]; then
-      TH08_BATCH_NORECORD=1 tools/batch_job run train; rc=$?
+      TH08_BATCH_NORECORD=1 TH08_BATCH_REQUIRE_CLEAN=1 tools/batch_job run train "$master"; rc=$?
     else
       batch_at "$master" train; rc=$?
     fi
     if [[ -n ${TH08_BATCH_LIMIT:-} ]]; then echo "== train: TH08_BATCH_LIMIT run, nothing recorded or cleared"; exit $rc; fi
-    record "$master" "$rc" train
+    (( rc <= 1 )) || exit "$rc"
+    record "$master" "$rc" train || exit 2
     if (( rc == 0 )); then
       [[ -s $snap ]] && { grep -vxFf "$snap" "$DUE" > "$DUE.tmp"; mv "$DUE.tmp" "$DUE"; }
       echo "== train: PASS on master; due list cleared"; exit 0
@@ -74,7 +75,8 @@ case ${1:-} in
     while (( hi - lo > 1 )); do
       mid=$(( (lo + hi) / 2 ))
       batch_at "${due[mid]}" "bisect-${due[mid]:0:8}"; r=$?
-      record "${due[mid]}" "$r" "bisect-${due[mid]:0:8}"
+      (( r <= 1 )) || exit "$r"
+      record "${due[mid]}" "$r" "bisect-${due[mid]:0:8}" || exit 2
       if (( r == 0 )); then lo=$mid; else hi=$mid; fi
     done
     if (( ${#due[@]} == 0 )); then
@@ -91,15 +93,24 @@ case ${1:-} in
     source "$ROOT/re/tools/localenv.sh"
     prog=()
     for s in $SETS; do
-      x=$(grep -l '^rpy_result: accepted' "${TH08_EXT_REPLAYS:-/nonexistent}/$s"/*/meta.txt 2> /dev/null | wc -l)
-      [[ -n ${TH08_BATCH_LIMIT:-} ]] && (( x > TH08_BATCH_LIMIT )) && x=$TH08_BATCH_LIMIT
+      x=$(wc -l < "$ROOT/tools/batch/$s.identical") || exit 2
+      [[ ${TH08_BATCH_LIMIT:-} =~ ^[1-9][0-9]*$ ]] && (( x > TH08_BATCH_LIMIT )) && x=$TH08_BATCH_LIMIT
       prog+=(--progress "target/batch_$n/$s/rep/*.txt|$x")
     done
-    exec "$MAIN/tools/q" submit --kind "${KIND:-batch}" --label "b-$n" -C "$ROOT" "${prog[@]}" -- tools/batch_job run "$n" ;;
+    head=$(git -C "$ROOT" rev-parse HEAD) || exit 2
+    exec "$MAIN/tools/q" submit --kind "${KIND:-batch}" --label "b-$n" -C "$ROOT" "${prog[@]}" -- tools/batch_job run "$n" "$head" ;;
 esac
 
 n=${2:-}; [[ -n $n ]] || usage
 cd "$ROOT" || exit 2
+head=$(git rev-parse HEAD) || exit 2
+if [[ $head != "${3:-$head}" ]]; then
+  echo "FAIL: HEAD changed since the batch was queued"; exit 2
+fi
+initial_status=$(git status --porcelain --untracked-files=no) || exit 2
+if [[ -n ${TH08_BATCH_REQUIRE_CLEAN:-} && -n $initial_status ]]; then
+  echo "FAIL: the batch train requires a clean checkout"; exit 2
+fi
 T=${CARGO_TARGET_DIR:-$ROOT/target}
 O=$ROOT/target/batch_$n
 mkdir -p "$ROOT/target/queue"; touch "$ROOT/target/queue/batch.running"; trap 'rm -f "$ROOT/target/queue/batch.running"' EXIT
@@ -108,16 +119,22 @@ cargo build --profile "$P" --locked -p th08-tools --bin session || { echo "FAIL:
 rm -rf "$O"; mkdir -p "$O"
 cp "$T/$P/session" "$O/session.bin" || exit 2
 export SESSION_BIN=$O/session.bin
+printf '%s\n' "$head" > "$O/head.txt" || exit 2
+printf '%s\n' "$initial_status" > "$O/initial-status.txt" || exit 2
 rc=0 failed=
 for s in $SETS; do
   echo "== $s"
   tools/batch_run "$s" "$O/$s" || { rc=1; failed+=" $s"; }
 done
+current_status=$(git status --porcelain --untracked-files=no) || exit 2
+if [[ $(git rev-parse HEAD) != "$head" || ( -z $initial_status && -n $current_status ) ]]; then
+  echo "FAIL: checkout changed during the batch; no result recorded"; exit 2
+fi
 if [[ -n $failed ]]; then echo "== batch $n: FAIL:$failed"; else echo "== batch $n: PASS"; fi
 for s in $SETS; do [[ -s $O/$s/regressions.txt ]] && cut -d' ' -f1 "$O/$s/regressions.txt" | sed "s/^/regressed $s: /"; done
 # Only a clean tree's result stands for its commit; a full-set run only (TH08_BATCH_LIMIT unset).
-if [[ -z ${TH08_BATCH_NORECORD:-} && -z ${TH08_BATCH_LIMIT:-} && -z $(git status --porcelain --untracked-files=no) ]]; then
-  record "$(git rev-parse HEAD)" "$rc" "$n"
+if [[ -z ${TH08_BATCH_NORECORD:-} && -z ${TH08_BATCH_LIMIT:-} && -z $initial_status && -z $current_status ]]; then
+  record "$head" "$rc" "$n" || exit 2
 fi
 # Keep the newest 3 batch dirs.
 ls -dt "$ROOT"/target/batch_*/ 2> /dev/null | grep -v '/batch_train/$' | tail -n +4 | xargs -r rm -rf --

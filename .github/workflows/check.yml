@@ -56,6 +56,7 @@ jobs:
       - run: tools/core_deps
       - run: tools/emit_rule
       - run: tools/doc_pointers
+      - run: tools/test_batch
 
   clippy:
     runs-on: ubuntu-latest

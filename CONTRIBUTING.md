@@ -66,9 +66,17 @@ skipped when absent. Draw hashes cover the draw commands, not the GPU output. Th
 local and also compared on their machine; everyone else sets `TH08_PUBLIC_SESSIONS_ONLY=1`, for freeze and run alike
 (without it arch_check stops, so that a missing session never means a smaller check).
 
-**The replay batch** plays third-party replays recorded in the original (sets `ref500` and `ref_b2` under
-`$TH08_EXT_REPLAYS`, not published) and fails on any replay that leaves `tools/batch/<set>.identical`. Only the
-maintainer can run it (`tools/batch_job NAME`); a pull request that needs it says so and the maintainer runs it.
+**The replay batch** compares the port with recordings from the original. The tracked `tools/batch/<set>.identical`
+lists define the fixed corpus: 490 recordings in `ref500` and 498 in `ref_b2` under `$TH08_EXT_REPLAYS`.
+Each listed session must be present and reproduce its reference trace. Keep `meta.txt`, `polls.txt`, `events.txt`,
+`trace.txt.xz`, and the `start/` snapshot, including the replay. The batch runs with `--no-drawlog`.
+The original draw logs are for manual investigation and can be generated from a saved session with
+`re/tools/play_session.sh /path/to/session --drawlog --out /path/to/scratch`.
+
+Run a full local check with `tools/batch_job NAME` through the queue, or `tools/batch_job run NAME` directly.
+Set `TH08_BATCH_LIMIT=1` for one recording from each set. Limited runs and runs with uncommitted tracked
+changes do not qualify for `tools/release_gate`. Per-recording reports and the checked commit are under
+`target/batch_NAME/`. The CI check `tools/test_batch` exercises the scripts with synthetic recordings.
 
 Windowed binaries in automated runs go through `tools/offscreen <cmd>`, wine through `tools/wine_headless` with a
 throwaway `WINEPREFIX`.
@@ -93,7 +101,7 @@ Logic must stay identical to the original, so the proof is port against the orig
    is still identical (or improved, e.g. a pilot replay that now plays further); explain each differing item in the
    pull request. Once accepted, the new reference is your commit's `tools/arch_check freeze DIR` (the maintainer's
    reference lives in `devdata/arch_ref` and is re-frozen on the merged commit).
-3. **Replay batch** (maintainer): no replay may leave the `.identical` lists; a replay that newly matches is added.
+3. **Replay batch** (maintainer): every recording in the fixed corpus must still match.
 
 ### Changing the renderer
 

@@ -25,7 +25,7 @@ comment_only() {
   [[ -n $body ]] && ! grep -qvE '^[-+][[:space:]]*(//.*)?$' <<<"$body"
 }
 manifests='^(Cargo\.lock|Cargo\.toml|crates/th08-(core|formats|out)/Cargo\.toml)$'
-batch=$(grep -E '^(\.cargo/|rust-toolchain)|^crates/th08-(core|formats)/src/' <<<"$files" | grep -vE "$draw" |
+batch=$(grep -E '^(\.cargo/|rust-toolchain)|^crates/th08-(core|formats)/src/|^tools/(batch_job|batch_run|batch/[^/]+\.identical)$' <<<"$files" | grep -vE "$draw" |
   while read -r f; do comment_only "$f" || echo "$f"; done)
 deps=$(grep -E "$manifests" <<<"$files")
 full=$(grep -E '^crates/th08-(core|formats|out|tools|render)/|^specs/data/|^src/(settings|platform)\.rs$|^tools/arch_check$' <<<"$files")

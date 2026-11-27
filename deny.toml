@@ -10,6 +10,7 @@ ignore = [
     "RUSTSEC-2026-0192",
     # pin-utils: unmaintained, no known flaw; reached only through spin_on (slint-build, slint-macros).
     "RUSTSEC-2026-0441",
+    { id = "RUSTSEC-2026-0543", reason = "Unmaintained notice; Slint still requires chrono. Remove this exception when Slint and the port date helpers have migrated." },
 ]
 
 [sources]
