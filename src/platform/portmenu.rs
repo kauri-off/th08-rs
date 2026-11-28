@@ -712,7 +712,11 @@ impl PortMenu {
         self.sync_pointer_view(window);
         if let WindowEvent::Focused(focused) = ev {
             if !focused {
+                let view = self.scene.as_ref().and_then(|card| card.input_view);
                 self.cancel_pointer(window);
+                if let Some(card) = &mut self.scene {
+                    card.input_view = view;
+                }
             }
             let card = self.scene.as_mut().expect("Scene menu");
             card.unfocused = !focused;
@@ -4722,6 +4726,8 @@ mod tests {
         mouse(&mut slint, ElementState::Released);
         slint.redraw(&window, &mut gfx);
         let after_blur = slint.menu.page();
+        slint.on_event(&window, &WindowEvent::Focused(false));
+        slint.on_event(&window, &WindowEvent::Focused(true));
         mouse(&mut slint, ElementState::Pressed);
         mouse(&mut slint, ElementState::Released);
         slint.redraw(&window, &mut gfx);
@@ -4733,7 +4739,6 @@ mod tests {
 
         egui.on_event(&window, &WindowEvent::Focused(false));
         egui.on_event(&window, &WindowEvent::Focused(true));
-        redraw(&mut egui, &mut gfx);
         mouse(&mut egui, ElementState::Pressed);
         redraw(&mut egui, &mut gfx);
         assert!(
