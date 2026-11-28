@@ -920,8 +920,9 @@ impl PortMenu {
         let (menu, edit) = (&mut self.menu, &mut self.edit);
         let mut todo = Vec::new();
         let mut done = None;
+        let scene_input = self.scene.is_some();
         let mut out = self.ctx.run_pass(raw, |ctx| {
-            if entering {
+            if scene_input {
                 ctx.input_mut(|i| {
                     i.raw.events.retain(|ev| {
                         !matches!(
@@ -4737,6 +4738,9 @@ mod tests {
             "fresh stationary click after refocus"
         );
 
+        egui.on_event(&window, &touch(TouchPhase::Started));
+        redraw(&mut egui, &mut gfx);
+        assert!(egui.ctx.input(egui::InputState::any_touches));
         egui.on_event(&window, &WindowEvent::Focused(false));
         egui.on_event(&window, &WindowEvent::Focused(true));
         mouse(&mut egui, ElementState::Pressed);
@@ -4744,6 +4748,11 @@ mod tests {
         assert!(
             egui.ctx.input(|i| i.pointer.any_down()),
             "egui receives a fresh click after refocus"
+        );
+        assert_eq!(
+            theme::pointer_seen(&egui.ctx, false),
+            Some(false),
+            "cancelled touch does not classify the new mouse click as touch"
         );
         assert_eq!(
             (replayed, stuck, touch_stuck, stationary, after_blur),
