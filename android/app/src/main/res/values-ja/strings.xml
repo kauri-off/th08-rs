@@ -117,6 +117,8 @@
   <string name="replays_share">共有</string>
   <string name="replays_delete">削除</string>
   <string name="replays_delete_confirm">%s を削除しますか？元に戻せません。</string>
+  <string name="replays_player">プレイヤー: %1$s</string>
+  <string name="replays_slowdown">処理落ち率: %1$.2f%%</string>
   <string name="replays_practice">練習</string>
   <string name="replays_import_failed">%1$s は読み込めませんでした: %2$s</string>
   <string name="replays_exported">リプレイを書き出しました</string>

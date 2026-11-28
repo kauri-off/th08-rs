@@ -116,6 +116,8 @@
   <string name="replays_share">Отправить</string>
   <string name="replays_delete">Удалить</string>
   <string name="replays_delete_confirm">Удалить %s? Это нельзя отменить.</string>
+  <string name="replays_player">Игрок: %1$s</string>
+  <string name="replays_slowdown">Замедление: %1$.2f%%</string>
   <string name="replays_practice">практика</string>
   <string name="replays_import_failed">%1$s не импортирован: %2$s</string>
   <string name="replays_exported">Реплей экспортирован</string>

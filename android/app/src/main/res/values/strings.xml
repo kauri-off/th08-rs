@@ -119,6 +119,8 @@
   <string name="replays_share">Share</string>
   <string name="replays_delete">Delete</string>
   <string name="replays_delete_confirm">Delete %s? This cannot be undone.</string>
+  <string name="replays_player">Player: %1$s</string>
+  <string name="replays_slowdown">Slowdown: %1$.2f%%</string>
   <string name="replays_practice">practice</string>
   <string name="replays_import_failed">%1$s not imported: %2$s</string>
   <string name="replays_exported">Replay exported</string>

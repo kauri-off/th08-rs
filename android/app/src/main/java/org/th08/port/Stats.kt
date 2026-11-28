@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -52,8 +53,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -146,23 +149,29 @@ private fun Loaded(o: JSONObject, w: Words, wide: Boolean) {
     val tab = tabs.firstOrNull { it.name == tabName } ?: tabs.first()
     var shot by rememberSaveable { mutableStateOf(SHOTS) }
     var allCards by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
-        ScrollableTabRow(selectedTabIndex = tabs.indexOf(tab), edgePadding = 16.dp) {
-            tabs.forEach { t ->
-                Tab(selected = t == tab, onClick = { tabName = t.name },
-                    text = { Text(str(t.label), maxLines = 1) })
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val available = (maxWidth - 32.dp).coerceAtLeast(0.dp)
+        val stages = tableColumns(available, str(R.string.stats_col_deaths), str(R.string.stats_col_bombs))
+        val failed = tableColumns(available, str(R.string.stats_col_failed), str(R.string.stats_col_captured))
+        val spells = tableColumns(available, str(R.string.stats_mode_story), str(R.string.stats_mode_spell))
+        Column(Modifier.fillMaxSize()) {
+            ScrollableTabRow(selectedTabIndex = tabs.indexOf(tab), edgePadding = 16.dp) {
+                tabs.forEach { t ->
+                    Tab(selected = t == tab, onClick = { tabName = t.name },
+                        text = { Text(str(t.label), maxLines = 1) })
+                }
             }
-        }
-        key(tab) {
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
-                when (tab) {
-                    Tab.Overview -> {
-                        item("tiles") { Tiles(st, sd, runs, wide, !o.getBoolean("on")) }
-                        overview(o, st, w, !wide)
+            key(tab) {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                    when (tab) {
+                        Tab.Overview -> {
+                            item("tiles") { Tiles(st, sd, runs, wide, !o.getBoolean("on")) }
+                            overview(o, st, w, !wide, stages, failed)
+                        }
+                        Tab.Scores -> sd?.let { scores(o, it, w) }
+                        Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }, spells) }
+                        Tab.History -> history(st, w)
                     }
-                    Tab.Scores -> sd?.let { scores(o, it, w) }
-                    Tab.Cards -> sd?.let { cards(o, it, w, !wide, shot, { v -> shot = v }, allCards, { v -> allCards = v }) }
-                    Tab.History -> history(st, w)
                 }
             }
         }
@@ -220,35 +229,72 @@ private class Words(private val rows: List<Setting>) {
 private fun Section(t: String) = Text(t, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp))
 
-// A list row: title and detail on the left, one right-aligned number column per `values`.
+private class TableColumns(val headings: List<String>, val widths: List<Dp>)
+
 @Composable
-private fun Entry(title: String, detail: String?, values: List<String>, head: Boolean = false, stacked: Boolean = false) {
+private fun tableColumns(available: Dp, first: String, second: String): TableColumns {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val style = MaterialTheme.typography.bodySmall
+    val headings = listOf(first, second)
+    val preferred = headings.map {
+        with(density) { measurer.measure(it, style, softWrap = false).size.width.toDp() + 8.dp }.coerceAtLeast(72.dp)
+    }
+    val scale = (available * 0.77f / (preferred[0] + preferred[1])).coerceAtMost(1f)
+    return TableColumns(headings, preferred.map { it * scale })
+}
+
+@Composable
+private fun Entry(title: String, detail: String?, values: List<String>, head: Boolean = false, stacked: Boolean = false, table: TableColumns? = null) {
     val c = MaterialTheme.colorScheme
+    val valueStyle = if (head) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleSmall.tnum()
+    val valueColor = if (head) c.onSurfaceVariant else c.onSurface
+    val columns: @Composable () -> Unit = {
+        values.forEachIndexed { i, v ->
+            val width = table?.widths?.get(i)
+            val cell = if (width == null) Modifier else Modifier.width(width).padding(start = 8.dp)
+            Text(v, cell, style = valueStyle, color = valueColor, textAlign = TextAlign.End,
+                maxLines = if (table == null) 1 else Int.MAX_VALUE, softWrap = table != null)
+        }
+    }
+    val label: @Composable () -> Unit = {
+        if (head) Text(title, style = MaterialTheme.typography.bodySmall, color = valueColor)
+        else EntryTitle(title)
+    }
+    val row = Modifier.fillMaxWidth().heightIn(min = if (head) 32.dp else 48.dp).padding(horizontal = 16.dp, vertical = 6.dp)
     if (stacked) {
-        Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 6.dp)) {
-            Text(japaneseWrap(title, gameText = true), style = MaterialTheme.typography.bodyLarge.cjk(title))
+        Column(row) {
+            label()
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(detail.orEmpty(), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
-                values.forEach { v ->
-                    Text(v, Modifier.widthIn(min = 72.dp), style = MaterialTheme.typography.titleSmall.tnum(), textAlign = TextAlign.End, maxLines = 1, softWrap = false)
-                }
+                columns()
             }
         }
+    } else {
+        Row(row, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                label()
+                if (detail != null) Text(detail, style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
+            }
+            columns()
+        }
+    }
+}
+
+@Composable
+private fun EntryTitle(title: String) {
+    val style = MaterialTheme.typography.bodyLarge.cjk(title)
+    val quote = title.indexOf('「')
+    if (quote <= 0) {
+        Text(japaneseWrap(title, gameText = true), style = style)
         return
     }
-    Row(Modifier.fillMaxWidth().heightIn(min = if (head) 32.dp else 48.dp).padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(japaneseWrap(title, gameText = true),
-                style = (if (head) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge).cjk(title),
-                color = if (head) c.onSurfaceVariant else c.onSurface)
-            if (detail != null) Text(detail, style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
-        }
-        values.forEachIndexed { i, v ->
-            Text(v, Modifier.widthIn(min = if (values.size > 1) 72.dp else 0.dp).padding(start = if (i > 0) 8.dp else 0.dp),
-                style = if (head) MaterialTheme.typography.bodySmall else MaterialTheme.typography.titleSmall.tnum(),
-                color = if (head) c.onSurfaceVariant else c.onSurface, textAlign = TextAlign.End, maxLines = 1, softWrap = false)
-        }
+    BoxWithConstraints {
+        val measurer = rememberTextMeasurer()
+        val density = LocalDensity.current
+        val fits = measurer.measure(title, style, softWrap = false).size.width <= with(density) { maxWidth.roundToPx() }
+        val text = if (fits) title else title.take(quote) + "\n" + title.drop(quote)
+        Text(japaneseWrap(text, gameText = true), style = style)
     }
 }
 
@@ -256,7 +302,7 @@ private fun Entry(title: String, detail: String?, values: List<String>, head: Bo
 private fun Note(t: String) = Text(t, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
-private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words, stacked: Boolean) {
+private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words, stacked: Boolean, stageCols: TableColumns, failedCols: TableColumns) {
     if (st.getInt("runs") == 0) {
         item("none") { Note(str(R.string.stats_none)) }
         return
@@ -270,24 +316,24 @@ private fun LazyListScope.overview(o: JSONObject, st: JSONObject, w: Words, stac
     val stageKeys = o.getJSONArray("stage_keys")
     item("stages_h") {
         Section(str(R.string.stats_per_stage))
-        Entry(str(R.string.stats_col_stage), null, listOf(str(R.string.stats_col_deaths), str(R.string.stats_col_bombs)), head = true)
+        Entry(str(R.string.stats_col_stage), null, stageCols.headings, head = true, table = stageCols)
     }
     val stages = st.getJSONArray("stages").objects()
     items(stages.size, key = { "s$it" }) { i ->
-        Entry(w.of("stage", stageKeys.getString(i)), null, listOf(stages[i].getInt("deaths").toString(), stages[i].getInt("bombs").toString()))
+        Entry(w.of("stage", stageKeys.getString(i)), null, listOf(stages[i].getInt("deaths").toString(), stages[i].getInt("bombs").toString()), table = stageCols)
     }
     val failed = st.getJSONArray("failed").objects()
     item("failed_h") {
         Section(str(R.string.stats_failed))
         if (failed.isEmpty()) Note(str(R.string.stats_empty))
-        else Entry("", null, listOf(str(R.string.stats_col_failed), str(R.string.stats_col_captured)), head = true)
+        else Entry("", null, failedCols.headings, head = true, table = failedCols)
     }
     items(failed, key = { "f" + it.getInt("card") }) { c ->
         val a = c.getInt("attempts")
         val cap = c.getInt("captures")
         val no = c.getInt("card") + 1
         Entry(c.getString("name").ifEmpty { str(R.string.stats_card_no, no) }, "No. %03d".format(Locale.US, no),
-            listOf((a - cap).toString(), "$cap / $a"), stacked = stacked)
+            listOf((a - cap).toString(), "$cap / $a"), stacked = stacked, table = failedCols)
     }
 }
 
@@ -342,7 +388,7 @@ private fun LazyListScope.scores(o: JSONObject, sd: JSONObject, w: Words) {
     }
 }
 
-private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, stacked: Boolean, shot: Int, setShot: (Int) -> Unit, all: Boolean, setAll: (Boolean) -> Unit) {
+private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, stacked: Boolean, shot: Int, setShot: (Int) -> Unit, all: Boolean, setAll: (Boolean) -> Unit, table: TableColumns) {
     val shotKeys = o.getJSONArray("shot_keys")
     item("cards_controls") {
         Section(str(R.string.stats_cards))
@@ -364,7 +410,7 @@ private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, stacked
             Text(str(R.string.stats_cards_all), Modifier.weight(1f).padding(end = 12.dp), style = MaterialTheme.typography.bodyLarge)
             Switch(checked = all, onCheckedChange = null)
         }
-        Entry("", null, listOf(str(R.string.stats_mode_story), str(R.string.stats_mode_spell)), head = true)
+        Entry("", null, table.headings, head = true, table = table)
     }
     val cards = sd.getJSONArray("cards").objects().filter { c ->
         all || c.getJSONArray("story").getJSONArray(SHOTS).getInt(1) != 0 || c.getJSONArray("practice").getJSONArray(SHOTS).getInt(1) != 0
@@ -375,6 +421,6 @@ private fun LazyListScope.cards(o: JSONObject, sd: JSONObject, w: Words, stacked
         val p = c.getJSONArray("practice").getJSONArray(shot)
         val id = c.getInt("id") + 1
         Entry(c.getString("name").ifEmpty { str(R.string.stats_card_no, id) }, "No. %03d".format(Locale.US, id),
-            listOf("${s.getInt(0)} / ${s.getInt(1)}", "${p.getInt(0)} / ${p.getInt(1)}"), stacked = stacked)
+            listOf("${s.getInt(0)} / ${s.getInt(1)}", "${p.getInt(0)} / ${p.getInt(1)}"), stacked = stacked, table = table)
     }
 }

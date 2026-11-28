@@ -311,6 +311,7 @@ private fun Screen(groups: List<Group>, rows: List<Setting>, data: GameData, act
     var cat by rememberSaveable { mutableStateOf<String?>(null) }
     var blocked by rememberSaveable { mutableStateOf(false) }
     BackHandler(dest != Dest.Home) { if (dest == Dest.Settings && !wide && cat != null) cat = null else dest = Dest.Home }
+    var editorKey by rememberSaveable { mutableStateOf<String?>(null) }
     var info by rememberSaveable { mutableStateOf<List<String>?>(null) }
     val showInfo = { title: String, text: String -> info = listOf(title, text) }
     val canPlay = data.ok() && rows.all { it.ok() }
@@ -387,7 +388,10 @@ private fun Screen(groups: List<Group>, rows: List<Setting>, data: GameData, act
                     Dest.Home -> HomeScreen(data, rows, canPlay, blocked, wide, act, play = { if (canPlay) act.play() else blocked = true },
                         openStats = { select(Dest.Stats) }, openData = { openCat(DATA_CAT) },
                         openBad = { rows.firstOrNull { !it.ok() }?.let { r -> openCat(categoryOf(r, cats)) } })
-                    Dest.Settings -> SettingsScreen(cats, cat, wide, data, act, showInfo, toggleDev) { cat = it }
+                    Dest.Settings -> SettingsScreen(cats, cat, wide, data, act, showInfo, toggleDev, select = { cat = it }) { r ->
+                        cat = categoryOf(r, cats)
+                        editorKey = r.e.key
+                    }
                     Dest.Replays -> ReplaysScreen(rows, act)
                     Dest.Stats -> StatsScreen(rows, wide)
                 }
@@ -395,6 +399,9 @@ private fun Screen(groups: List<Group>, rows: List<Setting>, data: GameData, act
         }
     }
     info?.let { (t, s) -> InfoDialog(t, s) { info = null } }
+    rows.firstOrNull { it.e.key == editorKey }?.let { r ->
+        key(r.e.key) { SettingEditor(r, act) { editorKey = null } }
+    }
 }
 
 @Composable
@@ -445,8 +452,7 @@ private fun HomeScreen(
 ) {
     val reply by rememberStats()
     val summary = reply?.getOrNull()?.let(::summaryOf).takeIf { data.ok() }
-    val importing = LocalImport.current.let { it.busy || it.outcome != null }
-    val card = !data.ok() || importing
+    val card = !data.ok() || LocalImport.current.busy
     val update = LocalUpdate.current.takeIf { it.shown }
     val error = LocalLastError.current
     val side: @Composable () -> Unit = {
@@ -561,7 +567,7 @@ private fun DataLine(d: GameData, open: () -> Unit) {
     }
 }
 
-// Home card while the game files must be imported, or an import runs or just ended.
+// Home card while the game files must be imported or an import runs.
 @Composable
 private fun DataCard(d: GameData, act: LauncherActions) {
     val c = MaterialTheme.colorScheme
@@ -574,12 +580,13 @@ private fun DataCard(d: GameData, act: LauncherActions) {
         if (st.busy) {
             ImportRows(d, act)
         } else {
-            if (!d.ok()) Text(str(R.string.data_need), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-            ImportOutcomeText()
-            if (!d.ok()) {
-                Button(onClick = act::importGame, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(str(R.string.import_files), maxLines = 1, softWrap = false) }
-                TextButton(onClick = act::recheck) { Text(str(R.string.check_again), maxLines = 1, softWrap = false) }
+            Text(str(R.string.data_need), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            if (st.outcome !is ImportOutcome.Done) ImportOutcomeText()
+            Button(onClick = act::importGame, Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(japaneseWrap(str(R.string.import_files)), textAlign = TextAlign.Center)
             }
+            TextButton(onClick = act::recheck) { Text(str(R.string.check_again)) }
         }
     }
 }
@@ -626,6 +633,7 @@ private fun SettingsScreen(
     showInfo: (String, String) -> Unit,
     toggleDev: () -> Unit,
     select: (String?) -> Unit,
+    edit: (Setting) -> Unit,
 ) {
     val shown = cats.firstOrNull { it.id == cat } ?: if (wide) cats.first() else null
     if (wide) {
@@ -633,13 +641,13 @@ private fun SettingsScreen(
             CategoryList(cats, shown?.id, chevron = false, Modifier.weight(1f).fillMaxHeight(), select)
             VerticalDivider()
             Box(Modifier.weight(2f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                shown?.let { key(it.id) { CategoryPage(it, data, act, showInfo, toggleDev, Modifier.widthIn(max = 600.dp).fillMaxSize()) } }
+                shown?.let { key(it.id) { CategoryPage(it, data, act, showInfo, toggleDev, edit, Modifier.widthIn(max = 600.dp).fillMaxSize()) } }
             }
         }
     } else if (shown == null) {
         CategoryList(cats, null, chevron = true, Modifier.fillMaxSize(), select)
     } else {
-        CategoryPage(shown, data, act, showInfo, toggleDev, Modifier.fillMaxSize())
+        CategoryPage(shown, data, act, showInfo, toggleDev, edit, Modifier.fillMaxSize())
     }
 }
 
@@ -665,7 +673,7 @@ private fun CategoryList(cats: List<Category>, selected: String?, chevron: Boole
 }
 
 @Composable
-private fun CategoryPage(cat: Category, data: GameData, act: LauncherActions, showInfo: (String, String) -> Unit, toggleDev: () -> Unit, modifier: Modifier) {
+private fun CategoryPage(cat: Category, data: GameData, act: LauncherActions, showInfo: (String, String) -> Unit, toggleDev: () -> Unit, edit: (Setting) -> Unit, modifier: Modifier) {
     val lang = LocalLang.current
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (cat.id == SEC_DEV) {
@@ -677,14 +685,14 @@ private fun CategoryPage(cat: Category, data: GameData, act: LauncherActions, sh
                 item(rs.first().e.key) {
                     Column {
                         Header(LocalGroupTitle.current(rs.first().e.group, lang))
-                        Block { rs.forEach { SettingRow(it, act, showInfo) } }
+                        Block { rs.forEach { SettingRow(it, act, showInfo, edit) } }
                     }
                 }
             }
             return@LazyColumn
         }
         if (cat.id == SEC_APP) item("status") { Block { StatusRow(data, act, showInfo) } }
-        if (cat.rows.isNotEmpty()) item("rows") { Block { cat.rows.forEach { SettingRow(it, act, showInfo) } } }
+        if (cat.rows.isNotEmpty()) item("rows") { Block { cat.rows.forEach { SettingRow(it, act, showInfo, edit) } } }
         if (cat.id == SEC_LANGUAGE) item("tr") { TranslationsBlock(act) }
         if (cat.id == SEC_APP) {
             item("saves") {
@@ -889,58 +897,47 @@ private fun usefulSummary(label: String, summary: String): String? {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit) {
+private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit, edit: (Setting) -> Unit) {
     val e = r.e
     val t = e.t()
     val details = str(R.string.details, t.summary, t.help)
     val info = { showInfo(t.label, details) }.takeIf { t.help.length > t.summary.length + 24 }
     val summary = usefulSummary(t.label, t.summary)
-    var editing by rememberSaveable(e.key) { mutableStateOf(false) }
-    // `game_text`: follow / ja, then the installed pack languages, then the current value if no pack of it is installed.
-    val packs = if (e.key == "game_text") {
-        val inst = LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
-            .associate { it.language to if (it.title.isEmpty()) it.language else "${it.language} — ${it.title}" }
-        val missing = r.value.takeIf { it !in inst && it !in listOf("", "follow", "ja") }
-        if (missing == null) inst else inst + (missing to str(R.string.tr_missing, missing))
-    } else emptyMap()
-    val opts = e.options()?.let { it + packs.keys.filter { k -> k !in it } }
-    val shown: @Composable (String) -> String = { v -> packs[v] ?: e.show(v) }
+    val choices = settingChoices(r)
     val k = e.kind
     when {
         k == Kind.Bool -> ShellRow(
             t.label, summary, info = info,
             modifier = Modifier.toggleable(r.value == "on", role = Role.Switch) { act.change(r, if (it) "on" else "off") },
         ) { Switch(checked = r.value == "on", onCheckedChange = null) }
-        opts != null -> {
-            val labels = opts.map { shown(it) }
+        choices != null -> {
             BoxWithConstraints {
                 // Segments only while every label fits on one line; otherwise a list dialog, so no label is cut.
                 val measurer = rememberTextMeasurer()
                 val style = MaterialTheme.typography.labelLarge
                 val density = LocalDensity.current
-                val perSegment = (maxWidth - 32.dp) / opts.size - 24.dp
-                val fits = opts.size <= 3 && e.key != "game_text" && labels.all { l ->
+                val perSegment = (maxWidth - 32.dp) / choices.size - 24.dp
+                val fits = choices.size <= 3 && e.key != "game_text" && choices.all { (_, l) ->
                     with(density) { measurer.measure(l, style).size.width.toDp() } <= perSegment
                 }
                 if (fits) {
                     ShellRow(t.label, summary, info = info, below = {
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            opts.forEachIndexed { i, v ->
+                            choices.forEachIndexed { i, (v, label) ->
                                 SegmentedButton(
                                     selected = r.value == v,
                                     onClick = { act.change(r, v) },
                                     modifier = Modifier.testTag("setting_${e.key}_$v").semantics { testTagsAsResourceId = true },
-                                    shape = SegmentedButtonDefaults.itemShape(i, opts.size),
+                                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
                                     icon = {},
                                     colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
-                                ) { Text(labels[i], maxLines = 1, softWrap = false) }
+                                ) { Text(label, maxLines = 1, softWrap = false) }
                             }
                         }
                     })
                 } else {
-                    ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { editing = true },
-                        below = { ValueField(shown(r.value), r.ok()) })
-                    if (editing) ChoiceDialog(t.label, opts, labels, r.value, { act.change(r, it) }) { editing = false }
+                    ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) },
+                        below = { ValueField(choices.firstOrNull { it.first == r.value }?.second ?: e.show(r.value), r.ok()) })
                 }
             }
         }
@@ -948,7 +945,7 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
             val current = (r.value.toLongOrNull() ?: r.e.default.toLongOrNull() ?: k.min).coerceIn(k.min, k.max)
             var v by remember(r.value) { mutableStateOf(current.toFloat()) }
             val n = Math.round(v).toLong()
-            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
+            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) }, below = {
                 Slider(
                     modifier = Modifier.testTag(e.key).semantics {
                         contentDescription = t.label
@@ -965,14 +962,31 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
                     style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false,
                     color = if (!r.ok()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             }
-            if (editing) TextDialog(r, act) { editing = false }
         }
         else -> {
-            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { editing = true },
-                below = { ValueField(shown(r.value), r.ok()) })
-            if (editing) TextDialog(r, act) { editing = false }
+            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) },
+                below = { ValueField(e.show(r.value), r.ok()) })
         }
     }
+}
+
+@Composable
+private fun settingChoices(r: Setting): List<Pair<String, String>>? {
+    val e = r.e
+    val opts = e.options() ?: return null
+    if (e.key != "game_text") return opts.map { it to e.show(it) }
+    val installed = LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
+        .associate { it.language to if (it.title.isEmpty()) it.language else "${it.language} — ${it.title}" }
+    val missing = r.value.takeIf { it !in installed && it.isNotEmpty() && it !in opts }
+    val packs = if (missing == null) installed else installed + (missing to str(R.string.tr_missing, missing))
+    return (opts + packs.keys.filter { it !in opts }).map { it to (packs[it] ?: e.show(it)) }
+}
+
+@Composable
+private fun SettingEditor(r: Setting, act: LauncherActions, close: () -> Unit) {
+    val choices = settingChoices(r)
+    if (choices == null) TextDialog(r, act, close)
+    else ChoiceDialog(r.e.t().label, choices.map { it.first }, choices.map { it.second }, r.value, { act.change(r, it) }, close)
 }
 
 // One radio row per value; choosing applies and closes.
@@ -1179,7 +1193,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
 // Number or text entry; the replay row also offers a file chooser.
 @Composable
 private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
-    var t by remember { mutableStateOf(r.value) }
+    var t by rememberSaveable { mutableStateOf(r.value) }
     val k = r.e.kind
     val err = (k as? Kind.IntRange)?.let { intError(it, t.trim(), LocalStrings.current) }
     val hint = when (k) {

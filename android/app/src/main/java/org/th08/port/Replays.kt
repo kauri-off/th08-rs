@@ -2,6 +2,8 @@
 package org.th08.port
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -143,7 +145,7 @@ fun ReplaysActions(act: LauncherActions) {
 fun ReplaysScreen(rows: List<Setting>, act: LauncherActions) {
     val st = LocalReplays.current
     var confirm by remember { mutableStateOf<ReplayItem?>(null) }
-    var details by remember { mutableStateOf<String?>(null) }
+    var details by remember { mutableStateOf<ReplayItem?>(null) }
     val items = st.items.orEmpty()
     if (st.items != null && items.isEmpty() && !st.busy && st.message == null) {
         Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -167,16 +169,24 @@ fun ReplaysScreen(rows: List<Setting>, act: LauncherActions) {
                     }
                 }
                 items(items, key = { it.file }) { r ->
-                    ReplayCard(r, rows, act, inline, details = { details = r.file }, delete = { confirm = r })
+                    ReplayCard(r, rows, act, inline, details = { details = r }, delete = { confirm = r })
                 }
             }
         }
     }
-    details?.let { name ->
+    details?.let { r ->
         AlertDialog(
             onDismissRequest = { details = null },
             title = { Text(str(R.string.last_failed_details)) },
-            text = { Text(name) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(r.file)
+                    if (r.error == null) {
+                        Text(str(R.string.replays_player, r.name.ifEmpty { "—" }))
+                        Text(str(R.string.replays_slowdown, r.slowdown))
+                    }
+                }
+            },
             confirmButton = { TextButton(onClick = { details = null }) { Text(str(R.string.ok)) } },
         )
     }
