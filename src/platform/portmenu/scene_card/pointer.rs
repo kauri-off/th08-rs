@@ -71,7 +71,7 @@ impl Pointer {
             }
             WindowEvent::CursorLeft { .. } => self.mouse = None,
             WindowEvent::Focused(false) => {
-                *self = Self::default();
+                self.cancel();
                 return if scene.is_some() {
                     model.apply(Input::HoverEnd)
                 } else {

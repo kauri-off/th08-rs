@@ -604,9 +604,15 @@ impl MenuModel {
         }
     }
 
+    pub fn cancel_drag(&mut self) {
+        self.dragging = false;
+        self.drag_speed = 0.0;
+        self.fling = 0.0;
+    }
+
     fn set_scroll(&mut self, v: f32) {
         self.scroll = v;
-        self.fling = 0.0;
+        self.cancel_drag();
         self.scroll_moved = true;
     }
 
@@ -1356,6 +1362,19 @@ mod tests {
             assert!(!m.take_frame());
         }
         assert!(changes > tabs);
+    }
+
+    #[test]
+    fn leaving_settings_discards_an_unfinished_drag() {
+        let mut m = on_tab(0);
+        m.apply(Input::Drag {
+            dy: -40.0,
+            dt: 1.0 / 60.0,
+        });
+        assert!(m.back());
+        m.open_settings(0);
+        m.apply(Input::Release);
+        assert!(!m.animating());
     }
 
     #[test]

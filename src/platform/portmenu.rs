@@ -569,6 +569,7 @@ impl PortMenu {
             return;
         };
         let view = card.input_view.take();
+        self.menu.cancel_drag();
         card.buttons.clear();
         let touches = std::mem::take(&mut card.touches);
         match view.map(|(renderer, _)| renderer) {
@@ -738,9 +739,7 @@ impl PortMenu {
         {
             return card.on_event(ev, &mut self.menu);
         }
-        if !card.unfocused {
-            card.pointer.event(ev, None, &mut self.menu);
-        }
+        card.pointer.event(ev, None, &mut self.menu);
         if view.0 == MenuRenderer::Scene {
             return false;
         }
@@ -4723,6 +4722,24 @@ mod tests {
         mouse(&mut slint, ElementState::Released);
         slint.redraw(&window, &mut gfx);
         let after_blur = slint.menu.page();
+        mouse(&mut slint, ElementState::Pressed);
+        mouse(&mut slint, ElementState::Released);
+        slint.redraw(&window, &mut gfx);
+        assert_eq!(
+            slint.menu.page(),
+            Page::Card,
+            "fresh stationary click after refocus"
+        );
+
+        egui.on_event(&window, &WindowEvent::Focused(false));
+        egui.on_event(&window, &WindowEvent::Focused(true));
+        redraw(&mut egui, &mut gfx);
+        mouse(&mut egui, ElementState::Pressed);
+        redraw(&mut egui, &mut gfx);
+        assert!(
+            egui.ctx.input(|i| i.pointer.any_down()),
+            "egui receives a fresh click after refocus"
+        );
         assert_eq!(
             (replayed, stuck, touch_stuck, stationary, after_blur),
             (false, false, false, Page::Card, Page::Settings),
@@ -4764,7 +4781,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_invalidation_drops_the_finger_and_cursor_exit_or_blur_forgets_the_mouse() {
+    fn scene_invalidation_drops_the_finger_and_cursor_exit_forgets_the_mouse() {
         use winit::event::{DeviceId, Touch, TouchPhase};
         let device_id = DeviceId::dummy();
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
@@ -4798,7 +4815,10 @@ mod tests {
             card.invalidate(&mut menu);
             card.shown = Some(resume_scene(1.0, 0.0));
 
-            card.on_event(&click(ElementState::Pressed), &mut menu);
+            assert_eq!(
+                card.pointer.mouse().is_some(),
+                matches!(exit, WindowEvent::Focused(false))
+            );
             card.on_event(&click(ElementState::Released), &mut menu);
             card.on_event(&finger(2, TouchPhase::Started), &mut menu);
             card.on_event(&finger(1, TouchPhase::Ended), &mut menu);
