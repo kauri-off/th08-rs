@@ -1,4 +1,4 @@
-// Android settings screen (MATERIAL2): the Compose screen of LauncherUi.kt built from the settings table, Play starts
+//! Android launcher activity: the Compose screen of LauncherUi.kt built from the settings table, Play starts
 // the Rust NativeActivity in the ":game" process. Player rows are saved to port.cfg on change (as the egui launcher's
 // `Model::changes`) when the table marks them `persist`; the other rows go to launch.cfg for the next start only.
 // Texts follow the `language` row.
@@ -26,6 +26,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,6 +64,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
     private val lastErrorFile get() = File(filesDir, "last_error.txt")
     private var lastError by mutableStateOf<String?>(null)
     private var update by mutableStateOf<UpdateInfo?>(null)
+    private var resumes by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -96,6 +98,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                     saves = saves.copy(gameRunning = gameRunning())
                     lastError = runCatching { lastErrorFile.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
                     loadReplays()
+                    resumes++
                     onPauseOrDispose { }
                 }
                 val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -156,7 +159,8 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
                 val res = remember(lang, LocalConfiguration.current) { localized(this, lang) }
                 CompositionLocalProvider(LocalLang provides lang, LocalStrings provides res, LocalPacks provides packs,
                     LocalSaves provides saves, LocalReplays provides replays, LocalImport provides importer.state, LocalLastError provides lastError,
-                    LocalUpdate provides UpdateUi(update, AppUpdate.step, inAppUpdate)) {
+                    LocalUpdate provides UpdateUi(update, AppUpdate.step, inAppUpdate), LocalResumes provides resumes,
+                    LocalGroupTitle provides { id, l -> schema.groups.firstOrNull { it.id == id }?.title(l) ?: id }) {
                     LauncherScreen(schema.groups, rows, data, this)
                 }
             }
@@ -566,7 +570,7 @@ class LauncherActivity : ComponentActivity(), LauncherActions {
             }
             if (err == null) ok++ else errs.add(res.getString(R.string.replays_import_failed, name, err))
         }
-        val done = res.getString(R.string.replays_imported, ok)
+        val done = res.getQuantityString(R.plurals.replays_imported, ok, ok)
         (listOf(done) + errs).joinToString("\n") to errs.isNotEmpty()
     }
 }

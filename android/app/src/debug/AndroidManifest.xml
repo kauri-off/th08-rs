@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Debug build only: plain HTTP to the emulator's host, for a locally served test release (update_test.json). -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <application android:networkSecurityConfig="@xml/debug_network"/>
+<!-- Debug build only: plain HTTP to the emulator's host for a locally served test release (update_test.json); text layout audit for ui_matrix.py. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <application android:networkSecurityConfig="@xml/debug_network">
+    <receiver android:name="org.th08.port.TextAuditReceiver" android:exported="true" tools:ignore="ExportedReceiver"/>
+  </application>
 </manifest>

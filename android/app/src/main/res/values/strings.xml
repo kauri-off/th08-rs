@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Kotlin-only launcher strings (docs/arch/I18N.md §3.3); setting texts come from settings_schema.json. -->
 <resources>
-  <string name="title">Imperishable Night</string>
+  <string name="title" translatable="false">Imperishable Night</string>
   <string name="subtitle">Touhou 8 port</string>
   <string name="more">More</string>
   <string name="reset_all">Reset all settings</string>
@@ -9,7 +9,6 @@
   <string name="developer">Developer</string>
   <string name="developer_options">Developer options</string>
   <string name="developer_summary">Cheats and tools for the next start only</string>
-  <string name="changed_count">" · %d changed"</string>
   <string name="about_setting">About this setting</string>
   <string name="details">%1$s.\n\nDetails: %2$s</string>
   <string name="game_data">Game data</string>
@@ -79,9 +78,6 @@
   <string name="saves_port_cfg_summary">Off by default: folder paths in them may not fit this device</string>
   <string name="saves_working">Working…</string>
   <string name="saves_game_running">The game is still running: quit it first</string>
-  <string name="saves_exported">%d files exported</string>
-  <string name="saves_imported">%d files imported</string>
-  <string name="saves_imported_backup">%d files imported; the previous files are in a backup zip in the app\'s storage</string>
   <string name="saves_export_failed">Export failed: %s</string>
   <string name="saves_import_failed">Import failed, nothing changed: %s</string>
   <string name="last_failed">The last run ended with an error</string>
@@ -113,7 +109,6 @@
   <string name="update_done">Updated to version %1$s.</string>
   <string name="replays_title">Replays</string>
   <string name="replays_browse">Browse replays</string>
-  <string name="replays_count">%d replays: watch, export, share or delete</string>
   <string name="replays_none">No replays yet</string>
   <string name="replays_import">Import replays</string>
   <string name="replays_import_summary">Copies .rpy files picked in the file manager into the replay folder</string>
@@ -124,10 +119,9 @@
   <string name="replays_share">Share</string>
   <string name="replays_delete">Delete</string>
   <string name="replays_delete_confirm">Delete %s? This cannot be undone.</string>
-  <string name="replays_damaged">Damaged: %s</string>
+  <string name="replays_player">Player: %1$s</string>
+  <string name="replays_slowdown">Slowdown: %1$.2f%%</string>
   <string name="replays_practice">practice</string>
-  <string name="replays_detail">%1$s · %2$s · slowdown %3$s%%</string>
-  <string name="replays_imported">%d replays imported</string>
   <string name="replays_import_failed">%1$s not imported: %2$s</string>
   <string name="replays_exported">Replay exported</string>
   <string name="replays_export_failed">Export failed: %s</string>
@@ -136,16 +130,11 @@
   <string name="stats_open">Play statistics and score.dat</string>
   <string name="stats_open_summary">Play time, runs, deaths and bombs per stage, spell-card history, high scores</string>
   <string name="stats_off">Play statistics are off (Game data › Play statistics): new runs are not recorded.</string>
-  <string name="stats_playtime">Play time %1$s · %2$d runs</string>
   <string name="stats_none">No runs recorded yet; every game from now on is.</string>
   <string name="stats_by_pair">Runs by character and difficulty</string>
-  <string name="stats_runs_best">%1$d runs · best %2$s</string>
   <string name="stats_per_stage">Deaths and bombs per stage</string>
-  <string name="stats_deaths_bombs">%1$d deaths · %2$d bombs</string>
   <string name="stats_failed">Most failed spell cards</string>
-  <string name="stats_failed_line">failed %1$d · captured %2$d / %3$d</string>
   <string name="stats_last">Last 20 runs</string>
-  <string name="stats_run_detail">%1$d deaths · %2$d bombs · %3$d continues · %4$s</string>
   <string name="stats_mode_story">Game</string>
   <string name="stats_mode_practice">Practice</string>
   <string name="stats_mode_spell">Spell practice</string>
@@ -154,12 +143,9 @@
   <string name="stats_end_retry">retry</string>
   <string name="stats_end_quit">closed</string>
   <string name="stats_end_none">unfinished</string>
-  <string name="stats_scoredat">score.dat</string>
-  <string name="stats_sd_error">score.dat cannot be read: %s</string>
   <string name="stats_cards">Spell card history (captured / attempts)</string>
   <string name="stats_all_shots">All characters</string>
   <string name="stats_cards_all">Show cards never attempted</string>
-  <string name="stats_cards_line">Game %1$d / %2$d · Spell practice %3$d / %4$d</string>
   <string name="stats_card_no">Card No. %d</string>
   <string name="stats_scores">High scores</string>
   <string name="stats_empty">None yet</string>
@@ -171,4 +157,68 @@
   <string name="play_need_data">Import the game files first</string>
   <string name="play_fix_settings">Fix the marked setting first</string>
   <string name="reset_confirm">Put every setting back to its default?</string>
+  <string name="title_ja" translatable="false">東方永夜抄</string>
+  <string name="back">Back</string>
+  <string name="version">Version</string>
+  <string name="home_best">Best score</string>
+  <string name="home_time">Play time</string>
+  <string name="home_last">Last run</string>
+  <string name="data_need">Import your th08.dat and thbgm.dat to play.</string>
+  <string name="last_failed_details">Details</string>
+  <string name="stats_tab_overview">Overview</string>
+  <string name="stats_tab_cards">Spell cards</string>
+  <string name="stats_tab_history">History</string>
+  <string name="stats_tile_runs">Runs</string>
+  <string name="stats_tile_cards">Cards captured</string>
+  <string name="stats_col_stage">Stage</string>
+  <string name="stats_col_deaths">Deaths</string>
+  <string name="stats_col_bombs">Bombs</string>
+  <string name="stats_col_failed">Failed</string>
+  <string name="stats_col_captured">Captured</string>
+  <string name="stats_none_title">No runs yet</string>
+  <string name="stats_unavailable">Statistics cannot be read right now</string>
+  <string name="replays_damaged">Damaged or not a replay</string>
+  <plurals name="changed_count">
+    <item quantity="one">%d changed</item>
+    <item quantity="other">%d changed</item>
+  </plurals>
+  <plurals name="stats_runs">
+    <item quantity="one">%d run</item>
+    <item quantity="other">%d runs</item>
+  </plurals>
+  <plurals name="stats_deaths">
+    <item quantity="one">%d death</item>
+    <item quantity="other">%d deaths</item>
+  </plurals>
+  <plurals name="stats_bombs">
+    <item quantity="one">%d bomb</item>
+    <item quantity="other">%d bombs</item>
+  </plurals>
+  <plurals name="stats_continues">
+    <item quantity="one">%d continue</item>
+    <item quantity="other">%d continues</item>
+  </plurals>
+  <plurals name="replays_imported">
+    <item quantity="one">%d replay imported</item>
+    <item quantity="other">%d replays imported</item>
+  </plurals>
+  <plurals name="saves_exported">
+    <item quantity="one">%d file exported</item>
+    <item quantity="other">%d files exported</item>
+  </plurals>
+  <plurals name="saves_imported">
+    <item quantity="one">%d file imported</item>
+    <item quantity="other">%d files imported</item>
+  </plurals>
+  <plurals name="saves_imported_backup">
+    <item quantity="one">%d file imported; the previous files are in a backup zip in the app\'s storage</item>
+    <item quantity="other">%d files imported; the previous files are in a backup zip in the app\'s storage</item>
+  </plurals>
+  <string name="section_controls">Controls</string>
+  <string name="section_sound">Sound</string>
+  <string name="section_picture">Picture</string>
+  <string name="section_language">Language</string>
+  <string name="section_app">Game &amp; app</string>
+  <string name="section_advanced">Advanced</string>
+  <string name="section_defaults">All at default</string>
 </resources>

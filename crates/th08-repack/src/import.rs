@@ -414,7 +414,18 @@ pub mod bridge {
                 }
                 true
             }
-            "remove" => !s.busy && game.is_some_and(|g| remove(&g).is_ok()),
+            "remove" if !s.busy => {
+                if let Some(game) = game {
+                    if let Err(e) = remove(&game) {
+                        return json!({"error": e.to_string(), "accepted": false}).to_string();
+                    }
+                    *s = State::default();
+                    true
+                } else {
+                    false
+                }
+            }
+            "remove" => false,
             _ => true,
         };
         let mut v = status(&s);
@@ -676,6 +687,18 @@ mod tests {
         assert_eq!(v["outcome"]["message"], "internal error: boom");
         assert!(bridge::spawn_test(|_, _| Ok(())));
         bridge::wait();
+        let game = tmp("completed");
+        fs::write(game.join(CONTENT_PACK), b"imported").unwrap();
+        let status = r#"{"op": "status"}"#;
+        let read = |req| serde_json::from_str::<serde_json::Value>(&bridge::handle(req)).unwrap();
+        assert_eq!(read(status)["outcome"]["kind"], "ok");
+        let req = serde_json::json!({"op": "remove", "game": game}).to_string();
+        let removed = read(&req);
+        assert_eq!(removed["accepted"], true);
+        assert!(removed["outcome"].is_null(), "{removed}");
+        assert!(read(status)["outcome"].is_null());
+        assert!(!game.join(CONTENT_PACK).exists());
+        fs::remove_dir_all(game).unwrap();
     }
 
     #[cfg(unix)]

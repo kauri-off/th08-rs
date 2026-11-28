@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="title">Imperishable Night</string>
   <string name="subtitle">Порт Touhou 8</string>
   <string name="more">Ещё</string>
   <string name="reset_all">Сбросить все настройки</string>
@@ -8,7 +7,6 @@
   <string name="developer">Разработчик</string>
   <string name="developer_options">Параметры разработчика</string>
   <string name="developer_summary">Читы и инструменты только на следующий запуск</string>
-  <string name="changed_count">" · изменено: %d"</string>
   <string name="about_setting">Об этой настройке</string>
   <string name="details">%1$s.\n\nПодробнее: %2$s</string>
   <string name="game_data">Данные игры</string>
@@ -78,9 +76,6 @@
   <string name="saves_port_cfg_summary">По умолчанию выключено: пути к папкам в них могут не подойти этому устройству</string>
   <string name="saves_working">Выполняется…</string>
   <string name="saves_game_running">Игра ещё запущена: сначала выйдите из неё</string>
-  <string name="saves_exported">Файлов экспортировано: %d</string>
-  <string name="saves_imported">Файлов импортировано: %d</string>
-  <string name="saves_imported_backup">Файлов импортировано: %d; прежние файлы — в резервном zip в памяти приложения</string>
   <string name="saves_export_failed">Экспорт не удался: %s</string>
   <string name="saves_import_failed">Импорт не удался, ничего не изменено: %s</string>
   <string name="last_failed">Прошлый запуск завершился ошибкой</string>
@@ -112,21 +107,18 @@
   <string name="update_done">Обновлено до версии %1$s.</string>
   <string name="replays_title">Реплеи</string>
   <string name="replays_browse">Открыть реплеи</string>
-  <string name="replays_count">Реплеев: %d — смотреть, экспортировать, отправить или удалить</string>
   <string name="replays_none">Реплеев пока нет</string>
   <string name="replays_import">Импорт реплеев</string>
   <string name="replays_import_summary">Копирует выбранные в файловом менеджере файлы .rpy в папку реплеев</string>
-  <string name="replays_sort_date">Сначала новые</string>
   <string name="replays_sort_score">По очкам</string>
   <string name="replays_watch">Смотреть</string>
   <string name="replays_export">Экспорт</string>
   <string name="replays_share">Отправить</string>
   <string name="replays_delete">Удалить</string>
   <string name="replays_delete_confirm">Удалить %s? Это нельзя отменить.</string>
-  <string name="replays_damaged">Повреждён: %s</string>
+  <string name="replays_player">Игрок: %1$s</string>
+  <string name="replays_slowdown">Замедление: %1$.2f%%</string>
   <string name="replays_practice">практика</string>
-  <string name="replays_detail">%1$s · %2$s · замедление %3$s%%</string>
-  <string name="replays_imported">Импортировано реплеев: %d</string>
   <string name="replays_import_failed">%1$s не импортирован: %2$s</string>
   <string name="replays_exported">Реплей экспортирован</string>
   <string name="replays_export_failed">Экспорт не удался: %s</string>
@@ -135,16 +127,11 @@
   <string name="stats_open">Статистика игры и score.dat</string>
   <string name="stats_open_summary">Время игры, забеги, смерти и бомбы по уровням, история карт, рекорды</string>
   <string name="stats_off">Статистика игры выключена (Данные игры › Статистика игры): новые забеги не записываются.</string>
-  <string name="stats_playtime">Время игры %1$s · забегов: %2$d</string>
   <string name="stats_none">Забегов пока нет; записывается каждая игра с этого момента.</string>
   <string name="stats_by_pair">Забеги по персонажам и сложности</string>
-  <string name="stats_runs_best">забегов: %1$d · лучший %2$s</string>
   <string name="stats_per_stage">Смерти и бомбы по уровням</string>
-  <string name="stats_deaths_bombs">смертей %1$d · бомб %2$d</string>
   <string name="stats_failed">Чаще всего проваленные карты</string>
-  <string name="stats_failed_line">провалов %1$d · взято %2$d / %3$d</string>
   <string name="stats_last">Последние 20 забегов</string>
-  <string name="stats_run_detail">смертей %1$d · бомб %2$d · продолжений %3$d · %4$s</string>
   <string name="stats_mode_story">Игра</string>
   <string name="stats_mode_practice">Практика</string>
   <string name="stats_mode_spell">Практика карт</string>
@@ -153,12 +140,9 @@
   <string name="stats_end_retry">заново</string>
   <string name="stats_end_quit">прерван</string>
   <string name="stats_end_none">не завершён</string>
-  <string name="stats_scoredat">score.dat</string>
-  <string name="stats_sd_error">score.dat не читается: %s</string>
   <string name="stats_cards">История карт заклинаний (взято / попыток)</string>
   <string name="stats_all_shots">Все персонажи</string>
   <string name="stats_cards_all">Показать карты без попыток</string>
-  <string name="stats_cards_line">Игра %1$d / %2$d · Практика карт %3$d / %4$d</string>
   <string name="stats_card_no">Карта № %d</string>
   <string name="stats_scores">Рекорды</string>
   <string name="stats_empty">Пока нет</string>
@@ -170,4 +154,86 @@
   <string name="play_need_data">Сначала импортируйте файлы игры</string>
   <string name="play_fix_settings">Сначала исправьте отмеченную настройку</string>
   <string name="reset_confirm">Вернуть все настройки к значениям по умолчанию?</string>
+  <string name="back">Назад</string>
+  <string name="version">Версия</string>
+  <string name="home_best">Лучший счёт</string>
+  <string name="home_time">Время игры</string>
+  <string name="home_last">Последний забег</string>
+  <string name="data_need">Чтобы играть, импортируйте th08.dat и thbgm.dat.</string>
+  <string name="last_failed_details">Подробнее</string>
+  <string name="stats_tab_overview">Обзор</string>
+  <string name="stats_tab_cards">Карты</string>
+  <string name="stats_tab_history">История</string>
+  <string name="stats_tile_runs">Забеги</string>
+  <string name="stats_tile_cards">Взято карт</string>
+  <string name="stats_col_stage">Уровень</string>
+  <string name="stats_col_deaths">Смерти</string>
+  <string name="stats_col_bombs">Бомбы</string>
+  <string name="stats_col_failed">Провалы</string>
+  <string name="stats_col_captured">Взято</string>
+  <string name="stats_none_title">Забегов пока нет</string>
+  <string name="stats_unavailable">Статистику сейчас не прочитать</string>
+  <string name="replays_damaged">Повреждён или не реплей</string>
+  <string name="replays_sort_date">Новые</string>
+  <plurals name="changed_count">
+    <item quantity="one">изменено: %d</item>
+    <item quantity="few">изменено: %d</item>
+    <item quantity="many">изменено: %d</item>
+    <item quantity="other">изменено: %d</item>
+  </plurals>
+  <plurals name="stats_runs">
+    <item quantity="one">%d забег</item>
+    <item quantity="few">%d забега</item>
+    <item quantity="many">%d забегов</item>
+    <item quantity="other">%d забегов</item>
+  </plurals>
+  <plurals name="stats_deaths">
+    <item quantity="one">%d смерть</item>
+    <item quantity="few">%d смерти</item>
+    <item quantity="many">%d смертей</item>
+    <item quantity="other">%d смертей</item>
+  </plurals>
+  <plurals name="stats_bombs">
+    <item quantity="one">%d бомба</item>
+    <item quantity="few">%d бомбы</item>
+    <item quantity="many">%d бомб</item>
+    <item quantity="other">%d бомб</item>
+  </plurals>
+  <plurals name="stats_continues">
+    <item quantity="one">%d продолжение</item>
+    <item quantity="few">%d продолжения</item>
+    <item quantity="many">%d продолжений</item>
+    <item quantity="other">%d продолжений</item>
+  </plurals>
+  <plurals name="replays_imported">
+    <item quantity="one">Импортирован %d реплей</item>
+    <item quantity="few">Импортировано %d реплея</item>
+    <item quantity="many">Импортировано %d реплеев</item>
+    <item quantity="other">Импортировано %d реплеев</item>
+  </plurals>
+  <plurals name="saves_exported">
+    <item quantity="one">Экспортирован %d файл</item>
+    <item quantity="few">Экспортировано %d файла</item>
+    <item quantity="many">Экспортировано %d файлов</item>
+    <item quantity="other">Экспортировано %d файлов</item>
+  </plurals>
+  <plurals name="saves_imported">
+    <item quantity="one">Импортирован %d файл</item>
+    <item quantity="few">Импортировано %d файла</item>
+    <item quantity="many">Импортировано %d файлов</item>
+    <item quantity="other">Импортировано %d файлов</item>
+  </plurals>
+  <plurals name="saves_imported_backup">
+    <item quantity="one">Импортирован %d файл; прежние файлы — в резервном zip в хранилище приложения</item>
+    <item quantity="few">Импортировано %d файла; прежние файлы — в резервном zip в хранилище приложения</item>
+    <item quantity="many">Импортировано %d файлов; прежние файлы — в резервном zip в хранилище приложения</item>
+    <item quantity="other">Импортировано %d файлов; прежние файлы — в резервном zip в хранилище приложения</item>
+  </plurals>
+  <string name="section_controls">Управление</string>
+  <string name="section_sound">Звук</string>
+  <string name="section_picture">Изображение</string>
+  <string name="section_language">Язык</string>
+  <string name="section_app">Игра и приложение</string>
+  <string name="section_advanced">Дополнительно</string>
+  <string name="section_defaults">Всё по умолчанию</string>
 </resources>

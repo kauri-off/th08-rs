@@ -1,9 +1,11 @@
-// Launcher screen: Home, Settings, Replays and Stats behind a navigation bar (rail in wide windows) with Play always on screen.
+//! Launcher screen: Home with Play, Replays, Stats and Settings behind a navigation bar (rail in wide windows).
 package org.th08.port
 
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.icu.text.BreakIterator
+import android.icu.util.ULocale
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -34,6 +36,8 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
@@ -101,6 +105,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -124,6 +129,23 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowWidthSizeClass
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Typography
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
+import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 
@@ -203,13 +225,15 @@ fun localized(ctx: Context, lang: String): Resources {
     return ctx.createConfigurationContext(conf).resources
 }
 
-// "versionName (channel)", from the Gradle build (th08.versionName, th08.channel).
-@Composable
-private fun VersionLine() = Text("${str(R.string.subtitle)} · ${BuildConfig.VERSION_NAME} (${BuildConfig.CHANNEL})",
-    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
 @Composable
 internal fun str(id: Int, vararg args: Any): String = LocalStrings.current.getString(id, *args)
+
+@Composable
+internal fun plural(id: Int, n: Int, vararg args: Any): String =
+    LocalStrings.current.getQuantityString(id, n, n, *args)
+
+// Group titles by id, for the Developer page's headers.
+val LocalGroupTitle = staticCompositionLocalOf<(String, String) -> String> { { id, _ -> id } }
 
 @Composable
 private fun Entry.t() = text(LocalLang.current)
@@ -220,20 +244,17 @@ private fun Entry.show(v: String) = display(v, LocalLang.current, LocalStrings.c
 @Composable
 private fun Setting.errorText(): String? = (e.kind as? Kind.IntRange)?.let { intError(it, value, LocalStrings.current) }
 
-
 private val BLOCK = RoundedCornerShape(16.dp)
 private val ROW = RoundedCornerShape(4.dp)
-internal val GRID_CELL = 300.dp
-internal val FAB_CLEARANCE = 88.dp
 
-private enum class Dest { Home, Settings, Replays, Stats }
+private enum class Dest { Home, Replays, Stats, Settings }
 
 private val Dest.icon: ImageVector
     get() = when (this) {
         Dest.Home -> Icons.Default.Home
         Dest.Settings -> Icons.Default.Settings
-        Dest.Replays -> Icons.Default.Refresh
-        Dest.Stats -> Icons.Default.List
+        Dest.Replays -> ReplaysIcon
+        Dest.Stats -> StatsIcon
     }
 
 private val Dest.label: Int
@@ -244,119 +265,143 @@ private val Dest.label: Int
         Dest.Stats -> R.string.stats_title
     }
 
+// Every text style carries the launcher language (CJK glyph choice) and, in Japanese, phrase-aware line breaks.
+private fun Typography.forLang(lang: String): Typography {
+    val locale = LocaleList(lang)
+    fun TextStyle.f() = copy(
+        localeList = locale,
+        lineBreak = if (lang == "ja") LineBreak(LineBreak.Strategy.HighQuality, LineBreak.Strictness.Strict, LineBreak.WordBreak.Phrase) else lineBreak,
+    )
+    return copy(displayLarge.f(), displayMedium.f(), displaySmall.f(), headlineLarge.f(), headlineMedium.f(), headlineSmall.f(),
+        titleLarge.f(), titleMedium.f(), titleSmall.f(), bodyLarge.f(), bodyMedium.f(), bodySmall.f(), labelLarge.f(), labelMedium.f(), labelSmall.f())
+}
+
+@Composable
+internal fun japaneseWrap(text: String, gameText: Boolean = false): String {
+    val lang = LocalLang.current
+    return remember(lang, text, gameText) {
+        if ((!gameText && lang != "ja") || text.none { it in '\u3040'..'\u9fff' }) return@remember text
+        val words = BreakIterator.getWordInstance(ULocale.JAPANESE).apply { setText(text) }
+        buildString {
+            text.forEachIndexed { i, ch ->
+                if (i > 0 && gameText && ch == '「' && !text[i - 1].isWhitespace()) {
+                    append('\u200b')
+                } else if (i > 0 && ch.isLetter() && text[i - 1].isLetter()) {
+                    append(if (words.isBoundary(i)) '\u200b' else '\u2060')
+                }
+                append(ch)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LauncherScreen(groups: List<Group>, rows: List<Setting>, data: GameData, act: LauncherActions) {
-    val rail = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass != WindowWidthSizeClass.COMPACT
+    val base = MaterialTheme.typography
+    val lang = LocalLang.current
+    MaterialTheme(typography = remember(lang, base) { base.forLang(lang) }) { Screen(groups, rows, data, act) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Screen(groups: List<Group>, rows: List<Setting>, data: GameData, act: LauncherActions) {
+    val wide = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass != WindowWidthSizeClass.COMPACT
     var dest by rememberSaveable { mutableStateOf(Dest.Home) }
-    BackHandler(dest != Dest.Home) { dest = Dest.Home }
+    var cat by rememberSaveable { mutableStateOf<String?>(null) }
+    var blocked by rememberSaveable { mutableStateOf(false) }
+    BackHandler(dest != Dest.Home) { if (dest == Dest.Settings && !wide && cat != null) cat = null else dest = Dest.Home }
+    var editorKey by rememberSaveable { mutableStateOf<String?>(null) }
     var info by rememberSaveable { mutableStateOf<List<String>?>(null) }
     val showInfo = { title: String, text: String -> info = listOf(title, text) }
-    val snacks = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    val needData = str(R.string.play_need_data)
-    val fixSettings = str(R.string.play_fix_settings)
     val canPlay = data.ok() && rows.all { it.ok() }
-    val play = {
-        if (canPlay) {
-            act.play()
-        } else {
-            dest = if (data.ok()) Dest.Settings else Dest.Home
-            scope.launch { snacks.showSnackbar(if (data.ok()) fixSettings else needData) }
-            Unit
-        }
+    if (canPlay) blocked = false
+    val ctx = LocalContext.current
+    var devOn by remember { mutableStateOf(ctx.getSharedPreferences(UI_PREFS, 0).getBoolean(DEV_KEY, false)) }
+    val toggleDev = {
+        devOn = !devOn
+        ctx.getSharedPreferences(UI_PREFS, 0).edit().putBoolean(DEV_KEY, devOn).apply()
     }
-    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
-    val fabColor = if (canPlay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest
+    val cats = categories(rows, data, devOn)
+    val fontScale = LocalDensity.current.fontScale
+    val large = fontScale > 1.15f
+    val select = { d: Dest -> dest = d; if (d != Dest.Settings) cat = null }
+    val openCat = { id: String -> cat = id; dest = Dest.Settings }
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        if (rail) {
-            val large = fontScale > 1.15f
-            val startInset = WindowInsets.safeDrawing.asPaddingValues()
-                .calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current)
+        if (wide) {
+            val startInset = WindowInsets.safeDrawing.asPaddingValues().calculateStartPadding(LocalLayoutDirection.current)
             NavigationRail(
                 modifier = Modifier.width((if (large) 120.dp else 88.dp) + startInset),
                 windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
             ) {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+                Column(Modifier.fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Center) {
                     Dest.entries.forEach { d ->
-                        NavigationRailItem(selected = dest == d, onClick = { dest = d }, modifier = Modifier.fillMaxWidth(),
-                            icon = { Icon(d.icon, null) }, label = { Text(str(d.label), maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                        val label = str(d.label)
+                        NavigationRailItem(selected = dest == d, onClick = { select(d) }, modifier = Modifier.fillMaxWidth(),
+                            alwaysShowLabel = !large,
+                            icon = { Icon(d.icon, label) },
+                            label = { Text(label, maxLines = 1, softWrap = false) })
                     }
                 }
             }
         }
-        val barSides = WindowInsetsSides.Top + WindowInsetsSides.End + if (rail) WindowInsetsSides.Bottom else WindowInsetsSides.Start
+        val barSides = WindowInsetsSides.Top + WindowInsetsSides.End + if (wide) WindowInsetsSides.Bottom else WindowInsetsSides.Start
         Scaffold(
             modifier = Modifier.weight(1f),
             containerColor = MaterialTheme.colorScheme.surface,
             contentWindowInsets = WindowInsets.safeDrawing.only(
-                WindowInsetsSides.End + WindowInsetsSides.Bottom + if (rail) WindowInsetsSides.Top else WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
-            snackbarHost = { SnackbarHost(snacks) },
+                WindowInsetsSides.End + WindowInsetsSides.Bottom + if (wide) WindowInsetsSides.Top else WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
             topBar = {
-                TopAppBar(
-                    windowInsets = WindowInsets.safeDrawing.only(barSides),
-                    title = {
-                        if (dest == Dest.Home) {
-                            Column {
-                                Text(str(R.string.title), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                VersionLine()
+                if (dest != Dest.Home) {
+                    val sub = cats.firstOrNull { it.id == cat }.takeIf { dest == Dest.Settings && !wide }
+                    TopAppBar(
+                        windowInsets = WindowInsets.safeDrawing.only(barSides),
+                        navigationIcon = {
+                            if (sub != null) IconButton(onClick = { cat = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, str(R.string.back)) }
+                        },
+                        title = { Text(sub?.title ?: str(dest.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        actions = {
+                            when (dest) {
+                                Dest.Settings -> ResetMenu(act)
+                                Dest.Replays -> ReplaysActions(act)
+                                else -> {}
                             }
-                        } else {
-                            Text(str(dest.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    },
-                    actions = {
-                        when (dest) {
-                            Dest.Settings -> ResetMenu(act)
-                            Dest.Replays -> ReplaysActions(act)
-                            else -> {}
-                        }
-                        if (rail) {
-                            Button(onClick = play, colors = ButtonDefaults.buttonColors(
-                                containerColor = if (canPlay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
-                                contentColor = if (canPlay) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                            ), modifier = Modifier.padding(horizontal = 8.dp)) {
-                                Icon(Icons.Default.PlayArrow, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(str(R.string.play), maxLines = 1)
-                            }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             },
             bottomBar = {
-                if (!rail) {
+                if (!wide) {
                     NavigationBar {
                         Dest.entries.forEach { d ->
-                            NavigationBarItem(selected = dest == d, onClick = { dest = d },
+                            NavigationBarItem(selected = dest == d, onClick = { select(d) },
                                 icon = { Icon(d.icon, null) },
-                                label = { Text(str(d.label), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    fontSize = if (fontScale > 1.15f) 10.sp else MaterialTheme.typography.labelMedium.fontSize) })
+                                label = { Text(str(d.label), maxLines = 1, softWrap = false,
+                                    fontSize = if (large) 10.sp else MaterialTheme.typography.labelMedium.fontSize) })
                         }
                     }
                 }
             },
-            floatingActionButton = {
-                if (!rail) {
-                    val playLabel = str(R.string.play)
-                    ExtendedFloatingActionButton(onClick = play, containerColor = fabColor,
-                        modifier = Modifier.semantics { contentDescription = playLabel },
-                        icon = { Icon(Icons.Default.PlayArrow, null) }, text = { Text(str(R.string.play), maxLines = 1) })
-                }
-            },
         ) { pad ->
-            val bottom = if (rail) 16.dp else FAB_CLEARANCE
             Box(Modifier.fillMaxSize().padding(pad)) {
                 when (dest) {
-                    Dest.Home -> HomeScreen(data, act, showInfo, bottom)
-                    Dest.Settings -> SettingsList(groups, rows, act, showInfo, bottom)
-                    Dest.Replays -> ReplaysScreen(rows, act, bottom)
-                    Dest.Stats -> StatsScreen(rows, bottom)
+                    Dest.Home -> HomeScreen(data, rows, canPlay, blocked, wide, act, play = { if (canPlay) act.play() else blocked = true },
+                        openStats = { select(Dest.Stats) }, openData = { openCat(DATA_CAT) },
+                        openBad = { rows.firstOrNull { !it.ok() }?.let { r -> openCat(categoryOf(r, cats)) } })
+                    Dest.Settings -> SettingsScreen(cats, cat, wide, data, act, showInfo, toggleDev, select = { cat = it }) { r ->
+                        cat = categoryOf(r, cats)
+                        editorKey = r.e.key
+                    }
+                    Dest.Replays -> ReplaysScreen(rows, act)
+                    Dest.Stats -> StatsScreen(rows, wide)
                 }
             }
         }
     }
     info?.let { (t, s) -> InfoDialog(t, s) { info = null } }
+    rows.firstOrNull { it.e.key == editorKey }?.let { r ->
+        key(r.e.key) { SettingEditor(r, act) { editorKey = null } }
+    }
 }
 
 @Composable
@@ -380,82 +425,285 @@ private fun ResetMenu(act: LauncherActions) {
     }
 }
 
+private class Summary(val best: Long, val frames: Long, val last: JSONObject?)
+
+// Best score, play time and last run from the statistics bridge; null while there is no run to show.
+private fun summaryOf(o: JSONObject): Summary? {
+    val st = o.getJSONObject("stats")
+    if (st.getInt("runs") == 0) return null
+    val pairs = st.getJSONArray("pairs")
+    val best = (0 until pairs.length()).maxOfOrNull { pairs.getJSONObject(it).getLong("best") } ?: 0L
+    val last = st.getJSONArray("last").let { if (it.length() > 0) it.getJSONObject(0) else null }
+    return Summary(best, st.getLong("frames"), last)
+}
+
 @Composable
-private fun HomeScreen(data: GameData, act: LauncherActions, showInfo: (String, String) -> Unit, bottom: Dp) {
-    LazyVerticalStaggeredGrid(
-        columns = StaggeredGridCells.Adaptive(GRID_CELL),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
-        verticalItemSpacing = 12.dp,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item(key = "data") { Block { StatusRow(data, act, showInfo) } }
-        item(key = "update") { LocalUpdate.current.takeIf { it.shown }?.let { Block { UpdateRow(it, act) } } }
-        item(key = "error") { LocalLastError.current?.let { Block { LastErrorRow(it, act) } } }
+private fun HomeScreen(
+    data: GameData,
+    rows: List<Setting>,
+    canPlay: Boolean,
+    blocked: Boolean,
+    wide: Boolean,
+    act: LauncherActions,
+    play: () -> Unit,
+    openStats: () -> Unit,
+    openData: () -> Unit,
+    openBad: () -> Unit,
+) {
+    val reply by rememberStats()
+    val summary = reply?.getOrNull()?.let(::summaryOf).takeIf { data.ok() }
+    val card = !data.ok() || LocalImport.current.busy
+    val update = LocalUpdate.current.takeIf { it.shown }
+    val error = LocalLastError.current
+    val side: @Composable () -> Unit = {
+        if (summary != null) SummaryCard(summary, rows, openStats)
+        if (card) DataCard(data, act)
+        if (update != null) Block { UpdateRow(update, act) }
+        if (error != null) LastErrorRow(error, act)
+        if (!card) DataLine(data, openData)
+    }
+    val hero: @Composable () -> Unit = { Hero(canPlay, blocked, data.ok(), wide, play, openBad) }
+    if (wide && (summary != null || card || update != null || error != null)) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+            HomePane(Modifier.weight(1f), hero)
+            HomePane(Modifier.weight(1f), side)
+        }
+    } else {
+        HomePane(Modifier.fillMaxSize().padding(horizontal = 24.dp)) { hero(); side() }
+    }
+}
+
+// A column centred in its viewport that scrolls once its content is taller.
+@Composable
+private fun HomePane(modifier: Modifier, content: @Composable () -> Unit) {
+    BoxWithConstraints(modifier) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight).padding(vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) { content() }
     }
 }
 
 @Composable
-private fun SettingsList(
-    groups: List<Group>,
-    rows: List<Setting>,
+private fun Hero(canPlay: Boolean, blocked: Boolean, dataOk: Boolean, wide: Boolean, play: () -> Unit, openBad: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Box(Modifier.size(if (wide) 72.dp else 96.dp).clip(RoundedCornerShape(24.dp))
+        .background(Brush.verticalGradient(listOf(Color(0xFF0D1133), Color(0xFF28195B))))) {
+        Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.fillMaxSize())
+    }
+    Text(str(R.string.title), style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
+    Text(str(R.string.title_ja), style = MaterialTheme.typography.titleMedium.copy(localeList = LocaleList("ja")),
+        color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+    Spacer(Modifier.height(4.dp))
+    val label = str(R.string.play)
+    Button(
+        onClick = play,
+        modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().heightIn(min = 64.dp).semantics { contentDescription = label },
+        colors = if (canPlay) ButtonDefaults.buttonColors() else
+            ButtonDefaults.buttonColors(containerColor = c.surfaceContainerHighest, contentColor = c.onSurface),
+    ) {
+        Icon(Icons.Default.PlayArrow, null, Modifier.size(28.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.titleLarge, maxLines = 1, softWrap = false)
+    }
+    if (blocked) {
+        Text(str(if (dataOk) R.string.play_fix_settings else R.string.play_need_data), color = c.error, textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodyMedium)
+        if (dataOk) TextButton(onClick = openBad) { Text(str(R.string.nav_settings), maxLines = 1) }
+    }
+}
+
+@Composable
+private fun SummaryCard(s: Summary, rows: List<Setting>, open: () -> Unit) {
+    val lang = LocalLang.current
+    val res = LocalStrings.current
+    fun word(key: String, v: String) = rows.firstOrNull { it.e.key == key }?.e?.display(v, lang, res) ?: v
+    val c = MaterialTheme.colorScheme
+    Column(
+        Modifier.widthIn(max = 480.dp).fillMaxWidth().clip(BLOCK).background(c.surfaceContainer).clickable(onClick = open).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SummaryLine(str(R.string.home_best), digits(s.best))
+        SummaryLine(str(R.string.home_time), playTime(s.frames))
+        s.last?.let { r ->
+            HorizontalDivider()
+            SummaryLine(str(R.string.home_last), digits(r.getLong("score")))
+            Text("${word("player", r.getString("shot_key"))} · ${word("rank", r.getString("rank_key"))} · ${word("stage", r.getString("stage_key"))}",
+                style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SummaryLine(label: String, value: String) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, Modifier.padding(end = 12.dp), style = MaterialTheme.typography.bodyLarge)
+        Text(value, style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"), maxLines = 1, softWrap = false)
+    }
+}
+
+@Composable
+private fun dataSummary(d: GameData) = when (d) {
+    is GameData.Imported if d.music -> str(R.string.data_imported)
+    is GameData.Imported -> str(R.string.data_imported_no_music)
+    GameData.Bundled -> str(R.string.data_bundled)
+    is GameData.Folder -> str(R.string.data_found)
+    GameData.Missing -> str(R.string.data_missing)
+}
+
+// The quiet Home line while the game data is fine.
+@Composable
+private fun DataLine(d: GameData, open: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier.widthIn(max = 480.dp).clip(BLOCK).clickable(onClick = open).heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.CheckCircle, null, Modifier.size(16.dp), tint = c.onSurfaceVariant)
+        Spacer(Modifier.width(8.dp))
+        Text(str(R.string.game_data) + ": " + dataSummary(d), style = MaterialTheme.typography.bodyMedium, color = c.onSurfaceVariant)
+    }
+}
+
+// Home card while the game files must be imported or an import runs.
+@Composable
+private fun DataCard(d: GameData, act: LauncherActions) {
+    val c = MaterialTheme.colorScheme
+    val st = LocalImport.current
+    Column(
+        Modifier.widthIn(max = 480.dp).fillMaxWidth().clip(BLOCK).background(c.surfaceContainer).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (st.busy) {
+            ImportRows(d, act)
+        } else {
+            Text(str(R.string.data_need), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            if (st.outcome !is ImportOutcome.Done) ImportOutcomeText()
+            Button(onClick = act::importGame, Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(japaneseWrap(str(R.string.import_files)), textAlign = TextAlign.Center)
+            }
+            TextButton(onClick = act::recheck) { Text(str(R.string.check_again)) }
+        }
+    }
+}
+
+internal const val DATA_CAT = SEC_APP
+
+private class Category(val section: Section, val title: String, val rows: List<Setting>, val state: String) {
+    val id get() = section.id
+}
+
+private const val UI_PREFS = "launcher_ui"
+private const val DEV_KEY = "developer_section"
+
+// The sections of Sections.kt; Developer is listed once the version line has been tapped.
+@Composable
+private fun categories(rows: List<Setting>, data: GameData, devOn: Boolean): List<Category> {
+    val lang = LocalLang.current
+    val res = LocalStrings.current
+    val byKey = rows.associateBy { it.e.key }
+    return SECTIONS.filter { it.id != SEC_DEV || devOn }.map { sec ->
+        val rs = sec.keys.mapNotNull { byKey[it] }
+        val state = when {
+            sec.id == SEC_APP -> dataSummary(data)
+            sec.state.isNotEmpty() -> sec.state.mapNotNull { byKey[it] }.joinToString(" · ") { r ->
+                val v = r.e.display(r.value, lang, res)
+                if (sec.labelled) r.e.text(lang).label + " " + v else v
+            }
+            else -> rs.count { it.value != it.e.default }.let { n -> if (n > 0) plural(R.plurals.changed_count, n) else str(R.string.section_defaults) }
+        }
+        Category(sec, str(sec.title), rs, state)
+    }
+}
+
+private fun categoryOf(r: Setting, cats: List<Category>) = cats.firstOrNull { r in it.rows }?.id ?: DATA_CAT
+
+// Portrait: the section list, or one pushed page. Landscape: sections about a third, one detail column up to 600 dp.
+@Composable
+private fun SettingsScreen(
+    cats: List<Category>,
+    cat: String?,
+    wide: Boolean,
+    data: GameData,
     act: LauncherActions,
     showInfo: (String, String) -> Unit,
-    bottom: Dp,
+    toggleDev: () -> Unit,
+    select: (String?) -> Unit,
+    edit: (Setting) -> Unit,
 ) {
-    var devOpen by rememberSaveable { mutableStateOf(rows.any { it.e.developer && it.value != it.e.default }) }
-    val player = rows.filterNot { it.e.developer }
-    val dev = rows.filter { it.e.developer }
-    LazyVerticalStaggeredGrid(
-        columns = StaggeredGridCells.Adaptive(GRID_CELL),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottom),
-        verticalItemSpacing = 12.dp,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        groupBlocks(groups, player, act, showInfo)
-        item(key = "saves") {
-            Column {
-                Header(str(R.string.saves_title))
-                SavesBlock(act)
+    val shown = cats.firstOrNull { it.id == cat } ?: if (wide) cats.first() else null
+    if (wide) {
+        Row(Modifier.fillMaxSize()) {
+            CategoryList(cats, shown?.id, chevron = false, Modifier.weight(1f).fillMaxHeight(), select)
+            VerticalDivider()
+            Box(Modifier.weight(2f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+                shown?.let { key(it.id) { CategoryPage(it, data, act, showInfo, toggleDev, edit, Modifier.widthIn(max = 600.dp).fillMaxSize()) } }
             }
         }
-        if (dev.isNotEmpty()) {
-            item(key = "dev", span = StaggeredGridItemSpan.FullLine) {
-                val changed = dev.count { it.value != it.e.default }
-                Column {
-                    Header(str(R.string.developer))
-                    Block {
-                        ShellRow(
-                            title = str(R.string.developer_options),
-                            summary = str(R.string.developer_summary) +
-                                if (changed > 0) str(R.string.changed_count, changed) else "",
-                            modifier = Modifier.clickable { devOpen = !devOpen },
-                        ) { Icon(if (devOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null) }
+    } else if (shown == null) {
+        CategoryList(cats, null, chevron = true, Modifier.fillMaxSize(), select)
+    } else {
+        CategoryPage(shown, data, act, showInfo, toggleDev, edit, Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun CategoryList(cats: List<Category>, selected: String?, chevron: Boolean, modifier: Modifier, select: (String) -> Unit) {
+    val c = MaterialTheme.colorScheme
+    LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(cats, key = { it.id }) { cat ->
+            val on = cat.id == selected
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(if (on) c.secondaryContainer else Color.Transparent)
+                    .clickable { select(cat.id) }.heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(cat.title, style = MaterialTheme.typography.bodyLarge, color = if (on) c.onSecondaryContainer else c.onSurface)
+                    Text(japaneseWrap(cat.state), style = MaterialTheme.typography.bodyMedium, color = if (on) c.onSecondaryContainer else c.onSurfaceVariant)
+                }
+                if (chevron) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryPage(cat: Category, data: GameData, act: LauncherActions, showInfo: (String, String) -> Unit, toggleDev: () -> Unit, edit: (Setting) -> Unit, modifier: Modifier) {
+    val lang = LocalLang.current
+    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (cat.id == SEC_DEV) {
+            item("dev_note") {
+                Text(str(R.string.developer_summary), style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp))
+            }
+            cat.rows.groupBy { it.e.group }.forEach { (_, rs) ->
+                item(rs.first().e.key) {
+                    Column {
+                        Header(LocalGroupTitle.current(rs.first().e.group, lang))
+                        Block { rs.forEach { SettingRow(it, act, showInfo, edit) } }
                     }
                 }
             }
-            if (devOpen) groupBlocks(groups, dev, act, showInfo)
+            return@LazyColumn
         }
-    }
-}
-
-private fun LazyStaggeredGridScope.groupBlocks(
-    groups: List<Group>,
-    rows: List<Setting>,
-    act: LauncherActions,
-    showInfo: (String, String) -> Unit,
-) {
-    for (g in groups) {
-        val rs = rows.filter { it.e.group == g.id }
-        if (rs.isEmpty()) continue
-        item(key = "g:" + g.id + rs.first().e.developer) {
-            Column {
-                Header(g.title(LocalLang.current))
-                Block { rs.forEach { SettingRow(it, act, showInfo) } }
-                if (g.id == "language" && !rs.first().e.developer) {
-                    Spacer(Modifier.size(8.dp))
-                    TranslationsBlock(act)
+        if (cat.id == SEC_APP) item("status") { Block { StatusRow(data, act, showInfo) } }
+        if (cat.rows.isNotEmpty()) item("rows") { Block { cat.rows.forEach { SettingRow(it, act, showInfo, edit) } } }
+        if (cat.id == SEC_LANGUAGE) item("tr") { TranslationsBlock(act) }
+        if (cat.id == SEC_APP) {
+            item("saves") {
+                Column {
+                    Header(str(R.string.saves_title))
+                    SavesBlock(act)
+                }
+            }
+            item("version") {
+                Block {
+                    ShellRow(str(R.string.version), "${BuildConfig.VERSION_NAME} (${BuildConfig.CHANNEL})", modifier = Modifier.clickable(onClick = toggleDev))
                 }
             }
         }
@@ -492,7 +740,7 @@ internal fun ShellRow(
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.bodyLarge)
                 if (!summary.isNullOrEmpty()) {
-                    Text(summary, style = MaterialTheme.typography.bodyMedium,
+                    Text(japaneseWrap(summary), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -519,7 +767,6 @@ private fun headline(report: String): String {
     return listOf("\nbacktrace:\n", "\nlast warnings:\n").map { body.indexOf(it) }.filter { it >= 0 }
         .minOrNull().let { if (it == null) body else body.substring(0, it) }.trim()
 }
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UpdateRow(u: UpdateUi, act: LauncherActions) {
@@ -583,37 +830,46 @@ private fun UpdateRow(u: UpdateUi, act: LauncherActions) {
     }
 }
 
+// One plain sentence with Details and Dismiss; the raw report only behind Details.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LastErrorRow(report: String, act: LauncherActions) {
+    val c = MaterialTheme.colorScheme
+    var details by rememberSaveable { mutableStateOf(false) }
     Column(
-        Modifier.fillMaxWidth().clip(ROW).background(MaterialTheme.colorScheme.errorContainer)
-            .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
+        Modifier.fillMaxWidth().widthIn(max = 480.dp).clip(BLOCK).background(c.errorContainer)
+            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+            Icon(Icons.Default.Warning, null, tint = c.onErrorContainer)
             Spacer(Modifier.width(16.dp))
-            Text(str(R.string.last_failed), style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(str(R.string.last_failed), style = MaterialTheme.typography.bodyLarge, color = c.onErrorContainer)
         }
-        Text(headline(report), style = MaterialTheme.typography.bodyMedium, maxLines = 6,
-            color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = act::shareError) { Text(str(R.string.last_failed_share), maxLines = 1) }
-            TextButton(onClick = act::dismissError) { Text(str(R.string.last_failed_dismiss), maxLines = 1) }
+            TextButton(onClick = { details = true }) { Text(str(R.string.last_failed_details), maxLines = 1, softWrap = false) }
+            TextButton(onClick = act::dismissError) { Text(str(R.string.last_failed_dismiss), maxLines = 1, softWrap = false) }
         }
+    }
+    if (details) {
+        AlertDialog(
+            onDismissRequest = { details = false },
+            title = { Text(str(R.string.last_failed)) },
+            text = { Text(headline(report), Modifier.verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton(onClick = { details = false; act.shareError() }) { Text(str(R.string.last_failed_share), maxLines = 1) } },
+            dismissButton = { TextButton(onClick = { details = false }) { Text(str(R.string.ok), maxLines = 1) } },
+        )
     }
 }
 
+// The Game data page's status: what is in use, with the import controls under it.
 @Composable
 private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, String) -> Unit) {
     val ok = d.ok()
-    val (summary, detail) = when (d) {
-        is GameData.Imported if d.music -> str(R.string.data_imported) to str(R.string.data_imported_detail, d.dir.path)
-        is GameData.Imported -> str(R.string.data_imported_no_music) to str(R.string.data_imported_detail, d.dir.path)
-        GameData.Bundled -> str(R.string.data_bundled) to str(R.string.data_bundled_detail)
-        is GameData.Folder -> str(R.string.data_found) to str(R.string.data_found_detail, d.dir.path)
-        GameData.Missing -> str(R.string.data_missing) to str(R.string.data_missing_detail)
+    val detail = when (d) {
+        is GameData.Imported -> str(R.string.data_imported_detail, d.dir.path)
+        GameData.Bundled -> str(R.string.data_bundled_detail)
+        is GameData.Folder -> str(R.string.data_found_detail, d.dir.path)
+        GameData.Missing -> str(R.string.data_missing_detail)
     }
     val title = str(R.string.game_data)
     Row(
@@ -624,79 +880,64 @@ private fun StatusRow(d: GameData, act: LauncherActions, showInfo: (String, Stri
         Icon(if (ok) Icons.Default.CheckCircle else Icons.Default.Warning, null,
             tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
         Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(summary, style = MaterialTheme.typography.bodyMedium,
-                color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
-        }
-        if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again), maxLines = 1) }
+        Text(dataSummary(d), Modifier.weight(1f).padding(vertical = 10.dp), style = MaterialTheme.typography.bodyLarge,
+            color = if (ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
+        if (!ok) TextButton(onClick = act::recheck) { Text(str(R.string.check_again), maxLines = 1, softWrap = false) }
     }
     if (d !is GameData.Bundled) ImportRows(d, act)
 }
 
+// A summary that only repeats the label ("Music volume" / "Volume of the music") is not shown.
+private fun usefulSummary(label: String, summary: String): String? {
+    val stems = { s: String -> s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }.map { it.take(5) } }
+    val l = stems(label)
+    val extra = stems(summary).filter { it !in l && it !in setOf("the", "all", "for", "and") }
+    return summary.takeUnless { l.isNotEmpty() && l.all { it in stems(summary) } && extra.size <= 1 }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit) {
+private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, String) -> Unit, edit: (Setting) -> Unit) {
     val e = r.e
     val t = e.t()
     val details = str(R.string.details, t.summary, t.help)
-    val info = { showInfo(t.label, details) }
-    var editing by rememberSaveable(e.key) { mutableStateOf(false) }
-    // `game_text`: follow / ja, then the installed pack languages, then the current value if no pack of it is installed.
-    val packs = if (e.key == "game_text") {
-        val inst = LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
-            .associate { it.language to if (it.title.isEmpty()) it.language else "${it.language} — ${it.title}" }
-        val missing = r.value.takeIf { it !in inst && it !in listOf("", "follow", "ja") }
-        if (missing == null) inst else inst + (missing to str(R.string.tr_missing, missing))
-    } else emptyMap()
-    val opts = e.options()?.let { it + packs.keys.filter { k -> k !in it } }
-    val shown: @Composable (String) -> String = { v -> packs[v] ?: e.show(v) }
+    val info = { showInfo(t.label, details) }.takeIf { t.help.length > t.summary.length + 24 }
+    val summary = usefulSummary(t.label, t.summary)
+    val choices = settingChoices(r)
     val k = e.kind
     when {
         k == Kind.Bool -> ShellRow(
-            t.label, t.summary, info = info,
+            t.label, summary, info = info,
             modifier = Modifier.toggleable(r.value == "on", role = Role.Switch) { act.change(r, if (it) "on" else "off") },
         ) { Switch(checked = r.value == "on", onCheckedChange = null) }
-        opts != null -> {
-            val labels = opts.map { shown(it) }
+        choices != null -> {
             BoxWithConstraints {
-                // Segments only while every label fits on one line; otherwise a dropdown, so no label is cut.
+                // Segments only while every label fits on one line; otherwise a list dialog, so no label is cut.
                 val measurer = rememberTextMeasurer()
                 val style = MaterialTheme.typography.labelLarge
-                val density = androidx.compose.ui.platform.LocalDensity.current
-                val perSegment = (maxWidth - 32.dp) / opts.size - 24.dp
-                val fits = opts.size <= 3 && e.key != "game_text" && labels.all { l ->
+                val density = LocalDensity.current
+                val perSegment = (maxWidth - 32.dp) / choices.size - 24.dp
+                val fits = choices.size <= 3 && e.key != "game_text" && choices.all { (_, l) ->
                     with(density) { measurer.measure(l, style).size.width.toDp() } <= perSegment
                 }
                 if (fits) {
-                    ShellRow(t.label, t.summary, info = info, below = {
+                    ShellRow(t.label, summary, info = info, below = {
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            opts.forEachIndexed { i, v ->
+                            choices.forEachIndexed { i, (v, label) ->
                                 SegmentedButton(
                                     selected = r.value == v,
                                     onClick = { act.change(r, v) },
-                                    shape = SegmentedButtonDefaults.itemShape(i, opts.size),
+                                    modifier = Modifier.testTag("setting_${e.key}_$v").semantics { testTagsAsResourceId = true },
+                                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
                                     icon = {},
                                     colors = SegmentedButtonDefaults.colors(inactiveContainerColor = Color.Transparent),
-                                ) { Text(labels[i], maxLines = 1, softWrap = false) }
+                                ) { Text(label, maxLines = 1, softWrap = false) }
                             }
                         }
                     })
                 } else {
-                    ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
-                        Box {
-                            ValueField(shown(r.value), r.ok())
-                            DropdownMenu(expanded = editing, onDismissRequest = { editing = false }) {
-                                opts.forEachIndexed { i, v ->
-                                    DropdownMenuItem(
-                                        text = { Text(labels[i]) },
-                                        trailingIcon = { if (r.value == v) Icon(Icons.Default.Check, null) },
-                                        onClick = { editing = false; act.change(r, v) },
-                                    )
-                                }
-                            }
-                        }
-                    })
+                    ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) },
+                        below = { ValueField(choices.firstOrNull { it.first == r.value }?.second ?: e.show(r.value), r.ok()) })
                 }
             }
         }
@@ -704,8 +945,12 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
             val current = (r.value.toLongOrNull() ?: r.e.default.toLongOrNull() ?: k.min).coerceIn(k.min, k.max)
             var v by remember(r.value) { mutableStateOf(current.toFloat()) }
             val n = Math.round(v).toLong()
-            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true }, below = {
+            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) }, below = {
                 Slider(
+                    modifier = Modifier.testTag(e.key).semantics {
+                        contentDescription = t.label
+                        testTagsAsResourceId = true
+                    },
                     value = v,
                     onValueChange = { v = it },
                     onValueChangeFinished = { act.change(r, Math.round(v).toLong().toString()) },
@@ -714,17 +959,58 @@ private fun SettingRow(r: Setting, act: LauncherActions, showInfo: (String, Stri
                 )
             }) {
                 Text(if (r.value.isEmpty() && n == current) e.show("") else e.show(n.toString()),
-                    style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                    style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false,
                     color = if (!r.ok()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             }
-            if (editing) TextDialog(r, act) { editing = false }
         }
         else -> {
-            ShellRow(t.label, t.summary, info = info, modifier = Modifier.clickable { editing = true },
-                below = { ValueField(shown(r.value), r.ok()) })
-            if (editing) TextDialog(r, act) { editing = false }
+            ShellRow(t.label, summary, info = info, modifier = Modifier.clickable { edit(r) },
+                below = { ValueField(e.show(r.value), r.ok()) })
         }
     }
+}
+
+@Composable
+private fun settingChoices(r: Setting): List<Pair<String, String>>? {
+    val e = r.e
+    val opts = e.options() ?: return null
+    if (e.key != "game_text") return opts.map { it to e.show(it) }
+    val installed = LocalPacks.current.installed.filter { it.language != "ja" }.distinctBy { it.language }
+        .associate { it.language to if (it.title.isEmpty()) it.language else "${it.language} — ${it.title}" }
+    val missing = r.value.takeIf { it !in installed && it.isNotEmpty() && it !in opts }
+    val packs = if (missing == null) installed else installed + (missing to str(R.string.tr_missing, missing))
+    return (opts + packs.keys.filter { it !in opts }).map { it to (packs[it] ?: e.show(it)) }
+}
+
+@Composable
+private fun SettingEditor(r: Setting, act: LauncherActions, close: () -> Unit) {
+    val choices = settingChoices(r)
+    if (choices == null) TextDialog(r, act, close)
+    else ChoiceDialog(r.e.t().label, choices.map { it.first }, choices.map { it.second }, r.value, { act.change(r, it) }, close)
+}
+
+// One radio row per value; choosing applies and closes.
+@Composable
+private fun ChoiceDialog(title: String, values: List<String>, labels: List<String>, current: String, pick: (String) -> Unit, close: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text(title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                values.forEachIndexed { i, v ->
+                    Row(
+                        Modifier.fillMaxWidth().selectable(v == current, role = Role.RadioButton) { pick(v); close() }.heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = v == current, onClick = null)
+                        Spacer(Modifier.width(16.dp))
+                        Text(japaneseWrap(labels[i]), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = close) { Text(str(R.string.cancel), maxLines = 1) } },
+    )
 }
 
 // Read-only look of a field under a row: the whole row is the tap target, this only shows the value.
@@ -820,9 +1106,8 @@ private fun SavesBlock(act: LauncherActions) {
             st.gameRunning -> str(R.string.saves_game_running)
             st.busy -> null
             else -> when (val o = st.outcome) {
-                is SaveOutcome.Exported -> str(R.string.saves_exported, o.files)
-                is SaveOutcome.Imported -> o.backup?.let { str(R.string.saves_imported_backup, o.files) }
-                    ?: str(R.string.saves_imported, o.files)
+                is SaveOutcome.Exported -> plural(R.plurals.saves_exported, o.files)
+                is SaveOutcome.Imported -> plural(if (o.backup != null) R.plurals.saves_imported_backup else R.plurals.saves_imported, o.files)
                 is SaveOutcome.Failed -> str(if (o.export) R.string.saves_export_failed else R.string.saves_import_failed, o.error)
                 null -> null
             }
@@ -899,7 +1184,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
         onDismissRequest = close,
         icon = { Icon(Icons.Outlined.Info, null) },
         title = { Text(title) },
-        text = { Text(text) },
+        text = { Text(japaneseWrap(text), Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = close) { Text(str(R.string.ok)) } },
     )
 }
@@ -908,7 +1193,7 @@ private fun InfoDialog(title: String, text: String, close: () -> Unit) {
 // Number or text entry; the replay row also offers a file chooser.
 @Composable
 private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
-    var t by remember { mutableStateOf(r.value) }
+    var t by rememberSaveable { mutableStateOf(r.value) }
     val k = r.e.kind
     val err = (k as? Kind.IntRange)?.let { intError(it, t.trim(), LocalStrings.current) }
     val hint = when (k) {
@@ -921,6 +1206,13 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
         title = { Text(r.e.t().label) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (k is Kind.IntRange && k.max - k.min <= 400) {
+                    Slider(
+                        value = (t.toFloatOrNull() ?: r.e.default.toFloatOrNull() ?: k.min.toFloat()).coerceIn(k.min.toFloat(), k.max.toFloat()),
+                        onValueChange = { t = Math.round(it).toString() },
+                        valueRange = k.min.toFloat()..k.max.toFloat(),
+                    )
+                }
                 OutlinedTextField(
                     value = t,
                     onValueChange = { t = it },
@@ -933,7 +1225,7 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                val reset = r.e.default.isEmpty() || r.value != r.e.default
+                val reset = r.e.default.isEmpty() || t != r.e.default
                 if (reset) {
                     TextButton(onClick = { act.change(r, r.e.default); close() }) {
                         Text(str(if (r.e.default.isEmpty()) R.string.clear else R.string.default_value), maxLines = 1)
@@ -954,7 +1246,6 @@ private fun TextDialog(r: Setting, act: LauncherActions, close: () -> Unit) {
         dismissButton = { TextButton(onClick = close) { Text(str(R.string.cancel), maxLines = 1) } },
     )
 }
-
 // Previews with a few table-like rows (no Context: the schema asset is not read).
 private object PreviewActions : LauncherActions {
     override fun change(r: Setting, v: String) { r.value = v }

@@ -162,6 +162,23 @@ class GameImporter(private val act: ComponentActivity) {
 }
 
 @Composable
+fun ImportOutcomeText(modifier: Modifier = Modifier) {
+    val o = LocalImport.current.outcome ?: return
+    val (text, err) = when (o) {
+        is ImportOutcome.Done -> str(R.string.import_done) to false
+        ImportOutcome.Cancelled -> str(R.string.import_cancelled) to false
+        is ImportOutcome.Failed -> when (o.kind) {
+            "wrong_file" -> str(R.string.import_wrong_file, o.message)
+            "version" -> str(R.string.import_version)
+            "no_space" -> if (o.needMb > 0) str(R.string.import_no_space_mb, o.needMb) else str(R.string.import_no_space)
+            else -> str(R.string.import_failed, o.message)
+        } to true
+    }
+    Text(text, modifier, style = MaterialTheme.typography.bodyMedium,
+        color = if (err) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
 private fun Modifier.rowSurface() = clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
 
 private fun Modifier.padding16() = padding(horizontal = 16.dp, vertical = 12.dp)
@@ -187,21 +204,7 @@ fun ImportRows(d: GameData, act: LauncherActions) {
         }) { TextButton(onClick = act::cancelImport) { Text(str(R.string.cancel)) } }
         return
     }
-    st.outcome?.let { o ->
-        val (text, err) = when (o) {
-            is ImportOutcome.Done -> str(R.string.import_done) to false
-            ImportOutcome.Cancelled -> str(R.string.import_cancelled) to false
-            is ImportOutcome.Failed -> when (o.kind) {
-                "wrong_file" -> str(R.string.import_wrong_file, o.message)
-                "version" -> str(R.string.import_version)
-                "no_space" -> if (o.needMb > 0) str(R.string.import_no_space_mb, o.needMb) else str(R.string.import_no_space)
-                else -> str(R.string.import_failed, o.message)
-            } to true
-        }
-        Text(text, style = MaterialTheme.typography.bodyMedium,
-            color = if (err) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().rowSurface().padding16())
-    }
+    ImportOutcomeText(Modifier.fillMaxWidth().rowSurface().padding16())
     val imported = d is GameData.Imported
     FlowRow(Modifier.fillMaxWidth().rowSurface().padding16(),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
