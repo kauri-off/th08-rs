@@ -867,6 +867,17 @@ impl PortMenu {
                 return act;
             }
         }
+        self.redraw_egui(window, gfx, lay, s, (w, h))
+    }
+
+    fn redraw_egui(
+        &mut self,
+        window: &Window,
+        gfx: &mut Gfx,
+        lay: Layout,
+        s: SafeArea,
+        (w, h): (u32, u32),
+    ) -> Option<Action> {
         let ppp = if self.edit.is_some() {
             lay.edit_ppp
         } else {
