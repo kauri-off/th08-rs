@@ -2283,6 +2283,13 @@ impl Gfx {
         paint: impl FnOnce(OverlayTarget<'_>, &mut wgpu::CommandEncoder),
     ) -> bool {
         self.recover_if_lost();
+        self.paint_held(paint)
+    }
+
+    fn paint_held(
+        &mut self,
+        paint: impl FnOnce(OverlayTarget<'_>, &mut wgpu::CommandEncoder),
+    ) -> bool {
         let Some(frame) = self.acquire() else {
             return false;
         };
@@ -2307,8 +2314,9 @@ impl Gfx {
 
     // `present_last` with `scene` drawn over the held frame.
     pub fn present_scene(&mut self, scene: &th08_ui::scene::Scene) -> bool {
+        self.recover_if_lost();
         let mut r = self.scene.take();
-        let shown = self.present_last(|t, enc| {
+        let shown = self.paint_held(|t, enc| {
             if let Some(r) = &mut r {
                 r.draw(scene, &t, enc);
             }

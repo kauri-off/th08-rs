@@ -126,8 +126,22 @@ impl Shaper {
     }
 }
 
+// A character the UI font lacks shows as "?" rather than the font's empty box (a pad's name, a file path).
+fn covered(text: &str, face: Face) -> String {
+    let map = font(face).charmap();
+    text.chars()
+        .map(|c| {
+            if c.is_control() || c.is_whitespace() || map.map(c) != 0 {
+                c
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
+
 fn shape_uncached(ctx: &mut ShapeContext, text: &str, face: Face) -> Shaped {
-    let text = latin_dots(text);
+    let text = covered(&latin_dots(text), face);
     let mut glyphs = Vec::new();
     let mut pen = 0.0;
     for (script, run) in runs(&text) {
@@ -218,6 +232,19 @@ mod tests {
             assert!(
                 s.shape(t, Face::Serif).glyphs.iter().all(|g| g.id != 0),
                 "{t}"
+            );
+        }
+    }
+
+    #[test]
+    fn characters_outside_the_font_shape_as_a_question_mark() {
+        let s = Shaper::new();
+        for face in [Face::Serif, Face::Sans] {
+            let odd = s.shape("Pad 手柄\u{1F3AE}ẞ", face);
+            assert!(odd.glyphs.iter().all(|g| g.id != 0), "{face:?}");
+            assert_eq!(
+                odd.width,
+                s.shape(&covered("Pad 手柄\u{1F3AE}ẞ", face), face).width
             );
         }
     }

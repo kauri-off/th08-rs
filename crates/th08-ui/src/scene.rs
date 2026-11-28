@@ -25,6 +25,18 @@ impl Color {
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self([r, g, b, 255])
     }
+
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self([r, g, b, a])
+    }
+
+    // The same colour at `k` times its opacity.
+    #[must_use]
+    #[expect(clippy::cast_sign_loss, reason = "k is clamped to 0..=1")]
+    pub fn fade(self, k: f32) -> Self {
+        let [r, g, b, a] = self.0;
+        Self([r, g, b, (f32::from(a) * k.clamp(0.0, 1.0)).round() as u8])
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -78,20 +90,45 @@ pub struct Arrow {
     pub ring: Option<Ring>,
 }
 
+// A rounded rect, filled, or outlined `stroke` physical px wide inside its edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Round {
+    pub rect: Rect,
+    pub radius: f32,
+    pub color: Color,
+    pub stroke: Option<f32>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     Rect { rect: Rect, color: Color },
+    Round(Round),
     Text(Text),
     Arrow(Arrow),
     PushClip(Rect),
     PopClip,
 }
 
-// Commands in painter's order; clips nest and intersect.
+// An area that takes pointer input; `tag` is the layout's own meaning of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hit {
+    pub rect: Rect,
+    pub tag: u32,
+}
+
+impl Hit {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        let r = self.rect;
+        x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
+    }
+}
+
+// Commands in painter's order; clips nest and intersect. Hits are not drawn; a later one lies above an earlier one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
     pub scale: f32,
     pub cmds: Vec<Cmd>,
+    pub hits: Vec<Hit>,
 }
 
 impl Scene {
@@ -99,7 +136,21 @@ impl Scene {
         Self {
             scale,
             cmds: Vec::new(),
+            hits: Vec::new(),
         }
+    }
+
+    pub fn round(&mut self, round: Round) {
+        self.cmds.push(Cmd::Round(round));
+    }
+
+    pub fn hit(&mut self, rect: Rect, tag: u32) {
+        self.hits.push(Hit { rect, tag });
+    }
+
+    // The topmost hit area under (x, y), in points.
+    pub fn hit_at(&self, x: f32, y: f32) -> Option<Hit> {
+        self.hits.iter().rev().find(|h| h.contains(x, y)).copied()
     }
 
     pub fn rect(&mut self, rect: Rect, color: Color) {

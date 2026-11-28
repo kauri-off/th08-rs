@@ -1,6 +1,6 @@
 //! Turns a Scene into vertices, pipeline batches and atlas uploads, on the CPU.
 use crate::atlas::{Atlas, Full, Key, SUB_STEPS, Shape, Slot};
-use crate::scene::{Arrow, Cmd, Color, Rect, Ring, Scene, Text};
+use crate::scene::{Arrow, Cmd, Color, Rect, Ring, Round, Scene, Text};
 use crate::text::Shaper;
 use bytemuck::{Pod, Zeroable};
 
@@ -101,6 +101,7 @@ impl Prepare {
                 Cmd::Rect { rect, color } => self.rect(*rect, *color),
                 Cmd::Text(t) => self.text(t)?,
                 Cmd::Arrow(a) => self.arrow(a)?,
+                Cmd::Round(r) => self.round(r)?,
                 Cmd::PushClip(r) => self.push_clip(*r),
                 Cmd::PopClip => {
                     if self.clips.len() > 1 {
@@ -221,6 +222,33 @@ impl Prepare {
             if let Some(s) = self.slot(key)? {
                 self.mask(s, whole, oy - (g.y * size_px).round(), color);
             }
+        }
+        Ok(())
+    }
+
+    // Placed on whole pixels, so one mask serves a size wherever it sits.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "UI shapes are far below 65536 px"
+    )]
+    fn round(&mut self, r: &Round) -> Result<(), Full> {
+        let s = self.scale;
+        let (x0, y0) = ((r.rect.x * s).round(), (r.rect.y * s).round());
+        let (x1, y1) = (
+            ((r.rect.x + r.rect.w) * s).round(),
+            ((r.rect.y + r.rect.h) * s).round(),
+        );
+        let key = Key {
+            shape: Shape::Round {
+                w: px(x1 - x0) as u16,
+                h: px(y1 - y0) as u16,
+                r: px((r.radius * s).round()) as u16,
+            },
+            size: 64,
+            ring: r.stroke.map_or(0, |w| q64(w).max(1)),
+        };
+        if let Some(slot) = self.slot(key)? {
+            self.mask(slot, x0, y0, r.color);
         }
         Ok(())
     }
@@ -398,6 +426,31 @@ mod tests {
         small.run(&page(&every, 400.0), (1920, 1080));
         assert_eq!(small.atlas.size(), 2048, "device limit");
         assert!(small.dropped > 0);
+    }
+
+    #[test]
+    fn rounds_sit_on_whole_pixels_and_share_one_mask_per_size() {
+        let mut s = Scene::new(1.5);
+        for x in [10.0, 40.3] {
+            s.round(Round {
+                rect: Rect::new(x, 10.0, 20.0, 12.0),
+                radius: 3.0,
+                color: Color::WHITE,
+                stroke: Some(1.0),
+            });
+        }
+        s.round(Round {
+            rect: Rect::new(10.0, 40.0, 12.0, 12.0),
+            radius: 6.0,
+            color: Color::WHITE,
+            stroke: None,
+        });
+        let mut p = Prepare::new(4096);
+        p.run(&s, (200, 200));
+        assert_eq!(p.verts.len(), 18);
+        assert_eq!(p.atlas.uploads.len(), 2);
+        let x0 = (p.verts[0].pos[0] + 1.0) * 100.0;
+        assert!((x0 - x0.round()).abs() < 1e-3, "{x0}");
     }
 
     #[test]

@@ -7,10 +7,10 @@ use th08::platform::portmenu::{Nav, Shot, ShotAsk};
 use th08::uicheck::{Issue, Kind};
 use th08_render::gfx::SafeArea;
 
-const USAGE: &str = "usage: uishots [OUT_DIR] [--only=launcher|portmenu|slint] [--lang=en,ja,ru] [--size=SUBSTR] [--all]
+const USAGE: &str = "usage: uishots [OUT_DIR] [--only=launcher|portmenu|slint|scene] [--lang=en,ja,ru] [--size=SUBSTR] [--all]
 Renders every launcher view and port-menu page × window size × OS scale × language over a fixture (temp config /
 save dir with stats and replays, nested game folder) and runs the layout check; exit 1 when it finds issues.
-Without OUT_DIR only the check runs (no GPU); with it: PNGs, index.html and sheet_*.png contact sheets.
+Without OUT_DIR only the check runs (Scene, egui and the launcher need no GPU); with it: PNGs, index.html and sheet_*.png contact sheets.
 --size keeps sizes whose name contains SUBSTR (phone, 1674x738, @2x); --all prints every issue.
 --bench prints the CPU time of a settings frame, egui and Slint, per size (headless GPU, finishes each frame).
 --fixture=DIR only copies the fixture's save dir (score.dat, stats.jsonl, replay/) to DIR (for the Android check).";
@@ -229,6 +229,7 @@ enum Page {
     Launcher(&'static str),
     Menu(&'static str, Shot),
     Slint(&'static str, Shot),
+    Scene(&'static str, Shot),
 }
 
 impl Page {
@@ -237,6 +238,7 @@ impl Page {
             Page::Launcher(n) => format!("launcher_{n}"),
             Page::Menu(n, _) => format!("portmenu_{n}"),
             Page::Slint(n, _) => format!("slint_{n}"),
+            Page::Scene(n, _) => format!("scene_{n}"),
         }
     }
 }
@@ -315,6 +317,54 @@ fn slint_pages(fx: &Fixture, phone: bool) -> Vec<Page> {
             _ => None,
         })
         .collect()
+}
+
+fn scene_pages(size: &Size) -> Vec<Page> {
+    let card = Shot {
+        quit: true,
+        touch: size.phone,
+        density: size.density,
+        stage: Some(th08::platform::portmenu::StageLine {
+            stage: "1",
+            rank: 1,
+            shot: 0,
+        }),
+        ..Shot::default()
+    };
+    vec![
+        Page::Scene("card", card.clone()),
+        Page::Scene(
+            "ask_retry",
+            Shot {
+                ask: Some(ShotAsk::Retry),
+                ..card.clone()
+            },
+        ),
+        Page::Scene(
+            "ask_quit",
+            Shot {
+                ask: Some(ShotAsk::Quit),
+                ..card.clone()
+            },
+        ),
+        Page::Scene(
+            "busy",
+            Shot {
+                speed: Some((3, 4)),
+                no_saves: true,
+                status: Some("Screenshot saved".into()),
+                pad: Some("Wireless Controller 手柄 🎮".into()),
+                ..card.clone()
+            },
+        ),
+        Page::Scene(
+            "no_run_actions",
+            Shot {
+                quit: false,
+                ..card
+            },
+        ),
+    ]
 }
 
 fn launcher_model(
@@ -521,22 +571,14 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(o)?;
     }
     let wants_slint = args.only.as_deref().is_none_or(|o| o == "slint");
-    let headless = (args.out.is_some() || wants_slint)
+    let mut headless = (args.out.is_some() || wants_slint)
         .then(|| pollster::block_on(th08_render::gfx::Gfx::headless()));
-    let slint_gfx = match &headless {
-        Some(Ok(g)) if wants_slint => Some(g),
-        Some(Err(e)) if args.out.is_none() => {
-            eprintln!("uishots: no GPU, the Slint pages are not checked: {e}");
-            None
-        }
-        _ => None,
-    };
-    let gfx = match (&headless, &args.out) {
-        (Some(Ok(g)), Some(_)) => Some(g),
-        (Some(Err(e)), Some(_)) => anyhow::bail!("no GPU for screenshots: {e}"),
-        _ => None,
-    };
-    let stage = gfx
+    if let Some(Err(e)) = &headless {
+        anyhow::ensure!(args.out.is_none(), "no GPU for offscreen renders: {e}");
+        eprintln!("uishots: no GPU, the Slint pages are not checked: {e}");
+    }
+    let stage = args
+        .out
         .as_ref()
         .and_then(|_| reference("docs/briefs/uiref/05_th08_stage.png"));
     // Without game data the launcher's title art (title00.png) is stood in for by the title screen reference at the
@@ -547,7 +589,7 @@ fn main() -> anyhow::Result<()> {
         .flatten()
         .map(|i| image::imageops::resize(&i, 640, 480, image::imageops::FilterType::Triangle))
         .map(|i| without_logo(&i));
-    if gfx.is_some() && stage.is_none() {
+    if args.out.is_some() && stage.is_none() {
         eprintln!("uishots: no stage reference image, the port menu renders over a gradient");
     }
     let mut frames = Vec::new();
@@ -560,12 +602,16 @@ fn main() -> anyhow::Result<()> {
             if matches!(args.only.as_deref(), None | Some("portmenu")) {
                 pages.extend(menu_pages(&fx, sz.phone));
             }
-            if slint_gfx.is_some() {
+            if wants_slint && headless.as_ref().is_some_and(Result::is_ok) {
                 pages.extend(slint_pages(&fx, sz.phone));
+            }
+            if matches!(args.only.as_deref(), None | Some("scene")) {
+                pages.extend(scene_pages(sz));
             }
             for page in pages {
                 let file = format!("{}_{}_{lang}.png", page.name(), sz.name);
                 let s = fx.settings(lang);
+                let gfx = headless.as_ref().and_then(|r| r.as_ref().ok());
                 let (issues, surface) = match &page {
                     Page::Launcher(view) => {
                         let o = |probe| ShotOpts {
@@ -583,7 +629,7 @@ fn main() -> anyhow::Result<()> {
                                 &o(Probe::None),
                             ));
                         }
-                        if let (Some(g), Some(dir)) = (&gfx, &args.out) {
+                        if let (Some(g), Some(dir)) = (gfx, &args.out) {
                             let (m, probe) = launcher_model(&fx, lang, view, title.as_ref());
                             th08::launcher::render_image(g, m, sz.px, sz.safe, &o(probe))
                                 .save(dir.join(&file))?;
@@ -602,7 +648,7 @@ fn main() -> anyhow::Result<()> {
                                 &s, sz.px, sz.safe, &shot,
                             ));
                         }
-                        if let (Some(g), Some(dir)) = (&gfx, &args.out) {
+                        if let (Some(g), Some(dir)) = (gfx, &args.out) {
                             th08::platform::portmenu::render_image(
                                 g,
                                 &s,
@@ -614,12 +660,23 @@ fn main() -> anyhow::Result<()> {
                         }
                         (issues, "portmenu")
                     }
+                    Page::Scene(_, shot) => {
+                        use th08::platform::portmenu::scene_check::{Rig, image};
+                        let rig = Rig::new(&s, sz.px, sz.safe, shot);
+                        let scene = rig.scene();
+                        let issues = rig.issues(&scene);
+                        if let (Some(Ok(g)), Some(dir)) = (&mut headless, &args.out) {
+                            image(g, &backdrop(stage.as_ref(), sz, shot), &scene)
+                                .save(dir.join(&file))?;
+                        }
+                        (issues, "scene")
+                    }
                     Page::Slint(_, shot) => {
                         let shot = Shot {
                             density: sz.density,
                             ..shot.clone()
                         };
-                        let g = slint_gfx.expect("slint pages only with a GPU");
+                        let g = gfx.expect("slint pages only with a GPU");
                         if shot.settings.is_none() {
                             let shot = Shot {
                                 stage: Some(th08::platform::portmenu::StageLine {
@@ -765,7 +822,7 @@ fn html(s: &str) -> String {
 fn sheets(dir: &Path, frames: &[Frame]) -> anyhow::Result<()> {
     const TW: u32 = 320;
     const COLS: u32 = 8;
-    for surface in ["launcher", "portmenu", "slint"] {
+    for surface in ["launcher", "portmenu", "slint", "scene"] {
         for lang in ["en", "ja", "ru"] {
             let set: Vec<&Frame> = frames
                 .iter()

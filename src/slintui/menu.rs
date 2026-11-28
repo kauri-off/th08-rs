@@ -7,6 +7,7 @@ use super::{MenuRoot, Modality, Ui};
 use slint::{ComponentHandle, Global};
 use std::rc::Rc;
 use th08_render::gfx::OverlayTarget;
+use winit::dpi::PhysicalPosition;
 use winit::event::WindowEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +58,18 @@ impl Menu {
         self.pointer = Pointer::default();
         self.adapter
             .dispatch(slint::platform::WindowEvent::PointerExited);
+    }
+
+    pub(crate) fn cancel_pointer(&mut self) {
+        self.pointer.cancel(&self.adapter);
+        self.page.discard_commands();
+    }
+
+    pub(crate) fn set_mouse(&mut self, position: PhysicalPosition<f64>) {
+        let scale = self.adapter.scale();
+        if scale > 0.0 {
+            self.pointer.set_mouse(position, scale);
+        }
     }
 
     // Shows `v`; true when the view changed, so the caller fills it.

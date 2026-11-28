@@ -2,7 +2,7 @@
 use super::host::Adapter;
 use super::text::breakable;
 use super::{Cap, Geometry, Hint, MenuRoot, Modality, PageApi, RowData, Ui};
-use crate::menu_model::{Cursor, Effect, Hit, Input, MenuModel, Nav, Target};
+use crate::menu_model::{Cursor, Effect, Hit, Input, MenuModel, Target};
 use crate::platform::portmenu::{self, Shape};
 use crate::settings_store::SettingsStore as Model;
 use crate::theme::{Ctl, CtlOut};
@@ -187,10 +187,14 @@ impl Page {
 
     // The view was just switched in: nothing from its last time on screen counts.
     pub fn open(&self, touch: bool) {
-        self.cmds.borrow_mut().clear();
+        self.discard_commands();
         self.api().set_content_y(0.0);
         self.api().set_hovered(-1);
         Ui::get(&self.ui).set_touch(touch);
+    }
+
+    pub(super) fn discard_commands(&self) {
+        self.cmds.borrow_mut().clear();
     }
 
     // The fixed strings; true when they changed.
@@ -331,23 +335,22 @@ impl Page {
         }
     }
 
-    // Hover, the list's position, keys and then taps go to the model; the page then shows what the model says.
-    pub fn apply(
-        &mut self,
-        menu: &mut MenuModel,
-        navs: Vec<Nav>,
-        lang: crate::i18n::Lang,
-    ) -> Vec<Effect> {
+    pub fn read_pointer(&self, menu: &mut MenuModel) {
         let api = self.api();
         menu.apply(Input::Scrolled(api.get_scroll()));
         if let Ok(r) = usize::try_from(api.get_hovered()) {
             menu.apply(Input::Over(Hit::Row(r)));
         }
-        drop(api);
-        let mut out = menu.apply(Input::HoverEnd);
-        for n in navs {
-            out.extend(menu.apply(Input::Nav(n)));
-        }
+        menu.apply(Input::HoverEnd);
+    }
+
+    pub fn apply(
+        &mut self,
+        menu: &mut MenuModel,
+        scroll_moved: bool,
+        lang: crate::i18n::Lang,
+    ) -> Vec<Effect> {
+        let mut out = Vec::new();
         let cmds: Vec<Cmd> = self.cmds.borrow_mut().drain(..).collect();
         for c in cmds {
             let input = match c {
@@ -365,7 +368,7 @@ impl Page {
         }
         self.sync_rows(&menu.store, lang);
         self.show(menu);
-        if out.contains(&Effect::ScrollMoved) {
+        if scroll_moved || out.contains(&Effect::ScrollMoved) {
             self.api().set_content_y(-menu.scroll());
         }
         menu.set_moved(false);

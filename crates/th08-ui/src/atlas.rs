@@ -15,6 +15,8 @@ pub enum Shape {
     // `sub` in steps of 1 / `SUB_STEPS` px.
     Glyph { face: Face, id: u16, sub: u8 },
     Arrow { dir: Dir },
+    // A rounded rect `w` × `h` px with corner `r` px.
+    Round { w: u16, h: u16, r: u16 },
 }
 
 // `size` and `ring` in 1/64 px; ring 0 is the fill.
@@ -190,6 +192,7 @@ impl Atlas {
         match key.shape {
             Shape::Glyph { face, id, sub } => self.glyph(face, id, sub, size, ring),
             Shape::Arrow { dir } => arrow(dir, size, ring),
+            Shape::Round { w, h, r } => round(f32::from(w), f32::from(h), f32::from(r), ring),
         }
     }
 
@@ -278,4 +281,40 @@ fn arrow(dir: Dir, size: f32, ring: f32) -> Option<(Vec<u8>, Placement)> {
     b.placement = p;
     b.data = std::mem::take(&mut fill);
     Some(union(a, &b))
+}
+
+// Filled, or with `ring` > 0 a stroke that wide inside the edge.
+fn round(w: f32, h: f32, r: f32, ring: f32) -> Option<(Vec<u8>, Placement)> {
+    if w < 1.0 || h < 1.0 {
+        return None;
+    }
+    let ring = ring.min(w.min(h) * 0.5);
+    let i = ring / 2.0;
+    let (x0, y0, x1, y1) = (i, i, w - i, h - i);
+    let r = (r - i).clamp(0.0, ((x1 - x0) / 2.0).min((y1 - y0) / 2.0));
+    // A quarter circle as one cubic.
+    let k = r * 0.552_284_8;
+    let v = Vector::new;
+    let path = [
+        Command::MoveTo(v(x0 + r, y0)),
+        Command::LineTo(v(x1 - r, y0)),
+        Command::CurveTo(v(x1 - r + k, y0), v(x1, y0 + r - k), v(x1, y0 + r)),
+        Command::LineTo(v(x1, y1 - r)),
+        Command::CurveTo(v(x1, y1 - r + k), v(x1 - r + k, y1), v(x1 - r, y1)),
+        Command::LineTo(v(x0 + r, y1)),
+        Command::CurveTo(v(x0 + r - k, y1), v(x0, y1 - r + k), v(x0, y1 - r)),
+        Command::LineTo(v(x0, y0 + r)),
+        Command::CurveTo(v(x0, y0 + r - k), v(x0 + r - k, y0), v(x0 + r, y0)),
+        Command::Close,
+    ];
+    let mut mask = Mask::new(&path[..]);
+    mask.format(Format::Alpha);
+    if ring > 0.0 {
+        let mut stroke = Stroke::new(ring);
+        stroke.join(Join::Round);
+        mask.style(stroke);
+    }
+    let (data, mut p) = mask.render();
+    p.top = -p.top;
+    (p.width > 0).then_some((data, p))
 }

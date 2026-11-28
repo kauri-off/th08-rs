@@ -652,10 +652,17 @@ impl<'a> Harness<'a> {
 
     pub fn tick(&mut self, ms: u64) {
         host::advance_mock_time(Duration::from_millis(ms));
-        let navs = std::mem::take(&mut self.navs);
-        self.menu.page.apply(&mut self.model, navs, self.lang);
+        self.menu.page.read_pointer(&mut self.model);
+        let mut scroll_moved = false;
+        for nav in self.navs.drain(..) {
+            scroll_moved |= self.model.apply(Input::Nav(nav)).contains(&Do::ScrollMoved);
+        }
+        self.menu
+            .page
+            .apply(&mut self.model, scroll_moved, self.lang);
         self.menu.tick();
-        self.menu.page.apply(&mut self.model, Vec::new(), self.lang);
+        self.menu.page.read_pointer(&mut self.model);
+        self.menu.page.apply(&mut self.model, false, self.lang);
     }
 
     // The first row's data and the tab strip, whose identity shows whether they were rebuilt.

@@ -344,6 +344,7 @@ pub struct Settings {
     pub hitboxes: Hitboxes,
     // Port menu settings page on Slint (developer switch for the UI migration).
     pub slint_ui: bool,
+    pub scene_ui: bool,
     pub keys: crate::platform::keymap::KeyMap,
     pub pads: crate::platform::padmap::PadMap,
     // F12 / port-menu screenshots at the window size (else 640×480).
@@ -447,6 +448,7 @@ impl Settings {
             render_scale: th08_render::gfx::RenderScale::default(),
             hitboxes: Hitboxes::Off,
             slint_ui: false,
+            scene_ui: false,
             keys: crate::platform::keymap::KeyMap::default(),
             pads: crate::platform::padmap::PadMap::default(),
             screenshot_window: false,
@@ -1618,6 +1620,26 @@ pub const ENTRIES: &[Entry] = &[
         help: "draw the port menu's settings page with Slint instead of egui (UI migration, developers only)",
         set: |s, v| {
             s.slint_ui = parse_bool(v)?;
+            Ok(())
+        },
+    },
+    Entry {
+        key: "scene_ui",
+        env: "TH08_SCENE_UI",
+        kind: Kind::Bool,
+        default: "false",
+        group: Group::Tools,
+        label: "Scene pause card",
+        summary: "Draw the pause card and its confirmations with Scene",
+        unit: "",
+        words: &[],
+        audience: Audience::Dev,
+        platforms: Platforms::ALL,
+        persist: false,
+        live: false,
+        help: "draw the port menu pause card and confirmations with Scene",
+        set: |s, v| {
+            s.scene_ui = parse_bool(v)?;
             Ok(())
         },
     },
