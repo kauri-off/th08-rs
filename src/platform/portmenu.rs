@@ -18,7 +18,7 @@ use crate::settings::Settings;
 use crate::theme::{self, Ctl, CtlOut, CtlStyle, Edge};
 use egui::{Id, LayerId, Order, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
 use th08_render::gfx::{Gfx, OverlayTarget, SafeArea};
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
 use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 use winit::window::Window;
 
@@ -268,6 +268,10 @@ struct SceneCard {
     shown: Option<th08_ui::scene::Scene>,
     pointer: scene_card::pointer::Pointer,
     effects: Vec<Effect>,
+    input_view: Option<(MenuRenderer, Shown)>,
+    unfocused: bool,
+    buttons: Vec<MouseButton>,
+    touches: Vec<Touch>,
 }
 
 impl SceneCard {
@@ -293,6 +297,62 @@ impl SceneCard {
             self.invalidate(menu);
         }
         false
+    }
+
+    fn accepts_pointer(&mut self, ev: &WindowEvent, view: (MenuRenderer, Shown)) -> bool {
+        if self.unfocused || self.input_view != Some(view) {
+            return false;
+        }
+        match ev {
+            WindowEvent::MouseInput { state, button, .. } => {
+                if self.pointer.mouse().is_none() || !self.touches.is_empty() {
+                    return false;
+                }
+                let owner = self.buttons.iter().position(|b| b == button);
+                match (state, owner) {
+                    (ElementState::Pressed, None) => self.buttons.push(*button),
+                    (ElementState::Released, Some(i)) => {
+                        self.buttons.swap_remove(i);
+                    }
+                    _ => return false,
+                }
+                true
+            }
+            WindowEvent::MouseWheel { .. } => {
+                self.pointer.mouse().is_some() && self.touches.is_empty()
+            }
+            WindowEvent::Touch(t) => {
+                let at = self
+                    .touches
+                    .iter()
+                    .position(|o| o.id == t.id && o.device_id == t.device_id);
+                match (t.phase, at) {
+                    (TouchPhase::Started, None)
+                        if self.buttons.is_empty()
+                            && (view.0 == MenuRenderer::Egui || self.touches.is_empty()) =>
+                    {
+                        self.touches.push(*t);
+                    }
+                    (TouchPhase::Moved, Some(i)) => self.touches[i] = *t,
+                    (TouchPhase::Ended | TouchPhase::Cancelled, Some(i)) => {
+                        self.touches.remove(i);
+                    }
+                    _ => return false,
+                }
+                true
+            }
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } => {
+                self.touches.is_empty()
+            }
+            _ => true,
+        }
+    }
+}
+
+fn cursor_move(position: winit::dpi::PhysicalPosition<f64>) -> WindowEvent {
+    WindowEvent::CursorMoved {
+        device_id: winit::event::DeviceId::dummy(),
+        position,
     }
 }
 
@@ -473,12 +533,88 @@ impl PortMenu {
     }
 
     fn scene_active(&self) -> bool {
+        self.selected_renderer() == MenuRenderer::Scene
+    }
+
+    fn selected_renderer(&self) -> MenuRenderer {
         MenuRenderer::select(
             self.menu.page(),
             self.edit.is_some(),
             self.scene.is_some(),
             self.use_slint,
-        ) == MenuRenderer::Scene
+        )
+    }
+
+    fn input_view(&self) -> (MenuRenderer, Shown) {
+        (
+            self.selected_renderer(),
+            Shown::current(&self.menu, self.edit.is_some()),
+        )
+    }
+
+    fn sync_pointer_view(&mut self, window: &Window) {
+        let view = self.input_view();
+        if self
+            .scene
+            .as_ref()
+            .and_then(|card| card.input_view)
+            .is_some_and(|old| old != view)
+        {
+            self.cancel_pointer(window);
+        }
+    }
+
+    fn cancel_pointer(&mut self, window: &Window) {
+        let Some(card) = &mut self.scene else {
+            return;
+        };
+        let view = card.input_view.take();
+        card.buttons.clear();
+        let touches = std::mem::take(&mut card.touches);
+        match view.map(|(renderer, _)| renderer) {
+            Some(MenuRenderer::Scene) => card.pointer.cancel(),
+            Some(MenuRenderer::Slint) => {
+                if let Some(slint) = &mut self.slint {
+                    slint.cancel_pointer();
+                }
+            }
+            Some(MenuRenderer::Egui) => {
+                for mut touch in touches {
+                    touch.phase = TouchPhase::Cancelled;
+                    let _ = self
+                        .state
+                        .on_window_event(window, &WindowEvent::Touch(touch));
+                }
+                self.state
+                    .egui_input_mut()
+                    .events
+                    .retain_mut(|ev| match ev {
+                        egui::Event::Touch { phase, .. } => {
+                            *phase = egui::TouchPhase::Cancel;
+                            true
+                        }
+                        egui::Event::PointerButton { .. }
+                        | egui::Event::PointerMoved(_)
+                        | egui::Event::PointerGone
+                        | egui::Event::MouseMoved(_)
+                        | egui::Event::MouseWheel { .. }
+                        | egui::Event::Zoom(_)
+                        | egui::Event::Rotate(_)
+                        | egui::Event::MiddleClickPaste { .. } => false,
+                        _ => true,
+                    });
+                self.ctx
+                    .input_mut(|i| i.pointer = egui::PointerState::default());
+                self.ctx.stop_dragging();
+            }
+            None => {}
+        }
+    }
+
+    fn record_input_view(&mut self, view: (MenuRenderer, Shown)) -> bool {
+        self.scene
+            .as_mut()
+            .is_some_and(|card| card.input_view.replace(view) != Some(view))
     }
 
     // Hands the Slint window back when the menu closes; logs the session's timings.
@@ -565,31 +701,107 @@ impl PortMenu {
                 return false;
             }
         }
-        let scene_active = self.scene_active();
-        let scene_redraw = self
-            .scene
-            .as_mut()
-            .is_some_and(|card| card.on_event(ev, &mut self.menu));
-        if scene_active {
-            return scene_redraw;
+        if self.scene.is_some() {
+            return self.scene_menu_event(window, ev);
         }
+        self.settings_event(window, ev)
+    }
+
+    fn scene_menu_event(&mut self, window: &Window, ev: &WindowEvent) -> bool {
+        self.sync_pointer_view(window);
+        if let WindowEvent::Focused(focused) = ev {
+            if !focused {
+                self.cancel_pointer(window);
+            }
+            let card = self.scene.as_mut().expect("Scene menu");
+            card.unfocused = !focused;
+            card.on_event(ev, &mut self.menu);
+            let _ = self.state.on_window_event(window, ev);
+            return true;
+        }
+
+        let view = self.input_view();
+        let card = self.scene.as_mut().expect("Scene menu");
+        if matches!(
+            ev,
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            card.invalidate(&mut self.menu);
+            self.cancel_pointer(window);
+            let _ = self.state.on_window_event(window, ev);
+            return true;
+        }
+        if view.0 == MenuRenderer::Scene
+            && !card.unfocused
+            && self.navs.is_empty()
+            && card.input_view == Some(view)
+        {
+            return card.on_event(ev, &mut self.menu);
+        }
+        if !card.unfocused {
+            card.pointer.event(ev, None, &mut self.menu);
+        }
+        if view.0 == MenuRenderer::Scene {
+            return false;
+        }
+        let mouse_edge = matches!(
+            ev,
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
+        );
+        if mouse_edge
+            || matches!(
+                ev,
+                WindowEvent::Touch(_)
+                    | WindowEvent::CursorMoved { .. }
+                    | WindowEvent::CursorLeft { .. }
+                    | WindowEvent::PinchGesture { .. }
+                    | WindowEvent::RotationGesture { .. }
+            )
+        {
+            if !self.navs.is_empty() || !card.accepts_pointer(ev, view) {
+                return false;
+            }
+            if view.0 == MenuRenderer::Egui
+                && matches!(ev, WindowEvent::Touch(t) if t.phase == TouchPhase::Cancelled)
+            {
+                let _ = self.state.on_window_event(window, ev);
+                self.cancel_pointer(window);
+                return true;
+            }
+            if matches!(ev, WindowEvent::CursorLeft { .. }) && !card.buttons.is_empty() {
+                self.cancel_pointer(window);
+                return true;
+            }
+            if mouse_edge && let Some(position) = card.pointer.mouse() {
+                if view.0 == MenuRenderer::Egui {
+                    let _ = self.state.on_window_event(window, &cursor_move(position));
+                } else if let Some(slint) = &mut self.slint {
+                    slint.set_mouse(position);
+                }
+            }
+        }
+        self.settings_event(window, ev)
+    }
+
+    fn settings_event(&mut self, window: &Window, ev: &WindowEvent) -> bool {
         if self.use_slint
             && self.edit.is_none()
             && let Some(m) = &mut self.slint
         {
             let Some(kind) = m.on_event(ev) else {
-                return scene_redraw;
+                return false;
             };
             let touch = kind == crate::slintui::input::Pointing::Touch || self.touch.is_some();
             self.menu.apply(Input::Pointer { touch });
             m.set_modality(self.menu.modality());
             return true;
         }
-        self.state.on_window_event(window, ev).repaint || scene_redraw
+        self.state.on_window_event(window, ev).repaint
     }
 
     // One pass: the game frame (left of the pillar when docked), the card or settings page.
     pub fn redraw(&mut self, window: &Window, gfx: &mut Gfx) -> Option<Action> {
+        self.sync_pointer_view(window);
         let size = window.inner_size();
         gfx.resize(size.width, size.height);
         let (w, h) = gfx.surface_size();
@@ -617,6 +829,9 @@ impl PortMenu {
         {
             slint.page.read_pointer(&mut self.menu);
         }
+        if !self.navs.is_empty() {
+            self.cancel_pointer(window);
+        }
         let (renderer, todo) = prepare_frame(
             &mut self.menu,
             &mut self.navs,
@@ -629,6 +844,7 @@ impl PortMenu {
             return Some(action);
         }
         if renderer == MenuRenderer::Scene && self.edit.is_none() {
+            self.record_input_view(self.input_view());
             self.redraw_scene(gfx, lay);
             return None;
         }
@@ -641,6 +857,7 @@ impl PortMenu {
                 );
             }
             if self.ensure_slint(gfx) {
+                self.record_input_view(self.input_view());
                 let (screen, act) = if self.menu.page() == Page::Settings {
                     ("settings", self.redraw_slint(gfx, lay, scroll_moved))
                 } else {
@@ -658,6 +875,17 @@ impl PortMenu {
         let z = ppp / window.scale_factor() as f32;
         self.zoom = z;
         self.ctx.set_zoom_factor(z);
+        let showing = Shown::current(&self.menu, self.edit.is_some());
+        let entering = self.record_input_view((MenuRenderer::Egui, showing));
+        if entering && let Some(card) = &self.scene {
+            let ev = card.pointer.mouse().map_or(
+                WindowEvent::CursorLeft {
+                    device_id: winit::event::DeviceId::dummy(),
+                },
+                cursor_move,
+            );
+            let _ = self.state.on_window_event(window, &ev);
+        }
         let mut raw = self.state.take_egui_input(window);
         raw.safe_area_insets = Some(insets(s, ppp));
         if let Some(e) = &mut self.edit {
@@ -676,10 +904,22 @@ impl PortMenu {
             stage: self.stage.as_ref(),
         };
         let (menu, edit) = (&mut self.menu, &mut self.edit);
-        let showing = Shown::current(menu, edit.is_some());
         let mut todo = Vec::new();
         let mut done = None;
         let mut out = self.ctx.run_pass(raw, |ctx| {
+            if entering {
+                ctx.input_mut(|i| {
+                    i.raw.events.retain(|ev| {
+                        !matches!(
+                            ev,
+                            egui::Event::Touch {
+                                phase: egui::TouchPhase::Cancel,
+                                ..
+                            }
+                        )
+                    });
+                });
+            }
             if let Some(e) = edit {
                 done = e.ui(ctx, menu.store.lang(), lay.edit_ppp);
             } else {
@@ -4345,6 +4585,138 @@ mod tests {
             state,
             button: winit::event::MouseButton::Left,
         }
+    }
+
+    #[cfg(all(feature = "ui-check", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires an offscreen X11 display and a GPU adapter"]
+    fn scene_settings_pointer_handoffs() {
+        use i_slint_backend_testing::ElementQuery;
+        use winit::dpi::PhysicalPosition;
+        use winit::event::{Touch, TouchPhase};
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        let event_loop = winit::event_loop::EventLoop::builder()
+            .with_x11()
+            .with_any_thread(true)
+            .build()
+            .expect("offscreen event loop");
+        #[expect(
+            deprecated,
+            reason = "the test injects events without running the event loop"
+        )]
+        let window = event_loop
+            .create_window(Window::default_attributes().with_visible(false))
+            .expect("offscreen window");
+        let mut gfx = pollster::block_on(Gfx::headless()).expect("test GPU");
+        let mut settings = Settings::default();
+        settings.scene_ui = true;
+        settings.slint_ui = false;
+        let cursor = |position| WindowEvent::CursorMoved {
+            device_id: winit::event::DeviceId::dummy(),
+            position,
+        };
+        let mouse = |menu: &mut PortMenu, state| menu.on_event(&window, &click(state));
+        let key = |menu: &mut PortMenu, code| {
+            menu.navs.extend(Nav::of_key(code, false));
+        };
+        let redraw = |menu: &mut PortMenu, gfx: &mut Gfx| {
+            menu.redraw(&window, gfx);
+            menu.pending.clear();
+        };
+        let mut egui = PortMenu::new(&window, &settings, None, None);
+        egui.menu.open_settings(0);
+        redraw(&mut egui, &mut gfx);
+        egui.on_event(&window, &cursor(PhysicalPosition::new(10.0, 10.0)));
+        mouse(&mut egui, ElementState::Pressed);
+        mouse(&mut egui, ElementState::Released);
+        key(&mut egui, KeyCode::Backspace);
+        redraw(&mut egui, &mut gfx);
+        assert_eq!(egui.menu.page(), Page::Card);
+        egui.on_event(&window, &cursor(PhysicalPosition::new(40.0, 30.0)));
+        key(&mut egui, KeyCode::Enter);
+        redraw(&mut egui, &mut gfx);
+        assert_eq!(egui.menu.page(), Page::Settings);
+        let replayed = egui
+            .ctx
+            .input(|i| i.pointer.any_pressed() || i.pointer.any_released());
+
+        mouse(&mut egui, ElementState::Pressed);
+        redraw(&mut egui, &mut gfx);
+        assert!(egui.ctx.input(|i| i.pointer.any_down()));
+        assert!(egui.back());
+        redraw(&mut egui, &mut gfx);
+        mouse(&mut egui, ElementState::Released);
+        key(&mut egui, KeyCode::Enter);
+        redraw(&mut egui, &mut gfx);
+        let stuck = egui.ctx.input(|i| i.pointer.any_down());
+        let touch = |phase| {
+            WindowEvent::Touch(Touch {
+                device_id: winit::event::DeviceId::dummy(),
+                phase,
+                location: PhysicalPosition::new(80.0, 60.0),
+                force: None,
+                id: 1,
+            })
+        };
+        egui.on_event(&window, &touch(TouchPhase::Started));
+        redraw(&mut egui, &mut gfx);
+        assert!(egui.ctx.input(|i| i.any_touches() && i.pointer.any_down()));
+        key(&mut egui, KeyCode::Backspace);
+        redraw(&mut egui, &mut gfx);
+        egui.on_event(&window, &touch(TouchPhase::Ended));
+        key(&mut egui, KeyCode::Enter);
+        redraw(&mut egui, &mut gfx);
+        let touch_stuck = egui.ctx.input(|i| i.any_touches() || i.pointer.any_down());
+
+        settings.slint_ui = true;
+        let mut slint = PortMenu::new(&window, &settings, None, None);
+        slint.menu.open_settings(0);
+        slint.redraw(&window, &mut gfx);
+        slint.on_event(&window, &cursor(PhysicalPosition::new(10.0, 10.0)));
+        let view = slint.slint.as_ref().expect("Slint Settings");
+        let back = ElementQuery::from_root(&view.ui)
+            .match_descendants()
+            .find_all()
+            .into_iter()
+            .find(|e| e.accessible_id().is_some_and(|id| id == "target|back"))
+            .expect("Settings Back target");
+        let (pos, size) = (back.absolute_position(), back.size());
+        let scale = view.adapter().scale();
+        let back = PhysicalPosition::new(
+            f64::from((pos.x + size.width / 2.0) * scale),
+            f64::from((pos.y + size.height / 2.0) * scale),
+        );
+        assert!(slint.back());
+        slint.redraw(&window, &mut gfx);
+        slint.on_event(&window, &cursor(back));
+        key(&mut slint, KeyCode::Enter);
+        slint.redraw(&window, &mut gfx);
+        assert_eq!(slint.menu.page(), Page::Settings);
+        mouse(&mut slint, ElementState::Pressed);
+        mouse(&mut slint, ElementState::Released);
+        slint.redraw(&window, &mut gfx);
+        let stationary = slint.menu.page();
+
+        if stationary == Page::Settings {
+            assert!(slint.back());
+        }
+        key(&mut slint, KeyCode::Enter);
+        slint.redraw(&window, &mut gfx);
+        assert_eq!(slint.menu.page(), Page::Settings);
+        slint.on_event(&window, &cursor(back));
+        mouse(&mut slint, ElementState::Pressed);
+        slint.on_event(&window, &WindowEvent::Focused(false));
+        slint.on_event(&window, &WindowEvent::Focused(true));
+        slint.redraw(&window, &mut gfx);
+        mouse(&mut slint, ElementState::Released);
+        slint.redraw(&window, &mut gfx);
+        let after_blur = slint.menu.page();
+        assert_eq!(
+            (replayed, stuck, touch_stuck, stationary, after_blur),
+            (false, false, false, Page::Card, Page::Settings),
+            "(egui replayed edges, egui kept button, egui kept touch, page after stationary click, page after blur)"
+        );
     }
 
     #[test]

@@ -2,11 +2,12 @@ use super::{ACCEPT, KEEP, LESS, MORE, PICK, ROW, TRACK_TAG, target};
 use crate::menu_model::{Effect, Hit, Input, MenuModel, Target};
 use crate::settings_store::CtlOut;
 use th08_ui::scene::{Hit as Region, Scene};
+use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, TouchPhase, WindowEvent};
 
 #[derive(Default)]
 pub(in crate::platform::portmenu) struct Pointer {
-    mouse: Option<[f32; 2]>,
+    mouse: Option<PhysicalPosition<f64>>,
     finger: Option<u64>,
     grab: Option<Grab>,
 }
@@ -42,6 +43,10 @@ impl Event {
 }
 
 impl Pointer {
+    pub(in crate::platform::portmenu) fn mouse(&self) -> Option<PhysicalPosition<f64>> {
+        self.mouse
+    }
+
     pub(in crate::platform::portmenu) fn pressed(&self) -> Option<u32> {
         self.grab
             .as_ref()
@@ -62,7 +67,7 @@ impl Pointer {
     ) -> Vec<Effect> {
         match event {
             WindowEvent::CursorMoved { position, .. } => {
-                self.mouse = Some([position.x as f32, position.y as f32]);
+                self.mouse = Some(*position);
             }
             WindowEvent::CursorLeft { .. } => self.mouse = None,
             WindowEvent::Focused(false) => {
@@ -101,7 +106,7 @@ impl Pointer {
             }
             _ if self.finger.is_some() => return Vec::new(),
             WindowEvent::CursorMoved { .. } => (
-                Event::Move(self.mouse.expect("cursor moved")),
+                Event::Move(self.mouse.expect("cursor moved").cast::<f32>().into()),
                 model.context().overlay,
             ),
             WindowEvent::MouseInput {
@@ -112,6 +117,7 @@ impl Pointer {
                 let Some(at) = self.mouse else {
                     return Vec::new();
                 };
+                let at = at.cast::<f32>().into();
                 (
                     match state {
                         ElementState::Pressed => Event::Down(at),

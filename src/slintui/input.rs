@@ -21,6 +21,15 @@ pub struct Pointer {
 }
 
 impl Pointer {
+    pub(super) fn cancel(&mut self, a: &Adapter) {
+        self.finger = None;
+        a.dispatch(S::PointerExited);
+    }
+
+    pub(super) fn set_mouse(&mut self, position: PhysicalPosition<f64>, scale: f32) {
+        self.at(position, scale);
+    }
+
     fn at(&mut self, p: PhysicalPosition<f64>, scale: f32) -> LogicalPosition {
         self.pos = LogicalPosition::new(p.x as f32 / scale, p.y as f32 / scale);
         self.pos

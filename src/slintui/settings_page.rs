@@ -187,10 +187,14 @@ impl Page {
 
     // The view was just switched in: nothing from its last time on screen counts.
     pub fn open(&self, touch: bool) {
-        self.cmds.borrow_mut().clear();
+        self.discard_commands();
         self.api().set_content_y(0.0);
         self.api().set_hovered(-1);
         Ui::get(&self.ui).set_touch(touch);
+    }
+
+    pub(super) fn discard_commands(&self) {
+        self.cmds.borrow_mut().clear();
     }
 
     // The fixed strings; true when they changed.
